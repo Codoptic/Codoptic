@@ -91,6 +91,26 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     .join('\n');
 }
 
+/**
+ * Re-prompt used when the planning loop ended without authoring a plan (models often emit the plan
+ * as prose instead of calling the tool). It keeps the agent recalling evidence AND forces it to
+ * finalize via write_plan_artifact (or ask_clarifying_questions if genuinely blocked).
+ */
+export function buildPlanFinalizationDirective(sufficiency: ContextSufficiencyReport): string {
+  const lines = [
+    'You have not produced a plan yet, and you answered in prose instead of calling a tool. That is not allowed.',
+    'Keep investigating with read_file / search_text / dependency_trace if you still need evidence — do not give up on finding context.',
+  ];
+  if (sufficiency.status === 'needs_recall' && (sufficiency.recommendedRecall.length || sufficiency.requiredEvidence.length)) {
+    lines.push('', 'The context gate still wants more evidence:', formatContextSufficiencyMarkdown(sufficiency));
+  }
+  lines.push(
+    '',
+    'Then you MUST call the write_plan_artifact tool (NOT a chat message) with the complete plan markdown containing every required "## <section>" heading, grounded in what you read. If you are genuinely blocked on intent, call ask_clarifying_questions instead. Do not end your turn without calling one of these two tools.',
+  );
+  return lines.join('\n');
+}
+
 export async function buildPlanSeedMessage(
   root: string,
   prompt: string,

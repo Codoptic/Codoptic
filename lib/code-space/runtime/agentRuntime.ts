@@ -23,7 +23,7 @@ import type { LoadedInstruction } from './instructionLoader';
 import { RepairLoop } from './repairLoop';
 import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse } from './responsePolicy';
 import { CodeAgentLoop, buildCodeSystemPrompt, buildCodeSeedMessage, type CodeAgentLoopOptions } from './codeAgentLoop';
-import { PLAN_MODE_TOOL_SPECS, buildPlanSystemPrompt, buildPlanSeedMessage } from './planAgentLoop';
+import { PLAN_MODE_TOOL_SPECS, buildPlanSystemPrompt, buildPlanSeedMessage, buildPlanFinalizationDirective } from './planAgentLoop';
 import { ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, formatUnresolvedEditFailures, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
 import { ToolBudget } from './toolBudget';
 import { createDefaultToolRegistry } from './toolRegistry';
@@ -247,14 +247,14 @@ export class AgentRuntime {
 
     await loop.run(ctx, loopOptions);
 
-    // Sufficiency gate: if the model finalized nothing while the gate still wants recall, push it to
-    // recall more evidence before letting the run end without a grounded plan.
-    const MAX_PLAN_RECALL_ESCALATIONS = 2;
-    for (let attempt = 0; attempt < MAX_PLAN_RECALL_ESCALATIONS; attempt += 1) {
+    // Keep the agent working until it asks clarifying questions or authors the plan. We never let
+    // the loop quit early: it recalls more evidence when the gate wants it and is forced to finalize
+    // via write_plan_artifact (models otherwise tend to answer in prose and stop).
+    const MAX_PLAN_ESCALATIONS = 4;
+    for (let attempt = 0; attempt < MAX_PLAN_ESCALATIONS; attempt += 1) {
       if (ctx.planClarification || ctx.planArtifactRequest) break;
-      if (sufficiency.status !== 'needs_recall') break;
       if (loopOptions.budget.turnsExhausted()) break;
-      await loop.continueWith(buildRecallDirective(sufficiency), ctx, loopOptions);
+      await loop.continueWith(buildPlanFinalizationDirective(sufficiency), ctx, loopOptions);
     }
 
     if (ctx.planClarification && !ctx.planArtifactRequest) {
@@ -287,16 +287,26 @@ export class AgentRuntime {
       return;
     }
 
+    // Guarantee a previewable plan: the model never called write_plan_artifact (or ran out of turns),
+    // so synthesize an evidence-grounded plan from the gathered context. A plan file must ALWAYS exist.
+    const fallback = await emitTool(emit, emitRuntime, 'write_plan_artifact', { inspectedFiles: context.selectedFiles, synthesized: true }, async () =>
+      this.planning.writePlanArtifact(root, request.sessionId, request.projectName, prompt, context, validationCommands),
+    );
+    emit({ type: 'plan_markdown_created', filePath: fallback.filePath, content: fallback.content });
+    todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: true }));
     const answer = [
-      `Plan mode ended without producing a plan artifact for ${request.projectName}.`,
-      `Context gate: ${sufficiency.status} (${sufficiency.score}/100).`,
-      sufficiency.blockers.length ? `Blockers: ${sufficiency.blockers.join('; ')}.` : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
+      buildPlanFinalResponse({
+        projectName: request.projectName,
+        planPath: fallback.filePath,
+        planContent: fallback.content,
+        inspectedFiles: context.files.map((file) => ({ path: file.path, summary: file.summary })),
+        validationCommands: validationCommands.map((command) => ({ command: [command.command, ...command.args].join(' '), reason: command.reason })),
+      }),
+      `Note: this plan was auto-synthesized from the gathered evidence because the model did not finalize one itself. Context gate: ${sufficiency.status} (${sufficiency.score}/100). Review it before building.`,
+    ].join('\n\n');
     await streamAnswer(answer, emit, emitRuntime);
-    await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
-    emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+    await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [fallback.filePath] });
+    emit({ type: 'agent_done', summary: answer, filesChanged: [fallback.filePath] });
   }
 
   private async finishCode(

@@ -170,6 +170,44 @@ describe('AgentRuntime workflow contracts', () => {
     expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
   });
 
+  it('always produces a previewable plan artifact even if the model never calls write_plan_artifact', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-fallback-'));
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf8');
+    await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    // Model keeps answering in prose with no tool calls — it never finalizes the plan.
+    mockedTurn.mockResolvedValue(turn({ stopReason: 'end_turn', text: 'Here is a plan...', toolCalls: [] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-plan-fallback',
+        projectRoot: tmpDir,
+        projectName: 'medbot',
+        messages: [{ role: 'user', content: 'Plan a refactor for app.ts' }],
+        mode: 'plan',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['app.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    const planEvent = events.find((event) => event.type === 'plan_markdown_created');
+    expect(planEvent?.filePath).toBe('.agent/plans/session-plan-fallback.md');
+    expect(planEvent?.content).toContain('## Summary');
+    // The escalation pushed the model to finalize before falling back.
+    expect(mockedTurn.mock.calls.length).toBeGreaterThan(1);
+    const done = events.find((event) => event.type === 'agent_done');
+    expect(done?.filesChanged).toContain('.agent/plans/session-plan-fallback.md');
+  });
+
   it('exposes a stable runtime fingerprint for route delegation tests', () => {
     expect(runtimeSourceFingerprintForTests()).toHaveLength(64);
   });
