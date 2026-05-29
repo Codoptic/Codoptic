@@ -9,8 +9,8 @@ It is designed to live inside the repository you want to analyze, so the app can
 ![Example Diagram](examples/diagram.png)  
 **SaaS app architecture diagram illustrated**   
 
-![Code Space](examples/coder.png)  
-**Agentic coding space illustrated**  
+![Code Space](examples/planner.png)  
+**Agentic planner mode illustrated**  
 
 ![Example Diagram](examples/patch.png)  
 **Applying code changes in patches**   
