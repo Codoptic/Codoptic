@@ -25,7 +25,7 @@ const HIDDEN_FOLDER_NAMES = [
   'coverage',
   'playwright-report',
   'test-results',
-  '.agentdiagram-cache',
+  '.codoptic-cache',
   'vendor',
 
   // Motivation vs Logic: the user asked to hide scaffolding/config directories and caches so the browser skips them entirely.

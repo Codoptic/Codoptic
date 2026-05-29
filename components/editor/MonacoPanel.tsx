@@ -46,7 +46,7 @@ export function MonacoPanel() {
     monacoRef.current = monaco;
     editorRef.current = editor as Monaco.editor.IStandaloneCodeEditor;
     registerDslLanguage(monaco);
-    monaco.editor.setTheme(theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark');
+    monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
   };
 
   // When the DSL is changed externally (AI Fix, example loader, project switch) and
@@ -66,7 +66,7 @@ export function MonacoPanel() {
   useEffect(() => {
     const monaco = monacoRef.current;
     if (!monaco) return;
-    monaco.editor.setTheme(theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark');
+    monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
   }, [theme]);
 
   // Apply diagnostics as markers when they change.
@@ -75,13 +75,13 @@ export function MonacoPanel() {
     if (!monaco) return;
     const editors = monaco.editor.getEditors?.() ?? [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ed = editors.find((e: any) => e.getModel()?.getLanguageId?.() === 'agentdiagram');
+    const ed = editors.find((e: any) => e.getModel()?.getLanguageId?.() === 'codoptic');
     if (!ed) return;
     const model = ed.getModel();
     if (!model) return;
     monaco.editor.setModelMarkers(
       model,
-      'agentdiagram',
+      'codoptic',
       diagnostics.map((d) => ({
         startLineNumber: d.line,
         startColumn: d.column,
@@ -120,8 +120,8 @@ export function MonacoPanel() {
         {tab === 'dsl' && (
           <Editor
             height="100%"
-            theme={theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark'}
-            language="agentdiagram"
+            theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
+            language="codoptic"
             value={dsl}
             onChange={(v) => setDsl(v ?? '')}
             onMount={onMount}
@@ -139,7 +139,7 @@ export function MonacoPanel() {
         {tab === 'ir' && (
           <Editor
             height="100%"
-            theme={theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark'}
+            theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
             language="json"
             value={irText}
             options={{

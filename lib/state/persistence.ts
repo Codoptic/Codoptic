@@ -2,12 +2,12 @@
 
 import type { Overrides, Viewport } from './store';
 
-const DB_NAME = 'agentdiagram';
+const DB_NAME = 'codoptic';
 const STORE = 'projects';
 const VERSION = 1;
 
 export interface ProjectFile {
-  format: 'agentdiagram-project-v1';
+  format: 'codoptic-project-v1';
   name: string;
   dsl: string;
   overrides: Overrides;

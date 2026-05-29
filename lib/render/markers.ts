@@ -1,7 +1,7 @@
 /** SVG marker definitions for edge arrowheads. */
-export const ARROW_FWD_ID = 'agentdiagram-arrow-fwd';
-export const ARROW_BWD_ID = 'agentdiagram-arrow-bwd';
-export const ARROW_THICK_ID = 'agentdiagram-arrow-thick';
+export const ARROW_FWD_ID = 'codoptic-arrow-fwd';
+export const ARROW_BWD_ID = 'codoptic-arrow-bwd';
+export const ARROW_THICK_ID = 'codoptic-arrow-thick';
 
 export const MARKER_DEFS = `
   <marker id="${ARROW_FWD_ID}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.8" markerHeight="4.8" orient="auto-start-reverse">

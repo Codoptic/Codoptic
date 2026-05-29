@@ -3,7 +3,7 @@
 import type { LayoutStrategy } from '@/lib/layout/strategies';
 import type { ProviderId } from '@/lib/agent/providers/types';
 
-const UI_PREFERENCES_KEY = 'agentdiagram:ui-preferences:v1';
+const UI_PREFERENCES_KEY = 'codoptic:ui-preferences:v1';
 
 export type PersistedMode = 'editor' | 'code-space' | 'agent' | 'multi-layer' | 'custom-prompt';
 export type PersistedTheme = 'dark' | 'light';

@@ -40,7 +40,7 @@ const MULTI_PLAN_STAGES = [
 
 const OTHER_TOKEN = '__other__';
 
-const CUSTOM_PROMPT_CACHE_KEY = 'agentdiagram:custom-prompt:v1';
+const CUSTOM_PROMPT_CACHE_KEY = 'codoptic:custom-prompt:v1';
 
 interface PersistedCustomPromptState {
   prompt: string;

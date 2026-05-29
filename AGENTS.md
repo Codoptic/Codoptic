@@ -1,4 +1,4 @@
-# AgentDiagram Code Space Agent Rules
+# Codoptic Code Space Agent Rules
 
 These rules are loaded as project guidance for Code Space planning and code-generation tasks.
 

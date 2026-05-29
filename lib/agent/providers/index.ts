@@ -44,7 +44,7 @@ export const PROVIDER_ENV: Record<ProviderId, string> = {
 };
 
 export function getDefaultProvider(): ProviderId {
-  const env = process.env.AGENTDIAGRAM_DEFAULT_PROVIDER?.toLowerCase();
+  const env = process.env.CODOPTIC_DEFAULT_PROVIDER?.toLowerCase();
   if (
     env === 'openai' ||
     env === 'anthropic' ||

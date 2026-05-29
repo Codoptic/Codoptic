@@ -59,7 +59,7 @@ function getCheckoutPath(normalizedUrl: string): string {
 }
 
 function getCheckoutMetadataPath(checkoutPath: string): string {
-  return join(checkoutPath, '.agentdiagram-source.json');
+  return join(checkoutPath, '.codoptic-source.json');
 }
 
 function extractGitErrorMessage(err: unknown): string {

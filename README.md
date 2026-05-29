@@ -1,6 +1,6 @@
-# AgentDiagram
+# Codoptic
 
-AgentDiagram is an open-source, locally runnable diagram-as-code editor with an agentic repo explorer and agentic coding workspace.
+Codoptic is an open-source, locally runnable diagram-as-code editor with an agentic repo explorer and agentic coding workspace.
 
 It is designed to live inside the repository you want to analyze, so the app can scan your codebase locally, generate diagrams from it, and keep the entire workflow on your machine unless you choose to send prompts to an AI provider.
 
@@ -15,7 +15,7 @@ It is designed to live inside the repository you want to analyze, so the app can
 
 ## What it does
 
-AgentDiagram combines three closely related workflows in one app:
+Codoptic combines three closely related workflows in one app:
 
 - A **DSL Diagram Editor** for writing, editing, and exporting diagrams as text.
 - An **Agentic Repo Explorer** that turns a local codebase into one or more architecture diagrams.
@@ -37,7 +37,7 @@ The main editor is available at `/`, and Code Space is also exposed at `/code-sp
 
 ## Agentic Coding Workflow
 
-Code Space is the part of AgentDiagram that feels most like a coding assistant. It is built around a simple sequence:
+Code Space is the part of Codoptic that feels most like a coding assistant. It is built around a simple sequence:
 
 1. Pick or create a project.
 2. Open or start a session.
@@ -91,7 +91,7 @@ The bottom panel complements that by collecting output, problems, debug events, 
 
 ### Why It Feels Different
 
-Instead of hiding all reasoning inside a single chat response, AgentDiagram makes the workflow explicit:
+Instead of hiding all reasoning inside a single chat response, Codoptic makes the workflow explicit:
 
 - repo inspection is visible
 - plans are visible
@@ -108,8 +108,8 @@ That visibility is the whole point of the agentic experience: you can trust the 
 3. Install dependencies and start the dev server.
 
 ```bash
-git clone <repo-url> path/to/your-project/AgentDiagram
-cd path/to/your-project/AgentDiagram
+git clone https://github.com/Codoptic/Codoptic.git path/to/your-project/Codoptic
+cd path/to/your-project/Codoptic
 cp .env.local.example .env.local
 npm install
 npm run dev
@@ -117,7 +117,7 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-By default, the agentic explorer treats the parent directory of `AgentDiagram/` as the repo to inspect. If you want to point it somewhere else, set `AGENTDIAGRAM_DEFAULT_REPO_PATH` or enter a different absolute path in the UI.
+By default, the agentic explorer treats the parent directory of `Codoptic/` as the repo to inspect. If you want to point it somewhere else, set `CODOPTIC_DEFAULT_REPO_PATH` or enter a different absolute path in the UI.
 
 ## Local Setup
 
@@ -127,7 +127,7 @@ Recommended project layout:
 your-project/
 ├── src/
 ├── package.json
-└── AgentDiagram/        ← clone this repo here
+└── Codoptic/        ← clone this repo here
     ├── app/
     ├── lib/
     └── ...
@@ -165,7 +165,7 @@ For the full grammar and examples, see [docs/dsl-grammar.md](docs/dsl-grammar.md
 
 ## AI Providers
 
-AgentDiagram supports multiple providers and lets you switch between them in the UI.
+Codoptic supports multiple providers and lets you switch between them in the UI.
 
 | Provider | Env var | Default model |
 | --- | --- | --- |
@@ -196,7 +196,7 @@ Additional provider settings:
 - `NVIDIA_ENDPOINT` - override the NVIDIA NIM endpoint (default `https://nvidia.com`).
 - `GROK_API_BASE` - override the Grok base URL when needed.
 - `FOUNDRY_ENDPOINT` - required Azure AI Foundry endpoint.
-- `AGENTDIAGRAM_DEFAULT_PROVIDER` - choose the default provider shown in the UI (`openai`, `anthropic`, `gemini`, `grok`, `mistral`, `deepseek`, `nvidia`, `foundry`).
+- `CODOPTIC_DEFAULT_PROVIDER` - choose the default provider shown in the UI (`openai`, `anthropic`, `gemini`, `grok`, `mistral`, `deepseek`, `nvidia`, `foundry`).
 
 Provider details, retry behavior, and validation flow are documented in [docs/providers.md](docs/providers.md).
 
@@ -227,8 +227,8 @@ The most commonly used settings are listed below. See [docs/local-setup.md](docs
 | `FOUNDRY_API_KEY` | Azure AI Foundry provider key |
 | `FOUNDRY_ENDPOINT` | Azure AI Foundry endpoint URL |
 | `FOUNDRY_MODEL` | Azure deployment name |
-| `AGENTDIAGRAM_DEFAULT_PROVIDER` | Default provider selection |
-| `AGENTDIAGRAM_DEFAULT_REPO_PATH` | Override the default repo path |
+| `CODOPTIC_DEFAULT_PROVIDER` | Default provider selection |
+| `CODOPTIC_DEFAULT_REPO_PATH` | Override the default repo path |
 
 You only need one provider key to get started.
 
@@ -277,12 +277,12 @@ Exports are available from the editor UI, and the current diagram can also be pr
 
 ## Privacy And Local Behavior
 
-AgentDiagram is intentionally local-first.
+Codoptic is intentionally local-first.
 
 - Repo scanning happens server-side on your machine.
 - The scanner honors `.gitignore` and avoids obvious sensitive paths and file types.
 - AI requests send selected chunks and per-file summaries, not the whole repository.
-- Cached summaries live in `.agentdiagram-cache/`, which is ignored by Git.
+- Cached summaries live in `.codoptic-cache/`, which is ignored by Git.
 - API keys entered in the UI are kept in server-process memory for the current session and are not written to disk.
 
 ## Architecture

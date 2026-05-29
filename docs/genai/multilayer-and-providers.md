@@ -900,7 +900,7 @@ A resolved, call-ready session object passed through every pipeline. Created by 
 export function getDefaultProvider(): ProviderId
 ```
 
-Reads `AGENTDIAGRAM_DEFAULT_PROVIDER` env var (lowercased) and returns it if it matches a known `ProviderId`. Falls back to `'openai'`.
+Reads `CODOPTIC_DEFAULT_PROVIDER` env var (lowercased) and returns it if it matches a known `ProviderId`. Falls back to `'openai'`.
 
 ##### `makeProvider(id, cfg)`
 

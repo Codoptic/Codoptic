@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-const CACHE_ROOT = path.resolve(process.cwd(), '.agentdiagram-cache');
+const CACHE_ROOT = path.resolve(process.cwd(), '.codoptic-cache');
 
 export async function ensureCacheDir(): Promise<string> {
   await fs.mkdir(CACHE_ROOT, { recursive: true });

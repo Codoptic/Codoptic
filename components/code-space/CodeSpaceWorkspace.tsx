@@ -1963,7 +1963,7 @@ export function CodeSpaceWorkspace() {
     monacoRef.current = monaco;
     configureMonacoForCodeFiles(monaco);
     registerDslLanguage(monaco);
-    monaco.editor.setTheme(theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark');
+    monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
   };
 
   const onEditorChange = (value?: string) => {
@@ -2292,7 +2292,7 @@ export function CodeSpaceWorkspace() {
               activeTabDiff ? (
                 <DiffEditor
                   height="100%"
-                  theme={theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark'}
+                  theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
                   language={activeTab.language}
                   original={'beforeContent' in activeTabDiff ? activeTabDiff.beforeContent : activeTabDiff.oldContent}
                   modified={activeTabDiff.deleted ? '' : 'afterContent' in activeTabDiff ? activeTabDiff.afterContent : activeTabDiff.newContent}
@@ -2302,7 +2302,7 @@ export function CodeSpaceWorkspace() {
                     // Motivation vs Logic: Reviewable patches should be inspectable in the main editor before
                     // acceptance, not only as a cramped sidebar snippet. Monaco's diff editor gives users the
                     // familiar red/green file-level review surface while preserving the existing accept/reject flow.
-                    monaco.editor.setTheme(theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark');
+                    monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
                     monacoRef.current = monaco;
                   }}
                   options={{
@@ -2337,7 +2337,7 @@ export function CodeSpaceWorkspace() {
               ) : (
                 <Editor
                   height="100%"
-                  theme={theme === 'light' ? 'agentdiagram-light' : 'agentdiagram-dark'}
+                  theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
                   language={activeTab.language}
                   path={`${activeTab.projectId}/${activeTab.path}`}
                   value={activeContent}

@@ -1,25 +1,25 @@
 # Local setup
 
-AgentDiagram is designed to live **inside the repo you want to analyze**.
+Codoptic is designed to live **inside the repo you want to analyze**.
 
 ```
 your-project/
 ├── src/
 ├── package.json
-└── AgentDiagram/        ← clone this repo here
+└── Codoptic/        ← clone this repo here
     ├── app/
     ├── lib/
     └── ...
 ```
 
 When you launch the agentic explorer, the default repo path is `..`
-(the parent of `AgentDiagram/`), i.e. your project.
+(the parent of `Codoptic/`), i.e. your project.
 
 ## Install
 
 ```bash
-git clone <repo-url> path/to/your-project/AgentDiagram
-cd path/to/your-project/AgentDiagram
+git clone https://github.com/Codoptic/Codoptic.git path/to/your-project/Codoptic
+cd path/to/your-project/Codoptic
 cp .env.local.example .env.local
 # fill in keys for whichever providers you intend to use
 npm install
@@ -53,8 +53,8 @@ The dev server runs on http://localhost:3000.
 | `FOUNDRY_API_KEY`                 | Azure AI Foundry provider key          |
 | `FOUNDRY_ENDPOINT`                | Azure AI Foundry endpoint URL          |
 | `FOUNDRY_MODEL`                   | Azure deployment name                  |
-| `AGENTDIAGRAM_DEFAULT_PROVIDER`   | `openai` / `anthropic` / `gemini` / `grok` / `mistral` / `deepseek` / `nvidia` / `foundry` |
-| `AGENTDIAGRAM_DEFAULT_REPO_PATH`  | Override the parent-directory default  |
+| `CODOPTIC_DEFAULT_PROVIDER`   | `openai` / `anthropic` / `gemini` / `grok` / `mistral` / `deepseek` / `nvidia` / `foundry` |
+| `CODOPTIC_DEFAULT_REPO_PATH`  | Override the parent-directory default  |
 
 Any single provider key is sufficient — switch between them in the UI.
 
@@ -83,4 +83,4 @@ Any single provider key is sufficient — switch between them in the UI.
   and binaries.
 - AI calls send only **selected file chunks** plus per-file summaries, not
   your entire repo. Per-file summaries are cached locally under
-  `.agentdiagram-cache/` (added to `.gitignore`).
+  `.codoptic-cache/` (added to `.gitignore`).

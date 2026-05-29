@@ -1,4 +1,4 @@
-# AgentDiagram DSL Grammar
+# Codoptic DSL Grammar
 
 A compact, line-oriented language for describing diagrams. Inspired by
 Eraser-style diagram-as-code but implemented entirely in-house.

@@ -1,5 +1,5 @@
 /**
- * Intermediate Representation for AgentDiagram diagrams.
+ * Intermediate Representation for Codoptic diagrams.
  * The DSL parser → AST → compiler produces a Diagram which is the
  * single shape consumed by layout, renderer, exporter, and the AI pipeline.
  */

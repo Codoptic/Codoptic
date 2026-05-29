@@ -1,7 +1,7 @@
 'use client';
 
-const PROJECTS_KEY = 'agentdiagram:projects:v1';
-const ACTIVE_PROJECT_ID_KEY = 'agentdiagram:active-project:v1';
+const PROJECTS_KEY = 'codoptic:projects:v1';
+const ACTIVE_PROJECT_ID_KEY = 'codoptic:active-project:v1';
 
 export interface LayerDiagram {
   name: string;

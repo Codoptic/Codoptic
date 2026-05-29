@@ -489,7 +489,7 @@ export function RepoInput({ onScan, onConfigChange, maxMode, onMaxModeChange, in
             'This checkout path is created automatically after clone and then used for browsing and scanning.'
           ) : (
             <>
-              Default is the parent of <code>AgentDiagram/</code> - i.e. the project you cloned this into.
+              Default is the parent of <code>Codoptic/</code> - i.e. the project you cloned this into.
             </>
           )}
         </div>
@@ -675,7 +675,7 @@ export function RepoInput({ onScan, onConfigChange, maxMode, onMaxModeChange, in
           )}
         </div>
         <div className="text-[10px] text-ink-500">
-          AgentDiagram’s own folder, common build/cache directories
+          Codoptic’s own folder, common build/cache directories
           {hiddenCount > 0 ? `, and ${hiddenCount} ignored entr${hiddenCount === 1 ? 'y' : 'ies'}` : ''} are hidden automatically.
         </div>
       </div>

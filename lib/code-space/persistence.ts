@@ -5,12 +5,12 @@ import { detectCodeSpaceLanguage } from './core';
 import { normalizeCodeSpaceAgentMode, type CodeSpaceAgentMode } from './agentModes';
 import type { CodeSpaceExecutionPolicy } from './executionPolicy';
 
-const DB_NAME = 'agentdiagram-code-space';
+const DB_NAME = 'codoptic-code-space';
 const DB_VERSION = 1;
 const PROJECT_STORE = 'projects';
 const SESSION_STORE = 'sessions';
 const TAB_STORE = 'tabs';
-const PREFERENCES_KEY = 'agentdiagram:code-space:preferences:v1';
+const PREFERENCES_KEY = 'codoptic:code-space:preferences:v1';
 
 export interface CodeSpaceLayoutPreferences {
   activeProjectId?: string | null;

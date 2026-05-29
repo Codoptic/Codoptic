@@ -12,7 +12,7 @@ async function write(root: string, rel: string, content: string): Promise<void> 
 
 describe('repoScanner', () => {
   it('scans source-like files plus README.md and ignores configs, docs, tests, assets, and generated output', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-scan-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-scan-'));
     try {
       const allowed = [
         'README.md',
@@ -92,7 +92,7 @@ describe('repoScanner', () => {
   });
 
   it('applies user-selected ignored folders before scanning', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-scan-ignore-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-scan-ignore-'));
     try {
       await write(root, 'src/app.ts', 'export const app = true;\n');
       await write(root, 'generated/client.ts', 'export const generated = true;\n');
@@ -112,7 +112,7 @@ describe('repoScanner', () => {
   });
 
   it('also honors individual file entries in the ignore list', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-scan-ignore-file-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-scan-ignore-file-'));
     try {
       await write(root, 'src/keep.ts', 'export const keep = true;\n');
       await write(root, 'src/skip.ts', 'export const skip = true;\n');

@@ -47,7 +47,7 @@ export default function Page() {
   const onPrintDiagram = useCallback(() => {
     const svg = canvasRef.current?.getSvg();
     if (!svg) return;
-    void printSvgDiagram(svg, { title: 'AgentDiagram' });
+    void printSvgDiagram(svg, { title: 'Codoptic' });
   }, []);
 
   // Global undo / redo keyboard shortcut.

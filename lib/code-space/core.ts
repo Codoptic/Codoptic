@@ -201,7 +201,7 @@ const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   '.sh': 'shell',
   '.bash': 'shell',
   '.zsh': 'shell',
-  '.dsl': 'agentdiagram',
+  '.dsl': 'codoptic',
 };
 
 const CODE_OR_DSL_EXTENSIONS = new Set([

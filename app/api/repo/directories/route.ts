@@ -15,7 +15,7 @@ const Body = z.object({
 
 // Motivation vs Logic: the folder browser must show the same view the agent will scan, so we
 // defer to the shared `isHiddenByDefault` matcher in `lib/agent/ignoreDefaults.ts`. The only
-// extra rule here is the AgentDiagram self-folder, which is dynamic (depends on `process.cwd()`)
+// extra rule here is the Codoptic self-folder, which is dynamic (depends on `process.cwd()`)
 // and therefore lives outside the static pattern list.
 const SELF_ROOT = path.resolve(process.cwd());
 
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
           if (!dirent.name.startsWith(browse.prefix)) return false;
         }
         if (isHiddenByDefault(dirent.name, isDir)) return false;
-        // Skip the AgentDiagram app folder itself so users never accidentally
+        // Skip the Codoptic app folder itself so users never accidentally
         // pipe our own source back into the agent when scanning a parent dir.
         const abs = path.resolve(absParent, dirent.name);
         if (abs === SELF_ROOT) return false;

@@ -18,7 +18,7 @@ interface AnswerState {
 
 const OTHER_TOKEN = '__other__';
 
-const FIX_PANEL_CACHE_KEY = 'agentdiagram:fix-panel:v1';
+const FIX_PANEL_CACHE_KEY = 'codoptic:fix-panel:v1';
 
 interface PersistedFixState {
   changeDescription: string;

@@ -25,7 +25,7 @@ const HARD_HIDDEN_FOLDERS = new Set<string>([
   'coverage',
   'playwright-report',
   'test-results',
-  '.agentdiagram-cache',
+  '.codoptic-cache',
 
   // VCS / IDE internals
   '.git',

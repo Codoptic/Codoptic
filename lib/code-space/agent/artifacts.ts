@@ -22,7 +22,7 @@ function artifactRoot(projectRoot: string, runId: string): string {
   const guarded = guardPath(projectRoot);
   const safeRun = runId.replace(/[^a-zA-Z0-9_.-]+/g, '-');
   if (guarded.ok) return path.join(guarded.resolved, '.agent', 'runs', safeRun, 'artifacts');
-  return path.join(os.tmpdir(), 'agentdiagram-artifacts', safeRun);
+  return path.join(os.tmpdir(), 'codoptic-artifacts', safeRun);
 }
 
 function idFor(runId: string, kind: AgentArtifactKind, content: string): string {

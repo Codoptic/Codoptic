@@ -2,7 +2,7 @@ import { compile } from '../../dsl/compiler';
 import { chatWithRetry, type ProviderSession, type RetryListener } from '../providers';
 import { ELK_EDGE_LIMIT, ELK_COMPLEXITY_LIMIT, diagramComplexity } from '../../layout/constants';
 
-const REPAIR_SYSTEM = `You are a DSL repairer. Given an invalid AgentDiagram DSL with diagnostics, return ONLY a corrected DSL — no fences, no prose. Preserve the original structure and intent. Do not add or remove nodes/groups except as needed to fix errors.
+const REPAIR_SYSTEM = `You are a DSL repairer. Given an invalid Codoptic DSL with diagnostics, return ONLY a corrected DSL — no fences, no prose. Preserve the original structure and intent. Do not add or remove nodes/groups except as needed to fix errors.
 
 FORBIDDEN in names and labels:
 - Never use "/" (slash) or "," (comma) — replace path separators (e.g. "api/v1/users") with spaces or hyphens ("api v1 users").

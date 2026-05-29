@@ -50,7 +50,7 @@ function setGitMock(
 
 async function withTempCwd(fn: () => Promise<void>): Promise<void> {
   const previous = process.cwd();
-  const cwd = await mkdtemp(join(tmpdir(), 'agentdiagram-repo-source-'));
+  const cwd = await mkdtemp(join(tmpdir(), 'codoptic-repo-source-'));
   process.chdir(cwd);
   try {
     await fn();
@@ -199,7 +199,7 @@ describe('repoSource', () => {
   });
 
   it('scans sibling modules when a local path ends with a trailing ~', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-repo-prefix-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-repo-prefix-'));
     try {
       await write(root, 'Backend.Api/app/api/users/route.ts', 'export const runtime = "nodejs";\n');
       await write(root, 'Backend.GraphQL/components/UserCard.tsx', 'export const UserCard = () => null;\n');
@@ -241,7 +241,7 @@ describe('repoSource', () => {
   });
 
   it('preserves nested ignores inside prefix scans without dropping the whole module', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-repo-prefix-ignore-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-repo-prefix-ignore-'));
     try {
       await write(root, 'Backend.Api/app/api/users/route.ts', 'export const runtime = "nodejs";\n');
       await write(root, 'Backend.GraphQL/components/UserCard.tsx', 'export const UserCard = () => null;\n');

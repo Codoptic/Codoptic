@@ -1,5 +1,5 @@
 /**
- * AgentDiagram DSL lexer.
+ * Codoptic DSL lexer.
  *
  * Grammar (informal):
  *   - Comments: `// ...` to end of line.

@@ -24,7 +24,7 @@ export interface EventStore {
 }
 
 function storeRoot(): string {
-  return process.env.CODE_SPACE_EVENT_STORE_DIR ?? path.join(os.tmpdir(), 'agentdiagram-code-space-events');
+  return process.env.CODE_SPACE_EVENT_STORE_DIR ?? path.join(os.tmpdir(), 'codoptic-code-space-events');
 }
 
 function redactSecrets(value: unknown, keyHint = ''): unknown {

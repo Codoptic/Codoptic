@@ -11,7 +11,7 @@ describe('Code Space core helpers', () => {
     expect(detectCodeSpaceLanguage('app/page.tsx')).toBe('typescript');
     expect(detectCodeSpaceLanguage('styles/global.css')).toBe('css');
     expect(detectCodeSpaceLanguage('README.md')).toBe('markdown');
-    expect(detectCodeSpaceLanguage('diagram.dsl')).toBe('agentdiagram');
+    expect(detectCodeSpaceLanguage('diagram.dsl')).toBe('codoptic');
     expect(detectCodeSpaceLanguage('Dockerfile')).toBe('dockerfile');
   });
 

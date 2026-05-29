@@ -50,14 +50,14 @@ export function TopBar({
           {/* Motivation vs Logic: keep the app identity on the shared logo asset so the header stays in sync with the browser icon without duplicating artwork. */}
           <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-ink-700/70 bg-ink-900/40 shadow-glow">
             <Image
-              alt="AgentDiagram logo"
+              alt="Codoptic logo"
               className="h-full w-full object-contain"
               priority
               src={logo}
             />
           </div>
           <div className="leading-tight">
-            <div className="text-sm font-semibold tracking-tight text-ink-100">AgentDiagram</div>
+            <div className="text-sm font-semibold tracking-tight text-ink-100">Codoptic</div>
             <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400">Local Studio</div>
           </div>
         </div>

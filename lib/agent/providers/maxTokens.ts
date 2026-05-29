@@ -40,7 +40,7 @@ function positiveEnv(name: string): number | null {
  */
 export function resolveMaxTokens(opts: { provider: ProviderId; requested?: number }): number {
   if (opts.requested && opts.requested > 0) return opts.requested;
-  const global = positiveEnv('AGENTDIAGRAM_MAX_OUTPUT_TOKENS');
+  const global = positiveEnv('CODOPTIC_MAX_OUTPUT_TOKENS');
   if (global) return global;
   const perProvider = positiveEnv(ENV_OVERRIDE_KEYS[opts.provider]);
   if (perProvider) return perProvider;

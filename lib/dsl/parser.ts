@@ -1,5 +1,5 @@
 /**
- * Recursive-descent parser for the AgentDiagram DSL.
+ * Recursive-descent parser for the Codoptic DSL.
  *
  * Top-level statements:
  *   - Comment (passes through to AST so the formatter can preserve them)

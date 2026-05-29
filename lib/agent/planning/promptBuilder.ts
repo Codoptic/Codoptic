@@ -2,7 +2,7 @@ import type { DiagramKind } from '../analysis/classifier';
 import { COLOR_NAMES } from '../../ir/types';
 
 export const DSL_GRAMMAR_SUMMARY = `
-AgentDiagram DSL syntax:
+Codoptic DSL syntax:
 - Comments start with // and extend to end of line.
 - Groups:    Name [color: COLOR, icon: ICON] { ...children... }
 - Nodes:     Name [color: COLOR, icon: ICON]

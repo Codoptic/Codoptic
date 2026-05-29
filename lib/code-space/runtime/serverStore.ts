@@ -41,7 +41,7 @@ const EMPTY_DATA: CodeSpaceServerData = {
 };
 
 function dataPath(): string {
-  return process.env.CODE_SPACE_SERVER_STORE_PATH ?? path.join(os.tmpdir(), 'agentdiagram-code-space-store.json');
+  return process.env.CODE_SPACE_SERVER_STORE_PATH ?? path.join(os.tmpdir(), 'codoptic-code-space-store.json');
 }
 
 export class JsonCodeSpaceStore {

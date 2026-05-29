@@ -1,6 +1,6 @@
 # AI providers
 
-AgentDiagram supports five AI providers. Pick one in the UI; you can switch
+Codoptic supports five AI providers. Pick one in the UI; you can switch
 at any time. API keys come from `.env.local` or from a per-session input
 field in the UI (the field value is kept in server memory only and is
 discarded when the analysis finishes).

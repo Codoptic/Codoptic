@@ -28,7 +28,7 @@ function summary(layer: FileSummary['layer'], role: string): FileSummary {
 
 describe('repoContext', () => {
   it('extracts deep deterministic context from a small repo', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'agentdiagram-context-'));
+    const root = await mkdtemp(join(tmpdir(), 'codoptic-context-'));
     try {
       await write(root, 'package.json', JSON.stringify({ dependencies: { next: 'latest', stripe: 'latest' } }));
       await write(

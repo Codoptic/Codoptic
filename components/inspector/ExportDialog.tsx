@@ -217,7 +217,7 @@ export function ExportDialog({ open, onClose, diagramRef, dslText, instructionMa
       const files = await buildExportFiles();
       if (files.length === 0) throw new Error('Nothing was selected to export.');
       // Motivation vs Logic: when the export expands into several artifacts, the browser should receive one archive instead of a burst of separate downloads so the user's chosen bundle stays together.
-      await downloadExportFiles(files, 'agentdiagram-export.zip');
+      await downloadExportFiles(files, 'codoptic-export.zip');
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed.');

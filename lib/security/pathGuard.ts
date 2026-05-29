@@ -89,8 +89,8 @@ export function resolveBrowsePath(input: string, opts: { allowSensitive?: boolea
 }
 
 export function defaultRepoPath(): string {
-  if (process.env.AGENTDIAGRAM_DEFAULT_REPO_PATH) {
-    return process.env.AGENTDIAGRAM_DEFAULT_REPO_PATH;
+  if (process.env.CODOPTIC_DEFAULT_REPO_PATH) {
+    return process.env.CODOPTIC_DEFAULT_REPO_PATH;
   }
   return path.resolve(process.cwd(), '..');
 }

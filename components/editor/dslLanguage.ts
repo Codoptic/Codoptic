@@ -10,7 +10,7 @@ const COLORS = COLOR_NAMES;
 const ICONS = knownIconNames();
 
 export function registerDslLanguage(monaco: Monaco) {
-  const langId = 'agentdiagram';
+  const langId = 'codoptic';
   const isRegistered = monaco.languages.getLanguages().some((l: { id: string }) => l.id === langId);
 
   if (!isRegistered) {
@@ -18,7 +18,7 @@ export function registerDslLanguage(monaco: Monaco) {
 
     monaco.languages.setMonarchTokensProvider(langId, {
       defaultToken: '',
-      tokenPostfix: '.agentdiagram',
+      tokenPostfix: '.codoptic',
       tokenizer: {
         root: [
           [/\/\/.*$/, 'comment'],
@@ -88,7 +88,7 @@ export function registerDslLanguage(monaco: Monaco) {
   }
 
   // Motivation vs Logic: Monaco is its own rendering surface, so define both themes alongside the DSL registration and switch the active theme from React state.
-  monaco.editor.defineTheme('agentdiagram-dark', {
+  monaco.editor.defineTheme('codoptic-dark', {
     base: 'vs-dark',
     inherit: true,
     rules: [
@@ -108,7 +108,7 @@ export function registerDslLanguage(monaco: Monaco) {
     },
   });
 
-  monaco.editor.defineTheme('agentdiagram-light', {
+  monaco.editor.defineTheme('codoptic-light', {
     base: 'vs',
     inherit: true,
     rules: [

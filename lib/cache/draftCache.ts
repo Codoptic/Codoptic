@@ -54,7 +54,7 @@ function canUseLocalStorage(): boolean {
 }
 
 function draftShadowKey(key: string): string {
-  return `agentdiagram:draft-shadow:v1:${key}`;
+  return `codoptic:draft-shadow:v1:${key}`;
 }
 
 function validateDraft(value: unknown): EditorDraft | null {
