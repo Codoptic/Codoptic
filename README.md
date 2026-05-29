@@ -2,6 +2,8 @@
 
 Codoptic is an open-source, locally runnable diagram-as-code editor with an agentic repo explorer and agentic coding workspace.
 
+Join Discord channel [Discord](https://discord.gg/y77MGTJ2v) 🚀
+
 It is designed to live inside the repository you want to analyze, so the app can scan your codebase locally, generate diagrams from it, and keep the entire workflow on your machine unless you choose to send prompts to an AI provider.
 
 ![Example Diagram](examples/diagram.png)  
