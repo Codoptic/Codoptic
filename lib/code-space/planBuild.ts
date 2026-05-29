@@ -3,6 +3,7 @@ import type { CodeSpaceAgentMode } from './agentModes';
 export interface CodeSpacePromptOptions {
   modeOverride?: CodeSpaceAgentMode;
   buildPlanPath?: string;
+  agentPrompt?: string;
 }
 
 export function appendInstructionToPrompt(prompt: string, instruction?: string | null): string {

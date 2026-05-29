@@ -1469,13 +1469,15 @@ export function CodeSpaceWorkspace() {
         ? (provider.localApiKey ?? '')
         : (provider.apiKey || getApiKey(provider.provider));
     const enableThinking = provider.provider === 'anthropic';
-    // Root Cause vs Logic: instructions were leaking into the chat feed, so we keep stored user messages clean
-    // and only merge the customization text when preparing the agent payload.
-    const latestHistory = sessionWithPrompt.messages.map((message) =>
-      message.role === 'user'
-        ? { ...message, content: appendInstructionToPrompt(message.content, codeSpaceInstruction) }
-        : message,
-    );
+    const agentPromptContent = options.agentPrompt ?? userPrompt;
+    // Root Cause vs Logic: instructions were leaking into the chat feed, so stored user messages stay concise and
+    // we only merge the customization text while preparing the agent payload. The optional `agentPrompt` override
+    // lets us deliver plan guidance without exposing it in the UI.
+    const latestHistory = sessionWithPrompt.messages.map((message) => {
+      if (message.role !== 'user') return message;
+      const contentForAgent = message.id === userMessage.id ? agentPromptContent : message.content;
+      return { ...message, content: appendInstructionToPrompt(contentForAgent, codeSpaceInstruction) };
+    });
     let liveAssistantMessageId: string | null = null;
     let liveReasoningMessageId: string | null = null;
     const liveToolMessageIds = new Map<string, string>();

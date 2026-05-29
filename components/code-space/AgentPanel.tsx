@@ -268,9 +268,15 @@ export function AgentPanel({
       return;
     }
     onAgentModeChange('code');
-    // Root Cause vs Logic: React state updates are asynchronous, so submitting after `onAgentModeChange('code')`
-    // could still call the previous Plan-mode callback and regenerate the plan. Pass an explicit mode override.
-    onSubmitPrompt(buildPlanImplementationPrompt(filePath), [], { modeOverride: 'code', buildPlanPath: filePath });
+    // Motivation vs Logic: hide the detailed build instructions from the user, but still inject them into the
+    // agent payload so the implementation run respects the plan guidance.
+    const planPrompt = buildPlanImplementationPrompt(filePath);
+    const visiblePrompt = `Build from the approved plan at ${filePath}.`;
+    onSubmitPrompt(visiblePrompt, [], {
+      modeOverride: 'code',
+      buildPlanPath: filePath,
+      agentPrompt: planPrompt,
+    });
   };
 
   return (
