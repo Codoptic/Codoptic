@@ -63,6 +63,7 @@ export interface ChatParams {
   model: string;
   /** JSON schema for structured output. Provider adapts to its native equivalent. */
   jsonSchema?: Record<string, unknown>;
+  maxTokens?: number;
   signal?: AbortSignal;
 }
 

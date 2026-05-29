@@ -17,6 +17,7 @@ export type AgentEventType =
   | 'todo.completed'
   | 'context.search.started'
   | 'context.search.completed'
+  | 'context.sufficiency.completed'
   | 'context.file.selected'
   | 'context.file.dropped'
   | 'tool.requested'
@@ -57,6 +58,8 @@ export type AgentEventType =
   | 'subagent.started'
   | 'subagent.message'
   | 'subagent.completed'
+  | 'integration.reviewed'
+  | 'supervisor.verdict'
   | 'artifact.created';
 
 export interface AgentEvent<TPayload = unknown> {

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AutonomyLevel } from '@/lib/code-space/domain';
+import type { CodeSpaceClarifyingQuestion } from '@/lib/code-space/core';
 import type { ToolCall, ToolSpec } from '@/lib/agent/providers';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import {
@@ -13,6 +14,8 @@ import {
 import { writeAgentArtifact, readArtifactRange, grepArtifact, type AgentArtifact } from '@/lib/code-space/agent/artifacts';
 import type { AgentEventType } from './events';
 import { applyPatchFiles, PatchApplyError } from './patchApply';
+import { planContainsRequiredSections, REQUIRED_PLAN_SECTIONS } from './planningEngine';
+import type { SubagentSpawnRequest, SubagentResult } from './subagentRunner';
 import {
   createCheckpointFromSnapshots,
   loadFileCheckpoint,
@@ -73,6 +76,12 @@ export interface CodeAgentContext {
   artifacts: Map<string, AgentArtifact>;
   /** Checkpoints captured during the run (per edit_file apply). */
   checkpoints: FileCheckpoint[];
+  /** Plan mode: clarifying questions the model asked (terminal — pauses the run). */
+  planClarification?: { questions: CodeSpaceClarifyingQuestion[] };
+  /** Plan mode: the finalized plan artifact the model authored (terminal). */
+  planArtifactRequest?: { planMarkdown: string; summary: string; inspectedFiles: string[]; status: 'ready' | 'needs_review' };
+  /** Code mode: spawn an isolated subagent (wired by the runtime). Absent in subagent contexts. */
+  spawnSubagent?: (request: SubagentSpawnRequest) => Promise<SubagentResult>;
   registry: ToolRegistry;
   permission: PermissionManager;
   terminal: TerminalRunner;
@@ -158,6 +167,22 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
     name: 'restore_checkpoint',
     description: 'Revert all files captured by a previously created checkpoint (checkpointRef is the checkpoint id returned by an earlier edit_file).',
     inputSchema: { type: 'object', properties: { checkpointRef: { type: 'string' }, reason: { type: 'string' } }, required: ['checkpointRef'] },
+  },
+  {
+    name: 'spawn_subagent',
+    description:
+      'Delegate a focused subtask to an isolated subagent with a fresh context window. role is one of: explorer, critic, docs-reader, test-writer, verifier. Returns the subagent\'s factual summary. Use to parallelize investigation, get an independent critique, read docs, or write tests without bloating your own context. Read-only roles cannot edit files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string' },
+        task: { type: 'string' },
+        readOnly: { type: 'boolean' },
+        maxToolCalls: { type: 'number' },
+        allowedTools: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['role', 'task'],
+    },
   },
   {
     name: 'attempt_completion',
@@ -331,6 +356,12 @@ export class ToolExecutor {
           return await this.runCommand(call, ctx);
         case 'restore_checkpoint':
           return await this.restoreCheckpoint(call, ctx);
+        case 'spawn_subagent':
+          return await this.spawnSubagentTool(call, ctx);
+        case 'ask_clarifying_questions':
+          return this.askClarifyingQuestions(call, ctx);
+        case 'write_plan_artifact':
+          return this.writePlanArtifactTool(call, ctx);
         default:
           return { content: `Unknown tool "${call.name}". Use one of the provided tools.`, isError: true };
       }
@@ -343,16 +374,23 @@ export class ToolExecutor {
   private async readFile(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const target = str(call.input.path);
     if (!target) return { content: 'read_file requires "path".', isError: true };
-    const content = await safeReadTextFile(ctx.root, target);
+    const normalized = normalizeContextPath(target);
+    // Overlay: if this run already proposed (but did not write) changes to this file, serve the
+    // pending proposed content so the model stacks subsequent edits onto its own latest proposal.
+    const proposed = ctx.proposedLedger.get(normalized);
+    const content = proposed ? proposed.afterContent : await safeReadTextFile(ctx.root, target);
     if (content == null) return { content: `File not found or unreadable: ${target}`, isError: true };
-    ctx.readFiles.add(normalizeContextPath(target));
+    ctx.readFiles.add(normalized);
     await ctx.emitRuntime('file.read', { path: target });
     const lines = content.split('\n');
     const start = typeof call.input.startLine === 'number' ? Math.max(1, Math.floor(call.input.startLine)) : 1;
     const end = typeof call.input.endLine === 'number' ? Math.min(lines.length, Math.floor(call.input.endLine)) : lines.length;
     const slice = lines.slice(start - 1, end);
     const numbered = slice.map((line, index) => `${start + index}\t${line}`).join('\n');
-    return { content: clip(`${target} (lines ${start}-${end} of ${lines.length}):\n${numbered}`) };
+    const header = proposed
+      ? `${target} [pending proposed content — not yet written to disk] (lines ${start}-${end} of ${lines.length}):`
+      : `${target} (lines ${start}-${end} of ${lines.length}):`;
+    return { content: clip(`${header}\n${numbered}`) };
   }
 
   private async listFiles(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -491,11 +529,19 @@ export class ToolExecutor {
       .filter((edit) => edit.path);
     if (!edits.length) return { content: 'edit_file requires a non-empty "edits" array of {path, search, replace, reason}.', isError: true };
 
-    // Build current content per file from disk (fresh source of truth).
+    // Build current content per file. Overlay: when this run already proposed (but did not write)
+    // changes to a file, baseline new edits off the latest proposed content so sequential proposals
+    // to the same file stack cumulatively instead of each baselining off the original disk.
     const uniquePaths = Array.from(new Set(edits.map((edit) => normalizeContextPath(edit.path))));
     const currentFiles: Record<string, string> = {};
     const existedBefore: Record<string, boolean> = {};
     for (const filePath of uniquePaths) {
+      const proposed = ctx.proposedLedger.get(filePath);
+      if (proposed) {
+        currentFiles[filePath] = proposed.afterContent;
+        existedBefore[filePath] = true;
+        continue;
+      }
       const disk = await safeReadTextFile(ctx.root, filePath);
       currentFiles[filePath] = disk ?? '';
       existedBefore[filePath] = disk != null;
@@ -549,20 +595,29 @@ export class ToolExecutor {
     const applied: string[] = [];
     for (const preview of grouped.previews) {
       const normalized = normalizeContextPath(preview.path);
-      if (!applyToDisk) {
-        // suggest_only / approval_required → propose, do not write.
+      // The verifier/test-writer may always write ephemeral test scripts under .agent/tests/, even
+      // under suggest_only — they are throwaway artifacts, never user source files.
+      const writeThisFile = applyToDisk || normalized.startsWith('.agent/tests/');
+      if (!writeThisFile) {
+        // suggest_only / approval_required → propose, do not write. Keep one cumulative proposal per
+        // file: baseline against the true disk original (the first proposal's beforeContent), and
+        // record the latest cumulative afterContent. The stable diffId lets the UI replace the prior
+        // card instead of stacking, so applying it sends original→cumulative and never conflicts.
+        const existing = ctx.proposedLedger.get(normalized);
+        const originalBefore = existing ? existing.beforeContent : preview.beforeContent;
+        const cumulativeDiff = createUnifiedDiff(normalized, originalBefore, preview.afterContent);
         await ctx.emit({
           type: 'diff_proposed',
-          diffId: `patch:${ctx.runId}:${normalized}:${Date.now()}`,
+          diffId: `patch:${ctx.runId}:${normalized}`,
           filePath: normalized,
-          oldContent: preview.beforeContent,
+          oldContent: originalBefore,
           newContent: preview.afterContent,
           explanation: preview.explanation,
-          unifiedDiff: preview.unifiedDiff,
+          unifiedDiff: cumulativeDiff,
           autoApplied: false,
         });
         ctx.proposedFiles.add(normalized);
-        ctx.proposedLedger.set(normalized, { beforeContent: preview.beforeContent, afterContent: preview.afterContent });
+        ctx.proposedLedger.set(normalized, { beforeContent: originalBefore, afterContent: preview.afterContent });
         clearEditFailures(ctx, normalized);
         if (decision.approvalRequired) await ctx.emitRuntime('tool.approval.required', { tool: 'edit_file', path: normalized, reason: decision.reason });
         continue;
@@ -626,7 +681,7 @@ export class ToolExecutor {
       await ctx.emitRuntime(existedBefore[normalized] ? 'file.updated' : 'file.created', { path: normalized });
     }
 
-    if (!applyToDisk) {
+    if (!applied.length) {
       return { content: `Proposed ${grouped.previews.length} edit(s) for review (autonomy "${ctx.autonomy}" does not auto-apply). Not written to disk.` };
     }
     const diffSummary = grouped.previews.map((preview) => preview.unifiedDiff).join('\n');
@@ -685,6 +740,66 @@ export class ToolExecutor {
     }
     await ctx.emitRuntime('checkpoint.restored', { checkpointId: ref, files });
     return { content: `Restored ${files.length} file(s) from ${ref}: ${files.join(', ')}` };
+  }
+
+  /** Code-mode: delegate a subtask to an isolated subagent (wired by the runtime). */
+  private async spawnSubagentTool(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    if (!ctx.spawnSubagent) return { content: 'Subagent spawning is not available in this run.', isError: true };
+    const role = str(call.input.role);
+    const task = str(call.input.task);
+    if (!role || !task) return { content: 'spawn_subagent requires "role" and "task".', isError: true };
+    const allowedTools = Array.isArray(call.input.allowedTools)
+      ? call.input.allowedTools.filter((tool): tool is string => typeof tool === 'string')
+      : undefined;
+    const result = await ctx.spawnSubagent({
+      role,
+      task,
+      readOnly: call.input.readOnly === true ? true : undefined,
+      maxToolCalls: typeof call.input.maxToolCalls === 'number' ? call.input.maxToolCalls : undefined,
+      allowedTools,
+    });
+    return { content: clip(`[subagent:${result.role}] ${result.success ? 'completed' : 'incomplete'} (${result.toolCalls} turns)\n${result.summary}`), isError: !result.success };
+  }
+
+  /** Plan-mode terminal tool: record up to 3 clarifying questions and pause the run. */
+  private askClarifyingQuestions(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
+    const raw = Array.isArray(call.input.questions) ? call.input.questions : [];
+    const questions: CodeSpaceClarifyingQuestion[] = raw
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      .slice(0, 3)
+      .map((entry, index) => ({
+        id: `clarify:${ctx.runId}:${index}`,
+        question: str(entry.question),
+        choices: Array.isArray(entry.choices) ? entry.choices.filter((choice): choice is string => typeof choice === 'string') : [],
+        allowMultiple: entry.allowMultiple === true,
+      }))
+      .filter((entry) => entry.question);
+    if (!questions.length) return { content: 'ask_clarifying_questions requires a non-empty "questions" array of {question, choices?}.', isError: true };
+    ctx.planClarification = { questions };
+    return { content: `Recorded ${questions.length} clarifying question(s). Stop now — the run will pause for the user to answer.` };
+  }
+
+  /** Plan-mode terminal tool: validate and record the model-authored plan artifact. */
+  private writePlanArtifactTool(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
+    const planMarkdown = str(call.input.planMarkdown);
+    if (!planMarkdown.trim()) return { content: 'write_plan_artifact requires non-empty "planMarkdown".', isError: true };
+    if (!planContainsRequiredSections(planMarkdown)) {
+      const missing = REQUIRED_PLAN_SECTIONS.filter((section) => !planMarkdown.includes(`## ${section}`));
+      return {
+        content: `Plan artifact is missing required sections: ${missing.join(', ')}. Add every required "## <section>" heading (grounded in the evidence you read) and call write_plan_artifact again.`,
+        isError: true,
+      };
+    }
+    const inspectedFiles = Array.isArray(call.input.inspectedFiles)
+      ? call.input.inspectedFiles.filter((file): file is string => typeof file === 'string')
+      : [];
+    ctx.planArtifactRequest = {
+      planMarkdown,
+      summary: str(call.input.summary) || 'Implementation plan ready.',
+      inspectedFiles,
+      status: call.input.status === 'needs_review' ? 'needs_review' : 'ready',
+    };
+    return { content: 'Plan artifact recorded. Stop now — do not call any more tools.' };
   }
 
   private decide(registryToolName: string, autonomy: AutonomyLevel) {

@@ -138,6 +138,57 @@ describe('ToolExecutor.edit_file', () => {
     expect(ctx.editFailures.get('backend/api/config.py')?.length).toBeGreaterThan(0);
   });
 
+  it('stacks sequential proposals to one file into a single cumulative, conflict-free proposal', async () => {
+    const original = 'export const x = 1;\nexport const y = 1;\n';
+    await writeFile(path.join(tmpDir, 'a.ts'), original, 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    await executor.execute(
+      call('edit_file', { edits: [{ path: 'a.ts', search: 'export const x = 1;', replace: 'export const x = 2;', reason: 'bump x' }] }),
+      ctx,
+    );
+    await executor.execute(
+      call('edit_file', { edits: [{ path: 'a.ts', search: 'export const y = 1;', replace: 'export const y = 2;', reason: 'bump y' }] }),
+      ctx,
+    );
+
+    const proposals = events.filter((event) => event.type === 'diff_proposed');
+    expect(proposals.length).toBe(2);
+    // Stable diffId so the UI replaces the prior card instead of stacking stale baselines.
+    const ids = new Set(proposals.map((event) => (event as Extract<AgentSSEEvent, { type: 'diff_proposed' }>).diffId));
+    expect(ids.size).toBe(1);
+
+    const latest = proposals[proposals.length - 1] as Extract<AgentSSEEvent, { type: 'diff_proposed' }>;
+    expect(latest.oldContent).toBe(original);
+    expect(latest.newContent).toContain('x = 2');
+    expect(latest.newContent).toContain('y = 2');
+
+    const ledger = ctx.proposedLedger.get('a.ts');
+    expect(ledger?.beforeContent).toBe(original);
+    expect(ledger?.afterContent).toContain('x = 2');
+    expect(ledger?.afterContent).toContain('y = 2');
+    // Disk is untouched under suggest_only.
+    expect(await readFile(path.join(tmpDir, 'a.ts'), 'utf8')).toBe(original);
+  });
+
+  it('read_file serves pending proposed content after a proposal', async () => {
+    await writeFile(path.join(tmpDir, 'a.ts'), 'export const x = 1;\n', 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    await executor.execute(
+      call('edit_file', { edits: [{ path: 'a.ts', search: 'export const x = 1;', replace: 'export const x = 2;', reason: 'bump' }] }),
+      ctx,
+    );
+    const read = await executor.execute(call('read_file', { path: 'a.ts' }), ctx);
+
+    expect(read.content).toMatch(/pending proposed content/i);
+    expect(read.content).toContain('x = 2');
+  });
+
   it('clears editFailures after a successful retry on the same file', async () => {
     await writeFile(path.join(tmpDir, 'a.ts'), 'export const x = 1;\n', 'utf8');
     const events: AgentSSEEvent[] = [];

@@ -10,6 +10,21 @@ export interface ValidationRunResult extends TerminalRunResult {
   artifact?: AgentArtifact;
 }
 
+/**
+ * Progressive validation strategy order: cheap/structural gates first (syntax → typecheck → lint),
+ * then behavioral gates (unit tests → integration/e2e), then the expensive full build. Running in
+ * this order surfaces the smallest, fastest-to-fix failures before the slow ones.
+ */
+const STRATEGY_ORDER: TerminalCommand['kind'][] = ['syntax', 'format', 'typecheck', 'lint', 'test', 'e2e', 'build', 'script', 'shell', 'explore'];
+
+export function progressiveOrder(commands: TerminalCommand[]): TerminalCommand[] {
+  const rank = (kind: TerminalCommand['kind']): number => {
+    const index = STRATEGY_ORDER.indexOf(kind);
+    return index === -1 ? STRATEGY_ORDER.length : index;
+  };
+  return [...commands].sort((a, b) => rank(a.kind) - rank(b.kind));
+}
+
 export class ValidationRunner {
   constructor(private readonly terminal = new TerminalRunner()) {}
 

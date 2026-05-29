@@ -16,6 +16,8 @@ export type AgentSSEEvent =
   | { type: 'terminal_chunk'; chunk: string }
   | { type: 'validation_result'; id: string; command: string; status: 'passed' | 'failed' | 'skipped'; output: string }
   | { type: 'lint_errors'; filePath: string; errors: Array<{ file: string; line: number; col: number; severity: 'error' | 'warning'; message: string; rule?: string }> }
+  | { type: 'integration_review'; findings: Array<{ path: string; kind: string; message: string }> }
+  | { type: 'supervisor_verdict'; status: 'verified' | 'needs_review'; blockers: string[] }
   | { type: 'agent_done'; summary: string; filesChanged: string[] }
   | { type: 'agent_error'; message: string; recoverable: boolean }
   | { type: 'tool_budget_warning'; used: number; max: number };

@@ -14,13 +14,17 @@ import { createAgentEvent, type AgentEventType } from './events';
 import { InstructionLoader } from './instructionLoader';
 import { PlanningEngine } from './planningEngine';
 import { createRunState, transitionRunState, type CodeSpaceRunPhase, type CodeSpaceRunState } from './runState';
-import { ValidationRunner, type ValidationRunResult } from './validationRunner';
+import { ValidationRunner, progressiveOrder, type ValidationRunResult } from './validationRunner';
+import { IntegrationVerifier } from './integrationVerifier';
+import { Supervisor } from './supervisor';
+import { SubagentRunner } from './subagentRunner';
 import type { TerminalCommand } from './terminalPolicy';
 import type { LoadedInstruction } from './instructionLoader';
 import { RepairLoop } from './repairLoop';
-import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse, validationStatus } from './responsePolicy';
+import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse } from './responsePolicy';
 import { CodeAgentLoop, buildCodeSystemPrompt, buildCodeSeedMessage, type CodeAgentLoopOptions } from './codeAgentLoop';
-import { ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
+import { PLAN_MODE_TOOL_SPECS, buildPlanSystemPrompt, buildPlanSeedMessage } from './planAgentLoop';
+import { ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, formatUnresolvedEditFailures, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
 import { ToolBudget } from './toolBudget';
 import { createDefaultToolRegistry } from './toolRegistry';
 import { PermissionManager } from './permissionManager';
@@ -141,7 +145,7 @@ export class AgentRuntime {
         return;
       }
       if (mode === 'plan') {
-        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos);
+        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, signal);
         return;
       }
       await this.finishCode(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, signal);
@@ -186,22 +190,113 @@ export class AgentRuntime {
     emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>,
     runId: string,
     todos: string[],
+    loadedInstructions: LoadedInstruction[],
+    sufficiency: ContextSufficiencyReport,
+    signal?: AbortSignal,
   ) {
-    const artifact = await emitTool(emit, emitRuntime, 'write_plan_artifact', { inspectedFiles: context.selectedFiles }, async () =>
-      this.planning.writePlanArtifact(root, request.sessionId, request.projectName, prompt, context, validationCommands),
+    const credentials = await resolveProviderCredentials(root, request);
+    if (!credentials.apiKey && request.providerId !== 'local') {
+      const answer = `The "${request.providerId}" provider is not configured (no API key found), so Plan mode cannot research the repository and author a grounded plan. Add a provider key and retry.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
+    const clarificationAnswers = [...request.messages]
+      .reverse()
+      .find((message) => message.role === 'user' && message.content.startsWith('Plan clarification answers:'))?.content;
+
+    const ctx: CodeAgentContext = {
+      root,
+      runId,
+      projectId: request.projectName,
+      sessionId: request.sessionId,
+      autonomy: request.autonomy,
+      emit,
+      emitRuntime,
+      ledger: new Map<string, LedgerEntry>(),
+      proposedFiles: new Set<string>(),
+      proposedLedger: new Map(),
+      editFailures: new Map(),
+      readFiles: new Set(context.files.map((file) => file.path)),
+      artifacts: new Map(),
+      checkpoints: [],
+      registry: createDefaultToolRegistry(),
+      permission: new PermissionManager(),
+      terminal: new TerminalRunner(),
+      signal,
+    };
+
+    const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
+    const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
+    const loopOptions: CodeAgentLoopOptions = { session, budget, signal, tools: PLAN_MODE_TOOL_SPECS };
+
+    const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
+    loop.seed(
+      buildPlanSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path)),
+      await buildPlanSeedMessage(
+        root,
+        prompt,
+        context,
+        validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })),
+        sufficiency,
+        clarificationAnswers,
+      ),
     );
-    emit({ type: 'plan_markdown_created', filePath: artifact.filePath, content: artifact.content });
-    todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: true }));
-    const answer = buildPlanFinalResponse({
-      projectName: request.projectName,
-      planPath: artifact.filePath,
-      planContent: artifact.content,
-      inspectedFiles: context.files.map((file) => ({ path: file.path, summary: file.summary })),
-      validationCommands: validationCommands.map((command) => ({ command: [command.command, ...command.args].join(' '), reason: command.reason })),
-    });
+
+    await loop.run(ctx, loopOptions);
+
+    // Sufficiency gate: if the model finalized nothing while the gate still wants recall, push it to
+    // recall more evidence before letting the run end without a grounded plan.
+    const MAX_PLAN_RECALL_ESCALATIONS = 2;
+    for (let attempt = 0; attempt < MAX_PLAN_RECALL_ESCALATIONS; attempt += 1) {
+      if (ctx.planClarification || ctx.planArtifactRequest) break;
+      if (sufficiency.status !== 'needs_recall') break;
+      if (loopOptions.budget.turnsExhausted()) break;
+      await loop.continueWith(buildRecallDirective(sufficiency), ctx, loopOptions);
+    }
+
+    if (ctx.planClarification && !ctx.planArtifactRequest) {
+      await emitRuntime('plan.updated', { phase: 'awaiting_clarification' });
+      emit({ type: 'clarifying_questions_created', questions: ctx.planClarification.questions });
+      const answer = `I need a few details before finalizing the plan for ${request.projectName}. Answer the clarifying questions and I will ground the plan in your intent.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_clarification', filesChanged: [] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
+    if (ctx.planArtifactRequest) {
+      const artifact = await emitTool(emit, emitRuntime, 'write_plan_artifact', { inspectedFiles: ctx.planArtifactRequest.inspectedFiles }, async () =>
+        this.planning.writePlanContent(root, request.sessionId, ctx.planArtifactRequest!.planMarkdown),
+      );
+      emit({ type: 'plan_markdown_created', filePath: artifact.filePath, content: artifact.content });
+      todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: true }));
+      const answer = buildPlanFinalResponse({
+        projectName: request.projectName,
+        planPath: artifact.filePath,
+        planContent: artifact.content,
+        inspectedFiles: context.files.map((file) => ({ path: file.path, summary: file.summary })),
+        validationCommands: validationCommands.map((command) => ({ command: [command.command, ...command.args].join(' '), reason: command.reason })),
+      });
+      await streamAnswer(answer, emit, emitRuntime);
+      const status = ctx.planArtifactRequest.status === 'ready' ? 'verified' : 'needs_review';
+      await emitRuntime('run.completed', { status, phase: status, filesChanged: [artifact.filePath] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [artifact.filePath] });
+      return;
+    }
+
+    const answer = [
+      `Plan mode ended without producing a plan artifact for ${request.projectName}.`,
+      `Context gate: ${sufficiency.status} (${sufficiency.score}/100).`,
+      sufficiency.blockers.length ? `Blockers: ${sufficiency.blockers.join('; ')}.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
     await streamAnswer(answer, emit, emitRuntime);
-    await emitRuntime('run.completed', { status: 'verified', phase: 'verified', filesChanged: [artifact.filePath] });
-    emit({ type: 'agent_done', summary: answer, filesChanged: [artifact.filePath] });
+    await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
+    emit({ type: 'agent_done', summary: answer, filesChanged: [] });
   }
 
   private async finishCode(
@@ -267,6 +362,9 @@ export class AgentRuntime {
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
     const loopOptions: CodeAgentLoopOptions = { session, budget, signal };
 
+    const subagentRunner = new SubagentRunner(ctx, session, request.projectName);
+    ctx.spawnSubagent = (subRequest) => subagentRunner.spawn(subRequest);
+
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
       buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path)),
@@ -322,7 +420,19 @@ export class AgentRuntime {
     }
 
     await emitRuntime('plan.updated', { phase: 'awaiting_patch_review' });
-    let validationRuns = await this.runAndEmitValidation(root, runId, validationCommands, signal, emit, emitRuntime);
+
+    const verifier = new IntegrationVerifier(this.validation, subagentRunner);
+
+    // Validation/testing agent — step 1: review the cumulative diff for integration coherence.
+    const coherence = await verifier.reviewDiffCoherence(ctx);
+    emit({ type: 'integration_review', findings: coherence.findings });
+    await emitRuntime('integration.reviewed', { findings: coherence.findings });
+
+    // Step 2: run validation progressively (syntax → typecheck → lint → test → e2e → build).
+    let validationRuns = await this.runAndEmitValidation(root, runId, progressiveOrder(validationCommands), signal, emit, emitRuntime);
+
+    // Step 3: generate + run focused test scripts via a test-writer subagent (in .agent/tests/<runId>/).
+    const testScripts = await verifier.generateAndRunTestScripts(ctx, runId, prompt);
 
     if (this.repairLoop.shouldRepair(validationRuns) && ledger.size) {
       await emitRuntime('plan.updated', { phase: 'repairing' });
@@ -331,7 +441,7 @@ export class AgentRuntime {
         ctx,
         loopOptions,
         initialResults: validationRuns,
-        runValidation: () => this.validation.runValidationCommands(root, runId, validationCommands, signal),
+        runValidation: () => verifier.progressiveValidate(root, runId, validationCommands, signal),
         emit,
         emitRuntime,
         runId,
@@ -339,21 +449,41 @@ export class AgentRuntime {
       validationRuns = repair.results;
     }
 
+    // Re-review coherence after any repair edits shifted the diff.
+    const finalCoherence = await verifier.reviewDiffCoherence(ctx);
+
     const revertCheckpoint = await createRunRevertCheckpoint(ctx);
     if (revertCheckpoint) await persistCheckpoint(revertCheckpoint);
 
     const filesChanged = Array.from(ledger.keys());
-    const status = validationStatus(validationRuns);
-    const terminalPhase = status === 'passed' ? 'verified' : 'needs_review';
-    todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: status === 'passed' || index < 3 }));
 
-    const answer = buildCodeFinalResponse({
-      projectName: request.projectName,
-      files: filesChanged.map((filePath) => ({ path: filePath, explanation: ledger.get(filePath)?.deleted ? 'Removed.' : 'Edited.' })),
+    // Supervisor reconciles every gate before confirmation — verified only when all pass.
+    const verdict = new Supervisor().reconcile({
+      ledgerSize: ledger.size,
+      coherence: finalCoherence.findings,
       validationRuns,
-      summary: loopResult.summary,
-      checkpointRef: revertCheckpoint?.id,
+      unresolvedEditFailures: formatUnresolvedEditFailures(ctx),
+      subagentResults: testScripts.result ? [testScripts.result] : [],
     });
+    emit({ type: 'supervisor_verdict', status: verdict.status, blockers: verdict.blockers });
+    await emitRuntime('supervisor.verdict', { status: verdict.status, blockers: verdict.blockers });
+
+    const terminalPhase = verdict.status === 'verified' ? 'verified' : 'needs_review';
+    todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: verdict.status === 'verified' || index < 3 }));
+
+    const answer = [
+      buildCodeFinalResponse({
+        projectName: request.projectName,
+        files: filesChanged.map((filePath) => ({ path: filePath, explanation: ledger.get(filePath)?.deleted ? 'Removed.' : 'Edited.' })),
+        validationRuns,
+        summary: loopResult.summary,
+        checkpointRef: revertCheckpoint?.id,
+      }),
+      verdict.status === 'needs_review' && verdict.blockers.length ? `Supervisor verdict: needs_review — ${verdict.blockers.join(' ')}` : '',
+      testScripts.scripts.length ? `Generated ${testScripts.scripts.length} test script(s) under ${testScripts.folder}.` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: terminalPhase, phase: terminalPhase, filesChanged, checkpointId: revertCheckpoint?.id });
     emit({ type: 'agent_done', summary: answer, filesChanged });

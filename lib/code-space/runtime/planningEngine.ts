@@ -298,8 +298,13 @@ export class PlanningEngine {
   }
 
   async writePlanArtifact(root: string, sessionId: string, projectName: string, prompt: string, context: ContextGraphResult, validationCommands: TerminalCommand[]): Promise<{ filePath: string; content: string }> {
-    const filePath = `.agent/plans/${sessionId.replace(/[^a-zA-Z0-9_.-]+/g, '-')}.md`;
     const content = this.buildPlanArtifact({ projectName, prompt, context, validationCommands });
+    return this.writePlanContent(root, sessionId, content);
+  }
+
+  /** Persist plan markdown to the canonical .agent/plans/<sessionId>.md path. */
+  async writePlanContent(root: string, sessionId: string, content: string): Promise<{ filePath: string; content: string }> {
+    const filePath = `.agent/plans/${sessionId.replace(/[^a-zA-Z0-9_.-]+/g, '-')}.md`;
     await fs.mkdir(path.dirname(path.join(root, filePath)), { recursive: true });
     await fs.writeFile(path.join(root, filePath), content, 'utf8');
     return { filePath, content };

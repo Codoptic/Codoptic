@@ -52,6 +52,26 @@ describe('unified patch lifecycle', () => {
     expect(await readFile(path.join(tmpDir, 'file.ts'), 'utf8')).toBe('current\n');
   });
 
+  it('applies a cumulative proposal (original→latest) without conflict', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-cumulative-'));
+    const original = 'export const x = 1;\nexport const y = 1;\n';
+    const cumulative = 'export const x = 2;\nexport const y = 2;\n';
+    await writeFile(path.join(tmpDir, 'file.ts'), original, 'utf8');
+
+    // Mirrors the overlay contract: a stacked proposal records the disk original as beforeContent
+    // and the cumulative result as afterContent, so applying it against disk-original succeeds.
+    const result = await applyPatchFiles({
+      root: tmpDir,
+      projectId: 'project',
+      runId: 'run',
+      patchId: 'patch',
+      files: [{ path: 'file.ts', beforeContent: original, afterContent: cumulative }],
+    });
+
+    expect(result.status).toBe('applied');
+    expect(await readFile(path.join(tmpDir, 'file.ts'), 'utf8')).toBe(cumulative);
+  });
+
   it('creates a checkpoint before writing files', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-checkpoint-'));
     await writeFile(path.join(tmpDir, 'file.ts'), 'old\n', 'utf8');

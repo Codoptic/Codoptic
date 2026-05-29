@@ -1,10 +1,29 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AssistantTurn } from '@/lib/agent/providers';
+import { chatTurnWithTools } from '@/lib/agent/providers';
 import { AgentRuntime, runtimeSourceFingerprintForTests } from '../agentRuntime';
+import { REQUIRED_PLAN_SECTIONS } from '../planningEngine';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 
+vi.mock('@/lib/agent/providers', () => ({
+  chatTurnWithTools: vi.fn(),
+}));
+
+const mockedTurn = vi.mocked(chatTurnWithTools);
+
+function turn(partial: Partial<AssistantTurn>): AssistantTurn {
+  return { text: '', toolCalls: [], stopReason: 'tool_use', ...partial };
+}
+
+const PLAN_MARKDOWN = ['# Plan: model-authored', '', ...REQUIRED_PLAN_SECTIONS.map((section) => `## ${section}\n- detail grounded in app.ts`)].join('\n');
+
 let tmpDir: string | null = null;
+
+beforeEach(() => {
+  mockedTurn.mockReset();
+});
 
 afterEach(async () => {
   if (tmpDir) {
@@ -47,15 +66,14 @@ describe('AgentRuntime workflow contracts', () => {
     expect(final?.summary).not.toMatch(/Reviewed \d+ files|Visible workflow|Repository map|Validation available/i);
   });
 
-  it('writes plan artifacts with the required enterprise handoff sections', async () => {
-    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-'));
-    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit', test: 'vitest run' } }), 'utf8');
+  it('plan mode requires a provider key and reports needs_review when none is configured', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-nokey-'));
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
     const events: AgentSSEEvent[] = [];
 
     await new AgentRuntime().run(
       {
-        sessionId: 'session-plan',
+        sessionId: 'session-plan-nokey',
         projectRoot: tmpDir,
         projectName: 'demo',
         messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
@@ -73,14 +91,83 @@ describe('AgentRuntime workflow contracts', () => {
       },
     );
 
+    expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
+    expect(mockedTurn).not.toHaveBeenCalled();
+    const done = events.find((event) => event.type === 'agent_done');
+    expect(done?.summary).toMatch(/not configured|provider key/i);
+  });
+
+  it('plan mode authors the artifact via the LLM after reading evidence, staying read-only', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-llm-'));
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit', test: 'vitest run' } }), 'utf8');
+    await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'read_file', input: { path: 'app.ts' } }] }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't2', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN, summary: 'Refactor app.run', status: 'ready', inspectedFiles: ['app.ts'] } }] }))
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-plan-llm',
+        projectRoot: tmpDir,
+        projectName: 'demo',
+        messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
+        mode: 'plan',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['app.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
     const planEvent = events.find((event) => event.type === 'plan_markdown_created');
-    expect(planEvent?.filePath).toBe('.agent/plans/session-plan.md');
+    expect(planEvent?.filePath).toBe('.agent/plans/session-plan-llm.md');
+    expect(planEvent?.content).toBe(PLAN_MARKDOWN);
     expect(planEvent?.content).toContain('## Summary');
-    expect(planEvent?.content).toContain('## Key Changes');
-    expect(planEvent?.content).toContain('## Evidence Reviewed');
-    expect(planEvent?.content).toContain('## Test Plans');
-    expect(planEvent?.content).toContain('## Assumptions');
-    expect(planEvent?.content).not.toMatch(/\bMCQ\s*\d+\s*:/i);
+    // Read-only invariant: planning never proposes or applies file changes.
+    expect(events.some((event) => event.type === 'diff_proposed' || event.type === 'file_applied')).toBe(false);
+  });
+
+  it('plan mode pauses and asks clarifying questions when the model requests them', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-clarify-'));
+    await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'ask_clarifying_questions', input: { questions: [{ question: 'Should the refactor preserve the public API?', choices: ['Yes', 'No'] }] } }] }))
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-plan-clarify',
+        projectRoot: tmpDir,
+        projectName: 'demo',
+        messages: [{ role: 'user', content: 'Refactor app.ts somehow' }],
+        mode: 'plan',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['app.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    const clarify = events.find((event) => event.type === 'clarifying_questions_created');
+    expect(clarify && clarify.type === 'clarifying_questions_created' ? clarify.questions.length : 0).toBe(1);
+    expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
   });
 
   it('exposes a stable runtime fingerprint for route delegation tests', () => {

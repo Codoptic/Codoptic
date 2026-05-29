@@ -15,6 +15,9 @@ const READ_ONLY_TOOLS = new Set([
   'git_diff',
   'read_artifact',
   'grep_artifact',
+  // Plan-mode terminal tools: they never mutate source files (the artifact is written by the runtime).
+  'ask_clarifying_questions',
+  'write_plan_artifact',
 ]);
 
 export function isReadOnlyTool(name: string): boolean {

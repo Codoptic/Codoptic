@@ -1577,7 +1577,9 @@ export function CodeSpaceWorkspace() {
               if (shouldAutoApplyCodeSpaceDiffs(executionPolicyRef.current, event.autoApplied)) {
                 void applyPendingDiff(diff, { removeOnFailure: true });
               } else {
-                setPendingDiffs((prev) => [...prev, diff]);
+                // Upsert by stable diffId: a re-proposal for the same file carries the cumulative
+                // original→latest diff, so replace the prior card instead of stacking stale baselines.
+                setPendingDiffs((prev) => [...prev.filter((item) => item.diffId !== diff.diffId), diff]);
               }
             } else if (event.type === 'file_applied') {
               // The agent already wrote this file to disk during its loop. Do NOT re-apply;
