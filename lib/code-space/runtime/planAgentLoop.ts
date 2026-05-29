@@ -11,10 +11,7 @@ import {
   formatWorkflowDodMarkdown,
   type ContextSufficiencyReport,
 } from './workflowPolicy';
-
-const MAX_EVIDENCE_FILES = 24;
-const MAX_EVIDENCE_CHARS = 16_000;
-const MAX_INDEX_ENTRIES = 800;
+import { allocateContextBudget, skeletonizeFileContent } from './contextWindowManager';
 
 /** Terminal tools unique to Plan mode. They signal completion via CodeAgentContext fields. */
 const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
@@ -118,16 +115,21 @@ export async function buildPlanSeedMessage(
   validationCommands: Array<{ command: string; args: string[]; reason: string }>,
   sufficiency: ContextSufficiencyReport,
   clarificationAnswers?: string,
+  model = '',
 ): Promise<string> {
-  const evidence = selectEvidenceFiles(context, prompt, MAX_EVIDENCE_FILES)
+  const budget = allocateContextBudget(model);
+  const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
     .map((file) => {
-      const body = file.content.length > MAX_EVIDENCE_CHARS ? `${file.content.slice(0, MAX_EVIDENCE_CHARS)}\n[TRUNCATED — read_file for the rest]` : file.content;
+      let body = file.content.length > budget.maxCharsPerFile
+        ? `${file.content.slice(0, budget.maxCharsPerFile)}\n[TRUNCATED — read_file for the rest]`
+        : file.content;
+      if (budget.useSkeleton) body = skeletonizeFileContent(file.path, body);
       return [`--- FILE ${file.path} (${file.summary}) ---`, body, file.truncated ? '[TRUNCATED]' : ''].filter(Boolean).join('\n');
     })
     .join('\n\n');
 
   const repositoryFiles = await listRepositoryFiles(root);
-  const fileIndex = repositoryFiles.slice(0, MAX_INDEX_ENTRIES).join('\n');
+  const fileIndex = repositoryFiles.slice(0, budget.maxIndexEntries).join('\n');
   const validation = validationCommands.length
     ? validationCommands.map((command) => `- ${[command.command, ...command.args].join(' ')} (${command.reason})`).join('\n')
     : '- No validation command auto-detected. Recommend an appropriate check in the Validation Plan.';

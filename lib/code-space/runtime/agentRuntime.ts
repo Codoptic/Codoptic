@@ -242,6 +242,7 @@ export class AgentRuntime {
         validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })),
         sufficiency,
         clarificationAnswers,
+        request.model,
       ),
     );
 
@@ -378,7 +379,7 @@ export class AgentRuntime {
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
       buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path)),
-      await buildCodeSeedMessage(root, prompt, context, validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })), sufficiency),
+      await buildCodeSeedMessage(root, prompt, context, validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })), sufficiency, request.model),
     );
 
     let loopResult = await loop.run(ctx, loopOptions);

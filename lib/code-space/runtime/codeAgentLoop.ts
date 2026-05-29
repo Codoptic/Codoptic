@@ -11,6 +11,7 @@ import {
   formatWorkflowDodMarkdown,
   type ContextSufficiencyReport,
 } from './workflowPolicy';
+import { allocateContextBudget, compressMessageHistory, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
 
 export interface CodeAgentLoopResult {
   /** attempt_completion was called (the model declared the task done). */
@@ -30,10 +31,6 @@ export interface CodeAgentLoopOptions {
   signal?: AbortSignal;
 }
 
-const MAX_INDEX_ENTRIES = 800;
-const MAX_EVIDENCE_FILES = 24;
-const MAX_EVIDENCE_CHARS = 16_000;
-
 /**
  * The agentic Code-mode loop. Holds a single conversation thread that the model
  * drives with native tool calls (read → search → edit → run → fix). Read-only
@@ -43,12 +40,14 @@ const MAX_EVIDENCE_CHARS = 16_000;
 export class CodeAgentLoop {
   readonly messages: ChatMessage[] = [];
   private budgetWarned = false;
+  private contextPruneCount = 0;
 
   constructor(private readonly executor: ToolExecutor = new ToolExecutor()) {}
 
   /** Seed the thread with the system contract and the task brief. */
   seed(systemPrompt: string, userPrompt: string): void {
     this.messages.length = 0;
+    this.contextPruneCount = 0;
     this.messages.push({ role: 'system', content: systemPrompt });
     this.messages.push({ role: 'user', content: userPrompt });
   }
@@ -62,6 +61,35 @@ export class CodeAgentLoop {
   async continueWith(feedback: string, ctx: CodeAgentContext, opts: CodeAgentLoopOptions): Promise<CodeAgentLoopResult> {
     this.messages.push({ role: 'user', content: feedback });
     return this.continueUntilQuiescent(ctx, opts);
+  }
+
+  /**
+   * Skeletonizes evidence files embedded in the initial seed user message.
+   * Used on the first reducible-prompt retry to strip implementation bodies.
+   */
+  private skeletonizeSeedEvidence(): void {
+    const seed = this.messages.find((m) => m.role === 'user');
+    if (!seed) return;
+    seed.content = seed.content.replace(
+      /--- FILE ([^\s]+) \([^)]+\) ---\n([\s\S]*?)(?=\n--- FILE |\nRepository file index|$)/g,
+      (_match, filePath: string, body: string) => {
+        const skeletonized = skeletonizeFileContent(filePath, body);
+        return `--- FILE ${filePath} (skeletonized) ---\n${skeletonized}`;
+      },
+    );
+  }
+
+  /**
+   * Strips all evidence file blocks from the seed user message.
+   * Last-resort fallback after skeletonization still triggers a content filter.
+   */
+  private stripSeedEvidence(): void {
+    const seed = this.messages.find((m) => m.role === 'user');
+    if (!seed) return;
+    seed.content = seed.content.replace(
+      /Initial evidence already gathered for you[\s\S]*$/,
+      'Initial evidence: stripped due to provider content limit — use read_file to load files on demand.',
+    );
   }
 
   private async continueUntilQuiescent(ctx: CodeAgentContext, opts: CodeAgentLoopOptions): Promise<CodeAgentLoopResult> {
@@ -84,11 +112,34 @@ export class CodeAgentLoop {
       }
 
       opts.budget.recordTurn();
-      const turn = await chatTurnWithTools(opts.session, this.messages, tools, {
-        signal: opts.signal,
-        toolChoice: 'auto',
-        maxTokens: opts.maxTokens,
-      });
+      let turn: AssistantTurn;
+      try {
+        turn = await chatTurnWithTools(opts.session, this.messages, tools, {
+          signal: opts.signal,
+          toolChoice: 'auto',
+          maxTokens: opts.maxTokens,
+        });
+      } catch (err) {
+        if (isReduciblePromptError(err) && this.contextPruneCount < 2) {
+          this.contextPruneCount++;
+          if (this.contextPruneCount === 1) {
+            // First retry: skeletonize evidence files + compress old tool results.
+            compressMessageHistory(this.messages);
+            this.skeletonizeSeedEvidence();
+          } else {
+            // Second retry: strip all evidence, agent reads on demand.
+            this.stripSeedEvidence();
+          }
+          opts.budget.recordTurn();
+          turn = await chatTurnWithTools(opts.session, this.messages, tools, {
+            signal: opts.signal,
+            toolChoice: 'auto',
+            maxTokens: opts.maxTokens,
+          });
+        } else {
+          throw err;
+        }
+      }
 
       await this.recordAssistantTurn(turn, ctx);
 
@@ -211,16 +262,21 @@ export async function buildCodeSeedMessage(
   context: ContextGraphResult,
   validationCommands: Array<{ command: string; args: string[]; reason: string }>,
   sufficiency?: ContextSufficiencyReport,
+  model = '',
 ): Promise<string> {
-  const evidence = selectEvidenceFiles(context, prompt)
+  const budget = allocateContextBudget(model);
+  const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
     .map((file) => {
-      const body = file.content.length > MAX_EVIDENCE_CHARS ? `${file.content.slice(0, MAX_EVIDENCE_CHARS)}\n[TRUNCATED — read_file for the rest]` : file.content;
+      let body = file.content.length > budget.maxCharsPerFile
+        ? `${file.content.slice(0, budget.maxCharsPerFile)}\n[TRUNCATED — read_file for the rest]`
+        : file.content;
+      if (budget.useSkeleton) body = skeletonizeFileContent(file.path, body);
       return [`--- FILE ${file.path} (${file.summary}) ---`, body, file.truncated ? '[TRUNCATED]' : ''].filter(Boolean).join('\n');
     })
     .join('\n\n');
 
   const repositoryFiles = await listRepositoryFiles(root);
-  const fileIndex = repositoryFiles.slice(0, MAX_INDEX_ENTRIES).join('\n');
+  const fileIndex = repositoryFiles.slice(0, budget.maxIndexEntries).join('\n');
   const validation = validationCommands.length
     ? validationCommands.map((command) => `- ${[command.command, ...command.args].join(' ')} (${command.reason})`).join('\n')
     : '- No validation command auto-detected. After editing, choose an appropriate check with run_command.';
@@ -248,7 +304,7 @@ export async function buildCodeSeedMessage(
   ].join('\n');
 }
 
-export function selectEvidenceFiles(context: ContextGraphResult, prompt: string, limit = MAX_EVIDENCE_FILES): ContextGraphResult['files'] {
+export function selectEvidenceFiles(context: ContextGraphResult, prompt: string, limit = 24): ContextGraphResult['files'] {
   const lowerPrompt = prompt.toLowerCase();
   const isCodeSpacePageWork = /\bcode\s*space\b/.test(lowerPrompt) && /\b(page|workspace|sidebar|editor|diff|patch|accept|reject|changes?)\b/.test(lowerPrompt);
   const isAgentCapabilityWork = /\b(agent|tool|grep|shell|terminal|context|evidence|explor|self[-\s]?explor|analy[sz]e?|harness|workflow|patch|planner|runtime|apply|edit)\b/.test(lowerPrompt);
