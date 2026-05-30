@@ -259,6 +259,8 @@ npm run format       # Prettier formatting
 npm run render:example # Render the example diagram
 ```
 
+> TIPS: run on port 4000 `npm run dev -- --port 4000` or other ports to reserve port 3000 for npm testing by the agent.
+
 ## Repository Layout
 
 The main code is organized into a few broad areas:
