@@ -108,6 +108,10 @@ export interface CodeSpaceClarifyingQuestion {
   question: string;
   choices: string[];
   allowMultiple?: boolean;
+  /** Why this answer materially changes scope/design — shown to the user above the choices. */
+  rationale?: string;
+  /** Richer labeled options (preferred over bare `choices` when present). */
+  options?: Array<{ label: string; description?: string }>;
 }
 
 export interface CodeSpaceChangesetFile {
@@ -165,6 +169,14 @@ export interface CodeSpaceAgentSession {
   }>;
   runtimePhase?: string;
   runtimeStatus?: 'running' | 'verified' | 'needs_review' | 'failed' | 'cancelled';
+  knowledgeGraph?: {
+    projectId: string;
+    nodeCount: number;
+    edgeCount: number;
+    viewUrl: string;
+    reportPath?: string;
+    createdAt: number;
+  };
 }
 
 export type CodeSpaceBottomTab = 'problems' | 'output' | 'debug' | 'terminal';

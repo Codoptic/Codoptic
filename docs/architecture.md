@@ -81,3 +81,45 @@ See [providers.md](./providers.md) for the retry contract.
 Progress is streamed over SSE; the animation in
 [AnalysisAnimation.tsx](../components/agent/AnalysisAnimation.tsx) reads
 those events.
+
+## Code Space coding agent
+
+The live coding agent runs `POST /api/code-space/agent` →
+`AgentRuntime.run` ([lib/code-space/runtime/agentRuntime.ts](../lib/code-space/runtime/agentRuntime.ts))
+→ `finishAsk` / `finishPlan` / `finishCode`, driven by `PlanAgentLoop` /
+`CodeAgentLoop` + `ToolExecutor`. All progress is streamed over SSE
+([lib/code-space/agent/types.ts](../lib/code-space/agent/types.ts)); run
+phases live in [runState.ts](../lib/code-space/runtime/runState.ts).
+
+Industry-standard behaviors layered on top:
+
+1. **MCQ clarification + ambiguity hard-gate.** `assessPromptAmbiguity`
+   ([workflowPolicy.ts](../lib/code-space/runtime/workflowPolicy.ts)) scores
+   vague requests; when ambiguous, Plan mode must call
+   `ask_clarifying_questions` (rich MCQs with `rationale` + labeled
+   `options`) before authoring a plan. Plans must include a **Candidate
+   Approaches and Recommendation** section
+   ([planningEngine.ts](../lib/code-space/runtime/planningEngine.ts)).
+2. **Pre-validation diff confirmation gate.** After edits and before
+   validation, `finishCode` emits `diff_confirmation_required` (git diff when
+   the repo is git-connected, else a ledger-derived unified diff) and pauses
+   in `awaiting_diff_confirmation`. The user confirms via
+   `POST /api/code-space/runs/validate`, which resumes the real detected
+   validation commands → repair loop → supervisor.
+3. **Context engineering.** `ContextGraphEngine` accepts external
+   `structuralSignals` (central files/routes, and knowledge-graph hubs) to
+   bias file selection; large files are skeletonized rather than truncated.
+   Superpowers-style skills ([skills.ts](../lib/code-space/runtime/skills.ts))
+   are injected into the workflow kernel as hard-gated disciplines.
+4. **Knowledge graph (Graphify-adapted).** On the first Plan run,
+   `ensureKnowledgeGraph` builds a code knowledge graph via the offline
+   stdlib pipeline [tools/graphify/build_graph.py](../tools/graphify/build_graph.py)
+   (detect → AST/regex extract → build → cluster → analyze → report →
+   vis.js export), cached under `.codoptic-cache/knowledge-graph/`. It emits
+   `knowledge_graph_ready`; subsequent runs reuse the cache to feed
+   `structuralSignals` (god nodes / hubs) into context selection. The UI
+   shows a **Knowledge graph** link that opens a modal rendering the
+   interactive `graph.html` served by
+   `app/api/code-space/knowledge-graph/view`. An optional Foundry semantic
+   pass (`--semantic`) annotates central files; it is best-effort and never
+   required for the offline code graph.

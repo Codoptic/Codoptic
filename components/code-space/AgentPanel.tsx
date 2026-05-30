@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bot, Loader2, Zap } from 'lucide-react';
+import { Bot, Loader2, Share2, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -59,6 +59,7 @@ interface AgentPanelProps {
   onRejectDiff: (diffId: string) => void;
   onOpenDiffFile?: (filePath: string) => void;
   onOpenPlanFile?: (filePath: string) => void;
+  onOpenKnowledgeGraph?: () => void;
   onBuildFromPlan?: (filePath: string) => void;
   mentionIndex?: FileMentionIndex;
   indexStatus?: MentionIndexStatus;
@@ -156,6 +157,7 @@ export function AgentPanel({
   onRejectDiff,
   onOpenDiffFile,
   onOpenPlanFile,
+  onOpenKnowledgeGraph,
   onBuildFromPlan,
   mentionIndex,
   indexStatus = 'ready',
@@ -288,6 +290,17 @@ export function AgentPanel({
           <span className="rounded-full border border-[#1f6feb66] bg-[#1f6feb22] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-[#79b8ff]">
             {activeProjectName}
           </span>
+        ) : null}
+        {session?.knowledgeGraph ? (
+          <button
+            type="button"
+            onClick={onOpenKnowledgeGraph}
+            title={`${session.knowledgeGraph.nodeCount} files · ${session.knowledgeGraph.edgeCount} import edges`}
+            className="inline-flex items-center gap-1 rounded-full border border-[#2ea04366] bg-[#2ea04322] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#56d364] hover:bg-[#2ea04333]"
+          >
+            <Share2 size={10} />
+            Knowledge graph
+          </button>
         ) : null}
         <span className="ml-auto truncate text-[10px] text-[#6e7681]">{providerSummary}</span>
         <button type="button" onClick={onOpenModelConfig} className="text-[10px] text-[#58a6ff] underline underline-offset-2 hover:text-[#79b8ff]">

@@ -1,5 +1,7 @@
+import type { CodeSpaceClarifyingQuestion } from '@/lib/code-space/core';
 import type { ContextGraphFile, ContextGraphResult } from './contextGraphEngine';
 import type { TerminalCommand } from './terminalPolicy';
+import { buildSkillsKernel } from './skills';
 
 export type WorkflowMode = 'ask' | 'plan' | 'code';
 export type ContextSufficiencyStatus = 'ready' | 'needs_recall' | 'needs_review';
@@ -130,6 +132,109 @@ export function assessContextSufficiency(input: {
   };
 }
 
+export interface PromptAmbiguityReport {
+  /** True when the request is underspecified AND the user has not already answered clarifications. */
+  ambiguous: boolean;
+  /** 0-100; higher means more ambiguous. */
+  score: number;
+  reasons: string[];
+}
+
+const VAGUE_TERMS =
+  /\b(better|improve|optimi[sz]e|enhance|clean ?up|robust|nice|modern|somehow|as needed|where it makes sense|appropriate|etc\.?|and stuff|make it work|fast(er)?|scalable|production[- ]ready)\b/i;
+const BROAD_SCOPES =
+  /\b(add (caching|auth|authentication|logging|telemetry|tests|monitoring|i18n|search|rate.?limit)|refactor|redesign|re-?architect|migrate|overhaul|rewrite)\b/i;
+const TARGET_FILE = /[\w./-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|json|ya?ml|md|css|scss|html)\b/i;
+
+/**
+ * Deterministic pre-flight ambiguity scorer (Superpowers-style brainstorming gate). When a planning
+ * request is vague, names no concrete target, or bundles broad capabilities with several plausible
+ * designs, the planner must ask clarifying questions before authoring a plan.
+ */
+export function assessPromptAmbiguity(input: {
+  prompt: string;
+  context: ContextGraphResult;
+  hasClarificationAnswers?: boolean;
+}): PromptAmbiguityReport {
+  const { prompt, context, hasClarificationAnswers } = input;
+  const reasons: string[] = [];
+  let score = 0;
+  const words = prompt.trim().split(/\s+/).filter(Boolean);
+
+  if (VAGUE_TERMS.test(prompt)) {
+    score += 35;
+    reasons.push('Prompt uses vague/qualitative goals without concrete acceptance criteria.');
+  }
+  if (BROAD_SCOPES.test(prompt)) {
+    score += 30;
+    reasons.push('Prompt requests a broad capability with multiple plausible designs.');
+  }
+  const hasExplicitEvidence = context.files.some(
+    (file) =>
+      hasReason(file, 'explicit_file') ||
+      hasReason(file, 'explicit_folder') ||
+      hasReason(file, 'open_tab') ||
+      hasReason(file, 'current_editor'),
+  );
+  if (!TARGET_FILE.test(prompt) && !hasExplicitEvidence) {
+    score += 25;
+    reasons.push('No concrete target file is named in the prompt or attached as context.');
+  }
+  if (words.length <= 8) {
+    score += 15;
+    reasons.push('Prompt is very short, leaving scope underspecified.');
+  }
+  if (/\band\b/i.test(prompt) && BROAD_SCOPES.test(prompt)) {
+    score += 10;
+    reasons.push('Prompt bundles multiple changes that may need independent decisions.');
+  }
+
+  score = Math.max(0, Math.min(100, score));
+  return { ambiguous: !hasClarificationAnswers && score >= 50, score, reasons: unique(reasons) };
+}
+
+export function buildAmbiguityClarificationGate(report: PromptAmbiguityReport): string {
+  return [
+    'AMBIGUITY HARD GATE: this request is underspecified and multiple valid designs exist.',
+    ...report.reasons.map((reason) => `- ${reason}`),
+    '',
+    'Before doing anything else you MUST call ask_clarifying_questions with 2-4 well-scoped multiple-choice questions. Each question needs a `rationale` and at least 2 labeled `options` that resolve scope, target surface, and acceptance criteria. Do NOT author the plan until the user answers.',
+  ].join('\n');
+}
+
+/**
+ * Deterministic clarifying questions used as a safety net when the model fails to ask despite an
+ * ambiguous request. Guarantees the user always gets to disambiguate before a plan is produced.
+ */
+export function buildFallbackClarifyingQuestions(runId: string): CodeSpaceClarifyingQuestion[] {
+  const scopeOptions = [
+    { label: 'A focused change to one existing module', description: 'Smallest coherent edit, lowest regression risk.' },
+    { label: 'A coordinated change across several related modules', description: 'Larger surface, more validation.' },
+    { label: 'A new capability or abstraction', description: 'Only if existing code cannot be reused.' },
+  ];
+  const acceptanceOptions = [
+    { label: 'Existing automated tests must pass', description: 'Use the detected test command.' },
+    { label: 'Add new focused tests for this behaviour', description: 'Author tests near the changed code.' },
+    { label: 'Manual/behavioural check only', description: 'No new automated coverage.' },
+  ];
+  return [
+    {
+      id: `clarify:${runId}:scope`,
+      question: 'What is the primary scope of this change?',
+      rationale: 'Scope determines how many files change and what we explicitly leave out of this task.',
+      options: scopeOptions,
+      choices: scopeOptions.map((option) => option.label),
+    },
+    {
+      id: `clarify:${runId}:acceptance`,
+      question: 'How should we verify the change is correct?',
+      rationale: 'Acceptance criteria drive the validation plan and the Definition of Done.',
+      options: acceptanceOptions,
+      choices: acceptanceOptions.map((option) => option.label),
+    },
+  ];
+}
+
 export function formatContextSufficiencyMarkdown(report: ContextSufficiencyReport): string {
   const lines = [
     `- Status: ${report.status}`,
@@ -144,6 +249,7 @@ export function formatContextSufficiencyMarkdown(report: ContextSufficiencyRepor
 }
 
 export function buildWorkflowKernelPrompt(mode: WorkflowMode): string {
+  const skills = buildSkillsKernel(mode);
   return [
     `v3.2 workflow kernel for ${mode.toUpperCase()} mode`,
     '',
@@ -157,7 +263,10 @@ export function buildWorkflowKernelPrompt(mode: WorkflowMode): string {
     '- Prefer the smallest coherent change; do not invent services, dependencies, databases, queues, or broad rewrites without evidence.',
     '- Validation failures must be inspected and repaired only within the smallest affected area.',
     '- The final verdict must clearly separate applied changes, proposed changes, skipped validation, and remaining blockers.',
-  ].join('\n');
+    skills ? `\n${skills}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function buildRecallDirective(report: ContextSufficiencyReport): string {

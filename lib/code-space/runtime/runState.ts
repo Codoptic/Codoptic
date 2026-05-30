@@ -9,6 +9,7 @@ export const CODE_SPACE_RUN_PHASES = [
   'awaiting_clarification',
   'proposing_patch',
   'awaiting_patch_review',
+  'awaiting_diff_confirmation',
   'applying_patch',
   'validating',
   'repairing',

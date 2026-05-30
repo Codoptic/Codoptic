@@ -199,6 +199,42 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/**
+ * Normalize a model-supplied clarifying question into the richer schema.
+ *
+ * Motivation vs Logic: industry-standard agents ask MCQs with a rationale and labeled
+ * options, not bare strings. We accept either `options:[{label,description}]` or legacy
+ * `choices:string[]`, and always populate `choices` (option labels) so older renderers and
+ * answer-parsing keep working.
+ */
+function parseClarifyingQuestion(entry: Record<string, unknown>, id: string): CodeSpaceClarifyingQuestion {
+  const rawOptions = Array.isArray(entry.options) ? entry.options : [];
+  const options = rawOptions
+    .map((option) => {
+      if (option && typeof option === 'object') {
+        const record = option as Record<string, unknown>;
+        const label = str(record.label) || str(record.value) || str(record.title);
+        return label ? { label, description: str(record.description) || undefined } : null;
+      }
+      return typeof option === 'string' && option ? { label: option } : null;
+    })
+    .filter((option): option is { label: string; description?: string } => Boolean(option));
+
+  const legacyChoices = Array.isArray(entry.choices)
+    ? entry.choices.filter((choice): choice is string => typeof choice === 'string')
+    : [];
+  const choices = options.length ? options.map((option) => option.label) : legacyChoices;
+
+  return {
+    id,
+    question: str(entry.question),
+    choices,
+    allowMultiple: entry.allowMultiple === true,
+    rationale: str(entry.rationale) || undefined,
+    options: options.length ? options : undefined,
+  };
+}
+
 function formatEditDiagnostics(diagnostics: EditBlockDiagnostic[]): string {
   return diagnostics
     .map((diagnostic) => `- ${diagnostic.path} [${diagnostic.code}]${diagnostic.line ? ` line ${diagnostic.line}` : ''}: ${diagnostic.message}`)
@@ -761,20 +797,21 @@ export class ToolExecutor {
     return { content: clip(`[subagent:${result.role}] ${result.success ? 'completed' : 'incomplete'} (${result.toolCalls} turns)\n${result.summary}`), isError: !result.success };
   }
 
-  /** Plan-mode terminal tool: record up to 3 clarifying questions and pause the run. */
+  /** Plan-mode terminal tool: record up to 6 clarifying questions (rationale + labeled options) and pause. */
   private askClarifyingQuestions(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
     const raw = Array.isArray(call.input.questions) ? call.input.questions : [];
     const questions: CodeSpaceClarifyingQuestion[] = raw
       .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
-      .slice(0, 3)
-      .map((entry, index) => ({
-        id: `clarify:${ctx.runId}:${index}`,
-        question: str(entry.question),
-        choices: Array.isArray(entry.choices) ? entry.choices.filter((choice): choice is string => typeof choice === 'string') : [],
-        allowMultiple: entry.allowMultiple === true,
-      }))
-      .filter((entry) => entry.question);
-    if (!questions.length) return { content: 'ask_clarifying_questions requires a non-empty "questions" array of {question, choices?}.', isError: true };
+      .slice(0, 6)
+      .map((entry, index) => parseClarifyingQuestion(entry, `clarify:${ctx.runId}:${index}`))
+      .filter((entry) => entry.question && entry.choices.length >= 2);
+    if (!questions.length) {
+      return {
+        content:
+          'ask_clarifying_questions requires a non-empty "questions" array. Each item needs {question, rationale, options:[{label,description}]} with at least 2 options so the user can pick.',
+        isError: true,
+      };
+    }
     ctx.planClarification = { questions };
     return { content: `Recorded ${questions.length} clarifying question(s). Stop now — the run will pause for the user to answer.` };
   }

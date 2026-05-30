@@ -25,6 +25,7 @@ const REQUIRED_PLAN_SECTIONS = [
   'Context Sufficiency Gate',
   'Repository Evidence Reviewed',
   'Current-State Diagnosis to Verify',
+  'Candidate Approaches and Recommendation',
   'Target Design Direction',
   'Implementation Milestones',
   'File-Level Change Plan',
@@ -161,6 +162,24 @@ function milestoneLines(files: ContextGraphFile[], validationCommands: TerminalC
   ];
 }
 
+/**
+ * Evidence-grounded candidate approaches for the deterministic fallback plan. Real plans authored by
+ * the model will be richer; this guarantees the required section exists with at least two distinct,
+ * scope-aware options and an explicit recommendation even when the model fails to finalize.
+ */
+function candidateApproachLines(files: ContextGraphFile[], action: string): string[] {
+  const owner = files[0]?.path ?? 'the smallest owner module identified during recall';
+  const secondary = files[1]?.path;
+  return [
+    `- **Approach A — Minimal in-place change (recommended).** Implement "${action}" directly in \`${owner}\`, reusing existing abstractions and preserving public APIs. Pros: smallest, most reviewable diff; lowest regression risk. Cons: limited if the responsibility is actually shared.`,
+    secondary
+      ? `- **Approach B — Coordinated change across owners.** Extend \`${owner}\` and \`${secondary}\` together when the behaviour spans both. Pros: keeps related call sites coherent. Cons: larger surface, more validation.`
+      : '- **Approach B — Extract a small shared helper.** Introduce one focused, well-named helper if the logic would otherwise be duplicated. Pros: single source of truth. Cons: adds an abstraction; only worth it with real duplication evidence.',
+    '- **Approach C — Defer/escalate.** If recall shows the request is ambiguous or unsafe, stop and report `needs_review` with the exact blocker instead of guessing.',
+    '- **Recommendation:** Approach A unless repository evidence proves the responsibility is shared, in which case prefer Approach B. Avoid Approach C only when intent and evidence are clear.',
+  ];
+}
+
 export class PlanningEngine {
   buildTodos(mode: 'ask' | 'plan' | 'code', context: ContextGraphResult): string[] {
     if (mode === 'ask') return ['Gather repository evidence for the question', 'Trace relevant references and tests', 'Answer directly from evidence'];
@@ -245,6 +264,9 @@ export class PlanningEngine {
       '## Current-State Diagnosis to Verify',
       ...diagnosisLines(context, prompt),
       'This matters because an ungrounded plan can create duplicate architecture, modify the wrong owner module, or claim validation without touching the real runtime path.',
+      '',
+      '## Candidate Approaches and Recommendation',
+      ...candidateApproachLines(selectedFiles, action),
       '',
       '## Target Design Direction',
       '- Prefer existing project conventions and typed boundaries.',

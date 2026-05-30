@@ -360,6 +360,15 @@ export function CodeSpaceWorkspace() {
     deleted?: boolean;
     acceptedAt: number;
   }>>([]);
+  const [diffConfirmation, setDiffConfirmation] = useState<{
+    sessionId: string;
+    runId: string;
+    files: Array<{ path: string; deleted: boolean; unifiedDiff: string }>;
+    unifiedDiff: string;
+    isGit: boolean;
+    summary: string;
+  } | null>(null);
+  const [knowledgeGraphModalOpen, setKnowledgeGraphModalOpen] = useState(false);
   const agentAbortRef = useRef<AbortController | null>(null);
   const runningSessionIdRef = useRef<string | null>(null);
   const applyingDiffIdsRef = useRef<Set<string>>(new Set());
@@ -1651,6 +1660,30 @@ export function CodeSpaceWorkspace() {
                 clarifyingQuestions: event.questions,
                 updatedAt: Date.now(),
               }));
+            } else if (event.type === 'diff_confirmation_required') {
+              // Pre-validation diff gate: surface the full change set and pause until the user
+              // confirms (run validation) or cancels (revert). Resolved via /api/code-space/runs/validate.
+              setDiffConfirmation({
+                sessionId: sessionWithPrompt.id,
+                runId: event.runId,
+                files: event.files,
+                unifiedDiff: event.unifiedDiff,
+                isGit: event.isGit,
+                summary: event.summary,
+              });
+            } else if (event.type === 'knowledge_graph_ready') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                knowledgeGraph: {
+                  projectId: event.projectId,
+                  nodeCount: event.nodeCount,
+                  edgeCount: event.edgeCount,
+                  viewUrl: event.viewUrl,
+                  reportPath: event.reportPath,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }));
             } else if (event.type === 'terminal_chunk') {
               setTerminalStream((prev) => prev + event.chunk);
             } else if (event.type === 'plan_created') {
@@ -1879,6 +1912,165 @@ export function CodeSpaceWorkspace() {
     updateSession,
     updateSessionMessage,
     upsertSessionToolCall,
+  ]);
+
+  // Resolve the pre-validation diff gate: confirm → run the detected validation/repair phase on the
+  // applied workspace; cancel → revert every applied change. Streams the same SSE protocol as the run.
+  const handleDiffDecision = useCallback(async (decision: 'confirm' | 'cancel') => {
+    const gate = diffConfirmation;
+    const project = activeProject;
+    if (!gate || !project) {
+      setDiffConfirmation(null);
+      return;
+    }
+    const usesCustomModel = provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+    const model = usesCustomModel
+      ? (provider.customModel ?? provider.model)
+      : provider.provider === 'local'
+        ? (provider.localModelName ?? '')
+        : provider.model;
+    const apiKey = provider.provider === 'local' ? (provider.localApiKey ?? '') : (provider.apiKey || getApiKey(provider.provider));
+    const endpoint = provider.provider === 'local' ? provider.localBaseUrl : provider.endpoint;
+
+    setDiffConfirmation(null);
+    setAgentRunning(true);
+    const abortCtrl = new AbortController();
+    agentAbortRef.current = abortCtrl;
+    runningSessionIdRef.current = gate.sessionId;
+    patchSession(gate.sessionId, (current) => ({ ...current, status: decision === 'cancel' ? 'reviewing' : 'checking', updatedAt: Date.now() }));
+
+    let liveAssistantMessageId: string | null = null;
+    try {
+      const response = await fetch('/api/code-space/runs/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId: gate.runId,
+          projectRoot: project.rootPath,
+          projectName: project.name,
+          model,
+          providerId: provider.provider,
+          apiKey,
+          endpoint,
+          decision,
+        }),
+        signal: abortCtrl.signal,
+      });
+      if (!response.body) {
+        setAgentRunning(false);
+        return;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            if (event.type === 'validation_result') {
+              patchSession(gate.sessionId, (current) => ({
+                ...current,
+                verificationResults: [
+                  ...current.verificationResults.filter((result) => result.id !== event.id),
+                  { id: event.id, command: event.command, status: event.status, output: event.output },
+                ],
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'file_applied') {
+              const appliedAt = Date.now();
+              setAgentChangesets((cur) => [
+                ...cur.filter((item) => item.filePath !== event.filePath),
+                { filePath: event.filePath, beforeContent: event.beforeContent, afterContent: event.afterContent, deleted: event.deleted, acceptedAt: appliedAt },
+              ]);
+              patchSession(gate.sessionId, (current) => ({
+                ...current,
+                filesChanged: Array.from(new Set([...current.filesChanged, event.filePath])),
+                updatedAt: Date.now(),
+              }));
+              if (activeProject) void refreshGitStatus(activeProject);
+            } else if (event.type === 'supervisor_verdict') {
+              patchSession(gate.sessionId, (current) => ({ ...current, status: event.status === 'verified' ? 'verified' : 'needs_review', updatedAt: Date.now() }));
+            } else if (event.type === 'structured_event') {
+              if (event.event.type === 'plan.updated') {
+                const payload = event.event.payload as { phase?: string };
+                patchSession(gate.sessionId, (current) => ({ ...current, runtimePhase: payload.phase ?? current.runtimePhase, updatedAt: Date.now() }));
+              } else if (event.event.type === 'run.completed') {
+                const payload = event.event.payload as { status?: string; phase?: string };
+                patchSession(gate.sessionId, (current) => ({
+                  ...current,
+                  runtimePhase: payload.phase ?? current.runtimePhase,
+                  runtimeStatus:
+                    payload.status === 'verified' || payload.status === 'needs_review' || payload.status === 'failed' || payload.status === 'cancelled'
+                      ? payload.status
+                      : current.runtimeStatus,
+                  status: payload.status === 'verified' ? 'verified' : payload.status === 'needs_review' ? 'needs_review' : current.status,
+                  updatedAt: Date.now(),
+                }));
+              } else if (event.event.type === 'file.reverted') {
+                const payload = event.event.payload as { path?: string };
+                if (payload.path) {
+                  const reverted = payload.path;
+                  setAgentChangesets((cur) => cur.filter((item) => item.filePath !== reverted));
+                }
+                if (activeProject) void refreshGitStatus(activeProject);
+              }
+            } else if (event.type === 'text_delta') {
+              if (!liveAssistantMessageId) {
+                liveAssistantMessageId = nowId('msg');
+                appendSessionMessage(gate.sessionId, { id: liveAssistantMessageId, role: 'assistant', content: event.delta, createdAt: Date.now() });
+              } else {
+                updateSessionMessage(gate.sessionId, liveAssistantMessageId, (message) => ({ ...message, content: `${message.content}${event.delta}` }));
+              }
+            } else if (event.type === 'agent_done') {
+              const summary = event.summary.trim();
+              if (summary) {
+                if (!liveAssistantMessageId) {
+                  appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'assistant', content: summary, createdAt: Date.now() });
+                } else {
+                  updateSessionMessage(gate.sessionId, liveAssistantMessageId, (message) => ({ ...message, content: summary }));
+                }
+              }
+              patchSession(gate.sessionId, (current) => ({ ...current, status: 'finalized', updatedAt: Date.now() }));
+              if (activeProject) void refreshGitStatus(activeProject);
+            } else if (event.type === 'agent_error') {
+              appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'system', content: `⚠ ${event.message}`, createdAt: Date.now() });
+              patchSession(gate.sessionId, (current) => ({ ...current, status: 'blocked', updatedAt: Date.now() }));
+            }
+          } catch {
+            // Ignore malformed SSE chunks.
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name !== 'AbortError') {
+        appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'system', content: `⚠ ${err.message}`, createdAt: Date.now() });
+      }
+    } finally {
+      setAgentRunning(false);
+      agentAbortRef.current = null;
+      runningSessionIdRef.current = null;
+    }
+  }, [
+    activeProject,
+    appendSessionMessage,
+    diffConfirmation,
+    patchSession,
+    provider.apiKey,
+    provider.customModel,
+    provider.endpoint,
+    provider.localApiKey,
+    provider.localBaseUrl,
+    provider.localModelName,
+    provider.model,
+    provider.provider,
+    refreshGitStatus,
+    updateSessionMessage,
   ]);
 
   useEffect(() => {
@@ -2488,6 +2680,7 @@ export function CodeSpaceWorkspace() {
             onAgentModeChange={handleAgentModeChange}
             canGenerateDiagram={!!activeProject}
             onOpenPlanFile={openPlanFile}
+            onOpenKnowledgeGraph={() => setKnowledgeGraphModalOpen(true)}
             onSelectSession={(sessionId) => setActiveSessionId((current) => (current === sessionId ? null : sessionId))}
             onRenameSession={renameSession}
             onDeleteSession={(session) => void deleteSession(session)}
@@ -2504,6 +2697,120 @@ export function CodeSpaceWorkspace() {
             filePaths={flatFilePaths}
           />
           </aside>
+      )}
+
+      {diffConfirmation && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        >
+          <div className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-[#2a2a2a] bg-[#181818] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-[#2a2a2a] p-5">
+              <div>
+                <h2 className="text-lg font-semibold">Review changes before validation</h2>
+                <p className="mt-1 text-[12px] text-[#8b8b8b]">
+                  {diffConfirmation.files.length} file(s) changed · diff source:{' '}
+                  {diffConfirmation.isGit ? 'git' : 'in-memory change ledger (no git repo)'}. Confirm to run the project&apos;s
+                  detected validation, or cancel to revert every change.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleDiffDecision('cancel')}
+                className="rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]"
+                aria-label="Cancel and revert"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              <ul className="mb-3 flex flex-wrap gap-2">
+                {diffConfirmation.files.map((file) => (
+                  <li
+                    key={file.path}
+                    className="rounded border border-[#2a2a2a] bg-[#202020] px-2 py-1 text-[11px] text-[#d4d4d4]"
+                  >
+                    {file.deleted ? '🗑 ' : ''}
+                    {file.path}
+                  </li>
+                ))}
+              </ul>
+              <pre className="overflow-auto rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] p-3 text-[11px] leading-relaxed text-[#cccccc]">
+                {(diffConfirmation.unifiedDiff || '(no textual diff available)')
+                  .split('\n')
+                  .map((line, index) => (
+                    <span
+                      key={index}
+                      className={
+                        line.startsWith('+') && !line.startsWith('+++')
+                          ? 'block text-[#6ccf6c]'
+                          : line.startsWith('-') && !line.startsWith('---')
+                            ? 'block text-[#e06c6c]'
+                            : line.startsWith('@@')
+                              ? 'block text-[#6c9ce0]'
+                              : 'block'
+                      }
+                    >
+                      {line || ' '}
+                    </span>
+                  ))}
+              </pre>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-[#2a2a2a] p-4">
+              <button
+                type="button"
+                onClick={() => void handleDiffDecision('cancel')}
+                className="rounded border border-[#2a2a2a] bg-[#252526] px-3 py-1.5 text-[13px] text-[#d4d4d4] hover:bg-[#2a2d2e]"
+              >
+                Cancel &amp; revert
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDiffDecision('confirm')}
+                className="rounded bg-[#2d6cdf] px-3 py-1.5 text-[13px] font-medium text-white hover:bg-[#3a78e8]"
+              >
+                Confirm &amp; validate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {knowledgeGraphModalOpen && activeSession?.knowledgeGraph && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setKnowledgeGraphModalOpen(false);
+          }}
+        >
+          <div className="flex h-[88vh] w-full max-w-6xl flex-col rounded-xl border border-[#2a2a2a] bg-[#181818] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 border-b border-[#2a2a2a] p-4">
+              <div>
+                <h2 className="text-lg font-semibold">Knowledge graph</h2>
+                <p className="mt-1 text-[12px] text-[#8b8b8b]">
+                  {activeSession.knowledgeGraph.nodeCount} files · {activeSession.knowledgeGraph.edgeCount} import edges · interactive
+                  Graphify map of this project. Red-bordered nodes are central modules.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKnowledgeGraphModalOpen(false)}
+                className="rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <iframe
+              title="Knowledge graph"
+              src={activeSession.knowledgeGraph.viewUrl}
+              className="min-h-0 flex-1 rounded-b-xl border-0 bg-[#0f1115]"
+              sandbox="allow-scripts allow-same-origin"
+            />
+          </div>
+        </div>
       )}
 
       {folderBrowserOpen && (

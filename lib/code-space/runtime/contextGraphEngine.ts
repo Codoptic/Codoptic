@@ -20,7 +20,8 @@ export type ContextReason =
   | 'content_match'
   | 'route_runtime_surface'
   | 'ui_surface'
-  | 'documentation_spec';
+  | 'documentation_spec'
+  | 'central_node';
 
 export interface ContextAttachment {
   kind: 'file' | 'folder';
@@ -36,6 +37,12 @@ export interface ContextGraphOptions {
   attachments?: ContextAttachment[];
   buildPlanPath?: string | null;
   limitHint?: number;
+  /**
+   * Structural prioritization signals from a precomputed repository digest or knowledge graph
+   * (central/"god" files, hot routes, community hubs). Lets persistent structure improve file
+   * selection without re-deriving it each run. See `deriveStructuralSignals`.
+   */
+  structuralSignals?: Array<{ path: string; weight: number; reason?: string }>;
 }
 
 export interface ContextGraphFile {
@@ -304,6 +311,13 @@ export class ContextGraphEngine {
 
     for (const referenced of extractPromptReferencedFiles(prompt, candidateSet)) {
       addScore(scores, referenced, 520, 'explicit_file', 'file path referenced in prompt, traceback, or error output');
+    }
+
+    // Structural prioritization from a precomputed digest / knowledge graph (central files, routes,
+    // community hubs). Capped so it tilts ranking toward architecturally important files without
+    // overriding explicit user intent (attachments/mentions score far higher).
+    for (const signal of options.structuralSignals ?? []) {
+      addScore(scores, signal.path, Math.max(0, Math.min(120, signal.weight)), 'central_node', signal.reason ?? 'structural signal (import/knowledge graph)');
     }
 
     const baseBudget = options.mode === 'ask' ? 15 : options.mode === 'plan' ? 35 : 50;

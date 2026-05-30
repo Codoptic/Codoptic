@@ -38,6 +38,8 @@ export type AgentEventType =
   | 'file.created'
   | 'file.updated'
   | 'file.deleted'
+  | 'file.reverted'
+  | 'file.revert.failed'
   | 'git.status.updated'
   | 'git.diff.updated'
   | 'checkpoint.created'
@@ -60,6 +62,9 @@ export type AgentEventType =
   | 'subagent.completed'
   | 'integration.reviewed'
   | 'supervisor.verdict'
+  | 'knowledge_graph.building'
+  | 'knowledge_graph.ready'
+  | 'knowledge_graph.failed'
   | 'artifact.created';
 
 export interface AgentEvent<TPayload = unknown> {

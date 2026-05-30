@@ -27,3 +27,9 @@ docs/plan/
 .cursor
 .vscode
 .cache/github-repos/
+
+# Python (knowledge-graph builder under tools/graphify)
+__pycache__/
+*.pyc
+.pytest_cache/
+graphify-out/

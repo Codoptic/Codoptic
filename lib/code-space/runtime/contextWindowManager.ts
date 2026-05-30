@@ -124,6 +124,23 @@ export function skeletonizeFileContent(filePath: string, content: string): strin
   return `// Skeleton: ${filePath}\n${content.slice(0, 600)}\n// [truncated]`;
 }
 
+/**
+ * Format a single evidence file body for a seed message.
+ *
+ * Motivation vs Logic: blindly slicing a large file at `maxCharsPerFile` cuts mid-function and
+ * loses the very signatures the agent needs to act. Instead, oversized files are skeletonized
+ * (imports/exports/signatures preserved, bodies elided) before any hard cut, so the model keeps a
+ * faithful API surface rather than an arbitrary prefix.
+ */
+export function formatEvidenceBody(filePath: string, content: string, budget: ContextBudget): string {
+  if (content.length <= budget.maxCharsPerFile) {
+    return budget.useSkeleton ? skeletonizeFileContent(filePath, content) : content;
+  }
+  const skeleton = skeletonizeFileContent(filePath, content);
+  if (skeleton.length <= budget.maxCharsPerFile) return skeleton;
+  return `${skeleton.slice(0, budget.maxCharsPerFile)}\n// [skeleton truncated — use read_file for the rest]`;
+}
+
 function skeletonizeTypeScript(filePath: string, content: string): string {
   const lines = content.split('\n');
   const kept: string[] = [`// Skeleton: ${filePath}`];

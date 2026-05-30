@@ -313,6 +313,42 @@ export async function buildRepoContext(
   };
 }
 
+export interface StructuralSignal {
+  path: string;
+  weight: number;
+  reason: string;
+}
+
+/**
+ * Translate a repository digest into structural prioritization signals for the context engine.
+ *
+ * Motivation vs Logic: central files (high import in/out — the architectural hubs) and API routes
+ * are disproportionately relevant for most tasks. Weighting them nudges file selection toward the
+ * code that actually wires the system together, beyond raw prompt/keyword overlap. The same shape
+ * is emitted by the knowledge-graph reader so both sources flow through one path.
+ */
+export function deriveStructuralSignals(digest: Pick<RepoContextDigest, 'centralFiles' | 'routes'>): StructuralSignal[] {
+  const signals = new Map<string, StructuralSignal>();
+  const upsert = (path: string, weight: number, reason: string) => {
+    if (!path) return;
+    const existing = signals.get(path);
+    if (!existing || weight > existing.weight) signals.set(path, { path, weight, reason });
+  };
+
+  const maxDegree = digest.centralFiles.reduce((max, file) => Math.max(max, file.incoming + file.outgoing), 0) || 1;
+  for (const file of digest.centralFiles) {
+    const degree = file.incoming + file.outgoing;
+    if (degree <= 0) continue;
+    // Normalize to a 0-90 band so the most central file gets the strongest (capped) boost.
+    const weight = Math.round((degree / maxDegree) * 90);
+    if (weight > 0) upsert(file.path, weight, `central module (${file.incoming} in / ${file.outgoing} out)`);
+  }
+  for (const route of digest.routes) {
+    upsert(route.path, 60, `API route ${route.route}${route.methods.length ? ` [${route.methods.join(',')}]` : ''}`);
+  }
+  return [...signals.values()].sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path));
+}
+
 export function selectLayerContextSummaries(
   layer: { name: string; member_files: string[] },
   summaries: Array<{ path: string; summary: FileSummary }>,

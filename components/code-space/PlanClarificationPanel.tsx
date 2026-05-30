@@ -65,25 +65,34 @@ export function PlanClarificationPanel({ questions, disabled = false, onSubmitAn
                 <span className="text-[#6e7681]">{index + 1}. </span>
                 {question.question}
               </div>
+              {question.rationale && (
+                <div className="text-[9px] leading-4 text-[#8b949e]">Why it matters: {question.rationale}</div>
+              )}
               <div className="grid gap-1">
-                {question.choices.map((choice) => {
-                  const selected = selectedChoices.includes(choice);
+                {(question.options?.length
+                  ? question.options
+                  : question.choices.map((choice) => ({ label: choice, description: undefined }))
+                ).map((option) => {
+                  const selected = selectedChoices.includes(option.label);
                   return (
                     <button
-                      key={choice}
+                      key={option.label}
                       type="button"
                       disabled={disabled}
-                      onClick={() => toggleChoice(question, choice)}
-                      className={`flex min-h-8 items-center gap-2 rounded border px-2 py-1 text-left text-[10px] leading-4 transition ${
+                      onClick={() => toggleChoice(question, option.label)}
+                      className={`flex min-h-8 items-start gap-2 rounded border px-2 py-1 text-left text-[10px] leading-4 transition ${
                         selected
                           ? 'border-[#8957e5] bg-[#2b1b40] text-[#f0e6ff]'
                           : 'border-[#30363d] bg-[#111111] text-[#c9d1d9] hover:border-[#58a6ff66] hover:bg-[#161b22]'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${selected ? 'border-[#d2a8ff] bg-[#8957e5]' : 'border-[#6e7681]'}`}>
+                      <span className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${selected ? 'border-[#d2a8ff] bg-[#8957e5]' : 'border-[#6e7681]'}`}>
                         {selected && <Check size={10} />}
                       </span>
-                      <span className="break-words">{choice}</span>
+                      <span className="min-w-0 break-words">
+                        <span className="block">{option.label}</span>
+                        {option.description && <span className="mt-0.5 block text-[9px] text-[#8b949e]">{option.description}</span>}
+                      </span>
                     </button>
                   );
                 })}

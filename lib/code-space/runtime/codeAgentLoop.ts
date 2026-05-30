@@ -11,7 +11,7 @@ import {
   formatWorkflowDodMarkdown,
   type ContextSufficiencyReport,
 } from './workflowPolicy';
-import { allocateContextBudget, compressMessageHistory, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
+import { allocateContextBudget, compressMessageHistory, formatEvidenceBody, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
 
 export interface CodeAgentLoopResult {
   /** attempt_completion was called (the model declared the task done). */
@@ -267,10 +267,7 @@ export async function buildCodeSeedMessage(
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
     .map((file) => {
-      let body = file.content.length > budget.maxCharsPerFile
-        ? `${file.content.slice(0, budget.maxCharsPerFile)}\n[TRUNCATED — read_file for the rest]`
-        : file.content;
-      if (budget.useSkeleton) body = skeletonizeFileContent(file.path, body);
+      const body = formatEvidenceBody(file.path, file.content, budget);
       return [`--- FILE ${file.path} (${file.summary}) ---`, body, file.truncated ? '[TRUNCATED]' : ''].filter(Boolean).join('\n');
     })
     .join('\n\n');

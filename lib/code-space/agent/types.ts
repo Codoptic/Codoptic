@@ -16,6 +16,17 @@ export type AgentSSEEvent =
   | { type: 'terminal_chunk'; chunk: string }
   | { type: 'validation_result'; id: string; command: string; status: 'passed' | 'failed' | 'skipped'; output: string }
   | { type: 'lint_errors'; filePath: string; errors: Array<{ file: string; line: number; col: number; severity: 'error' | 'warning'; message: string; rule?: string }> }
+  | {
+      type: 'diff_confirmation_required';
+      runId: string;
+      sessionId: string;
+      filesChanged: string[];
+      files: Array<{ path: string; deleted: boolean; unifiedDiff: string }>;
+      unifiedDiff: string;
+      isGit: boolean;
+      summary: string;
+    }
+  | { type: 'knowledge_graph_ready'; projectId: string; nodeCount: number; edgeCount: number; viewUrl: string; reportPath?: string; createdAt?: number }
   | { type: 'integration_review'; findings: Array<{ path: string; kind: string; message: string }> }
   | { type: 'supervisor_verdict'; status: 'verified' | 'needs_review'; blockers: string[] }
   | { type: 'agent_done'; summary: string; filesChanged: string[] }

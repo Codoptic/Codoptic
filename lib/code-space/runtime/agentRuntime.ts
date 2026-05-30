@@ -32,7 +32,39 @@ import { TerminalRunner } from './terminalRunner';
 import { getCodeSpaceStore } from './serverStore';
 import type { FileCheckpoint } from './checkpointManager';
 import { AutonomyLevelSchema } from '@/lib/code-space/domain';
-import { assessContextSufficiency, buildRecallDirective, type ContextSufficiencyReport } from './workflowPolicy';
+import {
+  assessContextSufficiency,
+  assessPromptAmbiguity,
+  buildAmbiguityClarificationGate,
+  buildFallbackClarifyingQuestions,
+  buildRecallDirective,
+  type ContextSufficiencyReport,
+} from './workflowPolicy';
+import { createUnifiedDiff } from '@/lib/code-space/agent/editBlocks';
+import { GitManager } from './gitManager';
+import { loadPendingValidation, removePendingValidation, savePendingValidation, type PendingValidationRecord } from './pendingValidation';
+import {
+  KNOWLEDGE_GRAPH_DIR,
+  buildKnowledgeGraph,
+  knowledgeGraphMetadata,
+  knowledgeGraphSignals,
+  loadKnowledgeGraph,
+  type KnowledgeGraphMetadata,
+} from './knowledgeGraph';
+
+export const ResumeValidationRequestSchema = z.object({
+  runId: z.string(),
+  projectRoot: z.string(),
+  projectName: z.string().optional().default(''),
+  model: z.string().optional().default(''),
+  providerId: z.enum(['anthropic', 'openai', 'gemini', 'grok', 'foundry', 'local']).optional().default('openai'),
+  apiKey: z.string().optional().default(''),
+  endpoint: z.string().optional(),
+  toolBudget: z.number().optional().default(50),
+  decision: z.enum(['confirm', 'cancel']).optional().default('confirm'),
+});
+
+export type ResumeValidationRequest = z.infer<typeof ResumeValidationRequestSchema>;
 
 export const RuntimeMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system', 'tool']),
@@ -112,12 +144,18 @@ export class AgentRuntime {
 
       await setPhase('mapping_repository');
       await setPhase('gathering_context');
+      // Knowledge-graph context reuse: a previously built graph biases file selection toward the
+      // repository's architectural hubs (god nodes). First runs have no cache, so this is empty
+      // until the graph is built below; subsequent runs benefit automatically.
+      const cachedGraph = await loadKnowledgeGraph(root);
+      const structuralSignals = cachedGraph ? knowledgeGraphSignals(cachedGraph) : undefined;
       const context = await emitTool(emit, emitRuntime, 'context_graph', { openTabs: request.openTabs, attachments: request.attachments, mode }, async () =>
         this.context.collectProjectContext(root, prompt, {
           mode,
           openTabs: request.openTabs,
           attachments: request.attachments as ContextAttachment[],
           buildPlanPath,
+          structuralSignals,
           limitHint: mode === 'ask' ? 15 : mode === 'plan' ? 35 : 50,
         }),
       );
@@ -145,6 +183,7 @@ export class AgentRuntime {
         return;
       }
       if (mode === 'plan') {
+        await this.ensureKnowledgeGraph(root, request.projectName, emit, emitRuntime);
         await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, signal);
         return;
       }
@@ -154,6 +193,44 @@ export class AgentRuntime {
       await setPhase('failed', { message });
       await emitRuntime('run.failed', { message });
       await emit({ type: 'agent_error', message, recoverable: true });
+    }
+  }
+
+  /**
+   * Build the project knowledge graph on the first Plan run (cached and reused thereafter), then
+   * emit a `knowledge_graph_ready` event so the UI can surface the "Knowledge graph" link + modal.
+   * The build uses the offline AST/regex pipeline; failures are non-fatal to the plan run.
+   */
+  private async ensureKnowledgeGraph(
+    root: string,
+    projectId: string,
+    emit: AgentRuntimeEmit,
+    emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>,
+  ): Promise<void> {
+    try {
+      let metadata: KnowledgeGraphMetadata | null = await knowledgeGraphMetadata(root);
+      if (!metadata) {
+        await emitRuntime('knowledge_graph.building', { root });
+        metadata = await buildKnowledgeGraph(root, { maxFiles: 4000, timeoutMs: 90_000 });
+      }
+      const viewUrl = `/api/code-space/knowledge-graph/view?root=${encodeURIComponent(root)}`;
+      emit({
+        type: 'knowledge_graph_ready',
+        projectId,
+        nodeCount: metadata.nodeCount,
+        edgeCount: metadata.edgeCount,
+        viewUrl,
+        reportPath: `${KNOWLEDGE_GRAPH_DIR}/GRAPH_REPORT.md`,
+        createdAt: metadata.generatedAt,
+      });
+      await emitRuntime('knowledge_graph.ready', {
+        nodeCount: metadata.nodeCount,
+        edgeCount: metadata.edgeCount,
+        communityCount: metadata.communityCount,
+        viewUrl,
+      });
+    } catch (error) {
+      await emitRuntime('knowledge_graph.failed', { message: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -207,6 +284,11 @@ export class AgentRuntime {
       .reverse()
       .find((message) => message.role === 'user' && message.content.startsWith('Plan clarification answers:'))?.content;
 
+    // Pre-flight ambiguity hard gate (Superpowers brainstorming): underspecified requests must
+    // produce clarifying questions before any plan is authored.
+    const ambiguity = assessPromptAmbiguity({ prompt, context, hasClarificationAnswers: Boolean(clarificationAnswers) });
+    const mustClarify = ambiguity.ambiguous && !clarificationAnswers;
+
     const ctx: CodeAgentContext = {
       root,
       runId,
@@ -243,10 +325,17 @@ export class AgentRuntime {
         sufficiency,
         clarificationAnswers,
         request.model,
+        ambiguity,
       ),
     );
 
     await loop.run(ctx, loopOptions);
+
+    // Ambiguity hard gate: if the request was underspecified and the model neither asked nor authored
+    // yet, force a clarification turn before anything else.
+    if (mustClarify && !ctx.planClarification && !ctx.planArtifactRequest && !loopOptions.budget.turnsExhausted()) {
+      await loop.continueWith(buildAmbiguityClarificationGate(ambiguity), ctx, loopOptions);
+    }
 
     // Keep the agent working until it asks clarifying questions or authors the plan. We never let
     // the loop quit early: it recalls more evidence when the gate wants it and is forced to finalize
@@ -256,6 +345,13 @@ export class AgentRuntime {
       if (ctx.planClarification || ctx.planArtifactRequest) break;
       if (loopOptions.budget.turnsExhausted()) break;
       await loop.continueWith(buildPlanFinalizationDirective(sufficiency), ctx, loopOptions);
+    }
+
+    // Deterministic safety net: an ambiguous request must always yield clarifying questions, even if
+    // the model authored a plan instead of asking. This enforces the brainstorming gate reliably.
+    if (mustClarify && !ctx.planClarification) {
+      ctx.planClarification = { questions: buildFallbackClarifyingQuestions(runId) };
+      ctx.planArtifactRequest = undefined;
     }
 
     if (ctx.planClarification && !ctx.planArtifactRequest) {
@@ -406,10 +502,58 @@ export class AgentRuntime {
     // accept/reject instead of validating/fixing unchanged code or reporting an autonomy failure.
     if (ledger.size === 0 && ctx.proposedFiles.size > 0) {
       const proposed = Array.from(ctx.proposedFiles);
-      await emitRuntime('plan.updated', { phase: 'awaiting_patch_review' });
+      await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
+      // Pre-validation diff confirmation gate (Confirm mode): surface the full proposed
+      // change set so the user reviews every change before accepting + validating. We persist
+      // a pending-validation record keyed off the proposed before/after so that, once the user
+      // accepts the patches (written to disk via /patches), POST /runs/validate can run the
+      // detected validation/repair phase against the now-applied workspace.
+      const proposalEntries = Array.from(ctx.proposedLedger.entries()).map(([filePath, entry]) => ({
+        path: filePath,
+        beforeContent: entry.beforeContent,
+        afterContent: entry.afterContent,
+        deleted: false,
+      }));
+      const diffReport = await buildAggregatedDiff(root, proposalEntries);
+      await savePendingValidation({
+        runId,
+        sessionId: request.sessionId,
+        projectRoot: root,
+        projectName: request.projectName,
+        prompt,
+        instructionPaths: loadedInstructions.map((item) => item.path),
+        isGit: diffReport.isGit,
+        unifiedDiff: diffReport.unifiedDiff,
+        createdAt: Date.now(),
+        files: proposalEntries.map((entry) => ({
+          path: entry.path,
+          beforeContent: entry.beforeContent,
+          afterContent: entry.afterContent,
+          deleted: false,
+          existedBefore: entry.beforeContent.length > 0,
+        })),
+      });
+      const proposalSummary = [
+        `Proposed ${proposed.length} change(s) to ${request.projectName}. Review the full diff, accept the patches, then confirm to run validation.`,
+        diffReport.isGit ? '(diff source: git)' : '(diff source: in-memory change ledger — no git repo detected)',
+        '',
+        loopResult.summary || '',
+      ]
+        .filter((line) => line !== undefined)
+        .join('\n');
+      emit({
+        type: 'diff_confirmation_required',
+        runId,
+        sessionId: request.sessionId,
+        filesChanged: proposed,
+        files: diffReport.files,
+        unifiedDiff: diffReport.unifiedDiff,
+        isGit: diffReport.isGit,
+        summary: proposalSummary,
+      });
       const proposalAnswer = buildCodeProposalResponse(request.projectName, proposed, loopResult.summary);
       await streamAnswer(proposalAnswer, emit, emitRuntime);
-      await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_patch_review', filesChanged: proposed });
+      await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged: proposed });
       emit({ type: 'agent_done', summary: proposalAnswer, filesChanged: proposed });
       return;
     }
@@ -430,11 +574,106 @@ export class AgentRuntime {
       return;
     }
 
-    await emitRuntime('plan.updated', { phase: 'awaiting_patch_review' });
+    // Pre-validation diff confirmation gate. Surface the FULL aggregated diff of every applied
+    // change and PAUSE before any validation runs. The run stream ends here; the user (or the eval
+    // harness) reviews the diff and resumes validation via POST /api/code-space/runs/validate.
+    // Motivation vs Logic: validation/repair mutate and run commands — gating it behind an explicit
+    // human confirmation is the industry-standard safety checkpoint the product was missing.
+    const diffReport = await buildAggregatedDiff(
+      root,
+      Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
+        path: filePath,
+        beforeContent: entry.beforeContent,
+        afterContent: entry.afterContent,
+        deleted: entry.deleted,
+      })),
+    );
+    await savePendingValidation({
+      runId,
+      sessionId: request.sessionId,
+      projectRoot: root,
+      projectName: request.projectName,
+      prompt,
+      instructionPaths: loadedInstructions.map((item) => item.path),
+      isGit: diffReport.isGit,
+      unifiedDiff: diffReport.unifiedDiff,
+      createdAt: Date.now(),
+      files: Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
+        path: filePath,
+        beforeContent: entry.beforeContent,
+        afterContent: entry.afterContent,
+        deleted: entry.deleted,
+        existedBefore: entry.existedBefore,
+      })),
+    });
 
+    const filesChanged = Array.from(ctx.ledger.keys());
+    await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
+    const gateSummary = [
+      `Applied ${filesChanged.length} change(s) to ${request.projectName}. Review the full diff below and confirm to run validation.`,
+      diffReport.isGit ? '(diff source: git)' : '(diff source: in-memory change ledger — no git repo detected)',
+      '',
+      loopResult.summary || '',
+      '',
+      'Files changed:',
+      ...filesChanged.map((file) => `- ${file}`),
+      '',
+      'Validation will not run until you confirm. Confirm to proceed, or cancel to revert these changes.',
+    ]
+      .filter((line) => line !== undefined)
+      .join('\n');
+    emit({
+      type: 'diff_confirmation_required',
+      runId,
+      sessionId: request.sessionId,
+      filesChanged,
+      files: diffReport.files,
+      unifiedDiff: diffReport.unifiedDiff,
+      isGit: diffReport.isGit,
+      summary: gateSummary,
+    });
+    await streamAnswer(gateSummary, emit, emitRuntime);
+    await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged });
+    emit({ type: 'agent_done', summary: gateSummary, filesChanged });
+  }
+
+  /**
+   * Validation + repair + supervisor phase. Extracted from finishCode so it can be invoked both
+   * inline and (now) by the resume endpoint after the user confirms the pre-validation diff gate.
+   */
+  private async runValidationPhase(params: {
+    projectName: string;
+    root: string;
+    prompt: string;
+    runId: string;
+    todos: string[];
+    validationCommands: TerminalCommand[];
+    ctx: CodeAgentContext;
+    loop: CodeAgentLoop;
+    loopOptions: CodeAgentLoopOptions;
+    subagentRunner: SubagentRunner;
+    loopSummary?: string;
+    emit: AgentRuntimeEmit;
+    emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const { projectName, root, prompt, runId, todos, validationCommands, ctx, loop, loopOptions, subagentRunner, emit, emitRuntime, signal } = params;
+    const store = getCodeSpaceStore();
+    const persistCheckpoint = async (checkpoint: FileCheckpoint) => {
+      await store.upsert('checkpoints', {
+        id: checkpoint.id,
+        projectId: checkpoint.projectId,
+        runId: checkpoint.runId,
+        reason: checkpoint.reason,
+        snapshotRef: checkpoint.snapshotRef,
+        createdAt: checkpoint.createdAt,
+      });
+    };
+
+    await emitRuntime('plan.updated', { phase: 'validating' });
     const verifier = new IntegrationVerifier(this.validation, subagentRunner);
 
-    // Validation/testing agent — step 1: review the cumulative diff for integration coherence.
+    // Step 1: review the cumulative diff for integration coherence.
     const coherence = await verifier.reviewDiffCoherence(ctx);
     emit({ type: 'integration_review', findings: coherence.findings });
     await emitRuntime('integration.reviewed', { findings: coherence.findings });
@@ -445,7 +684,7 @@ export class AgentRuntime {
     // Step 3: generate + run focused test scripts via a test-writer subagent (in .agent/tests/<runId>/).
     const testScripts = await verifier.generateAndRunTestScripts(ctx, runId, prompt);
 
-    if (this.repairLoop.shouldRepair(validationRuns) && ledger.size) {
+    if (this.repairLoop.shouldRepair(validationRuns) && ctx.ledger.size) {
       await emitRuntime('plan.updated', { phase: 'repairing' });
       const repair = await this.repairLoop.run({
         loop,
@@ -466,11 +705,11 @@ export class AgentRuntime {
     const revertCheckpoint = await createRunRevertCheckpoint(ctx);
     if (revertCheckpoint) await persistCheckpoint(revertCheckpoint);
 
-    const filesChanged = Array.from(ledger.keys());
+    const filesChanged = Array.from(ctx.ledger.keys());
 
     // Supervisor reconciles every gate before confirmation — verified only when all pass.
     const verdict = new Supervisor().reconcile({
-      ledgerSize: ledger.size,
+      ledgerSize: ctx.ledger.size,
       coherence: finalCoherence.findings,
       validationRuns,
       unresolvedEditFailures: formatUnresolvedEditFailures(ctx),
@@ -484,10 +723,10 @@ export class AgentRuntime {
 
     const answer = [
       buildCodeFinalResponse({
-        projectName: request.projectName,
-        files: filesChanged.map((filePath) => ({ path: filePath, explanation: ledger.get(filePath)?.deleted ? 'Removed.' : 'Edited.' })),
+        projectName,
+        files: filesChanged.map((filePath) => ({ path: filePath, explanation: ctx.ledger.get(filePath)?.deleted ? 'Removed.' : 'Edited.' })),
         validationRuns,
-        summary: loopResult.summary,
+        summary: params.loopSummary ?? '',
         checkpointRef: revertCheckpoint?.id,
       }),
       verdict.status === 'needs_review' && verdict.blockers.length ? `Supervisor verdict: needs_review — ${verdict.blockers.join(' ')}` : '',
@@ -498,6 +737,138 @@ export class AgentRuntime {
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: terminalPhase, phase: terminalPhase, filesChanged, checkpointId: revertCheckpoint?.id });
     emit({ type: 'agent_done', summary: answer, filesChanged });
+  }
+
+  /**
+   * Resume a code run after the user confirms (or cancels) the pre-validation diff gate.
+   * On confirm: reconstructs a minimal code context (ledger from the persisted snapshot +
+   * current disk content) and runs the validation/repair/supervisor phase. On cancel: reverts
+   * every applied change. Provider credentials come from the resume request, not from disk.
+   */
+  async resumeValidation(request: ResumeValidationRequest, emit: AgentRuntimeEmit, signal?: AbortSignal): Promise<void> {
+    const guarded = guardPath(request.projectRoot);
+    if (!guarded.ok) throw new Error(guarded.reason ?? 'Invalid project root');
+    const root = guarded.resolved;
+    const record = await loadPendingValidation(request.runId);
+    if (!record || record.projectRoot !== root) {
+      throw new Error('No pending diff confirmation was found for this run. It may have expired or already been processed.');
+    }
+    const runId = record.runId;
+    const projectId = request.projectName || record.projectName;
+    const emitRuntime = async (type: AgentEventType, payload: unknown) => {
+      const event = await this.events.append(createAgentEvent({ type, projectId, sessionId: record.sessionId, runId, payload }));
+      await emit({ type: 'structured_event', event });
+    };
+
+    await emitRuntime('run.created', { mode: 'code', resumed: true, decision: request.decision });
+
+    if (request.decision === 'cancel') {
+      await this.revertPendingChanges(record, emit, emitRuntime);
+      await removePendingValidation(runId);
+      const answer = `Reverted ${record.files.length} change(s). Validation was not run.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'cancelled', phase: 'cancelled', filesChanged: [] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
+    const credentials = await resolveProviderCredentials(root, {
+      providerId: request.providerId,
+      apiKey: request.apiKey,
+      endpoint: request.endpoint,
+    } as AgentRuntimeRequest);
+    if (!credentials.apiKey && request.providerId !== 'local') {
+      throw new Error(`The "${request.providerId}" provider is not configured; cannot run validation/repair.`);
+    }
+
+    const validationCommands = await this.validation.detectValidationCommands(root);
+    const context = await this.context.collectProjectContext(root, record.prompt, { mode: 'code', openTabs: [], attachments: [], limitHint: 50 });
+    const sufficiency = assessContextSufficiency({ mode: 'code', prompt: record.prompt, context, validationCommands });
+
+    const store = getCodeSpaceStore();
+    const persistCheckpoint = async (checkpoint: FileCheckpoint) => {
+      await store.upsert('checkpoints', {
+        id: checkpoint.id,
+        projectId: checkpoint.projectId,
+        runId: checkpoint.runId,
+        reason: checkpoint.reason,
+        snapshotRef: checkpoint.snapshotRef,
+        createdAt: checkpoint.createdAt,
+      });
+    };
+
+    const ctx: CodeAgentContext = {
+      root,
+      runId,
+      projectId,
+      sessionId: record.sessionId,
+      autonomy: 'auto_safe_tools',
+      emit,
+      emitRuntime,
+      ledger: new Map<string, LedgerEntry>(),
+      proposedFiles: new Set<string>(),
+      proposedLedger: new Map(),
+      editFailures: new Map(),
+      readFiles: new Set(context.files.map((file) => file.path)),
+      artifacts: new Map(),
+      checkpoints: [],
+      registry: createDefaultToolRegistry(),
+      permission: new PermissionManager(),
+      terminal: new TerminalRunner(),
+      onCheckpoint: persistCheckpoint,
+      signal,
+    };
+
+    // Rebuild the ledger from the persisted snapshot, refreshing afterContent from disk so the
+    // coherence/syntax review reflects exactly what is on disk right now.
+    for (const file of record.files) {
+      let after = file.afterContent;
+      try {
+        after = await fs.readFile(path.join(root, file.path), 'utf8');
+      } catch {
+        if (file.deleted) after = '';
+      }
+      ctx.ledger.set(file.path, { beforeContent: file.beforeContent, afterContent: after, deleted: file.deleted, existedBefore: file.existedBefore });
+    }
+
+    const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
+    const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
+    const loopOptions: CodeAgentLoopOptions = { session, budget, signal };
+    const subagentRunner = new SubagentRunner(ctx, session, projectId);
+    ctx.spawnSubagent = (subRequest) => subagentRunner.spawn(subRequest);
+
+    const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
+    loop.seed(
+      buildCodeSystemPrompt(projectId, record.instructionPaths),
+      await buildCodeSeedMessage(root, record.prompt, context, validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })), sufficiency, request.model),
+    );
+
+    const todos = this.planning.buildTodos('code', context);
+    await this.runValidationPhase({ projectName: projectId, root, prompt: record.prompt, runId, todos, validationCommands, ctx, loop, loopOptions, subagentRunner, emit, emitRuntime, signal });
+    await removePendingValidation(runId);
+  }
+
+  /** Restore every file captured in a pending-validation record to its pre-run content. */
+  private async revertPendingChanges(
+    record: PendingValidationRecord,
+    emit: AgentRuntimeEmit,
+    emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>,
+  ): Promise<void> {
+    for (const file of record.files) {
+      const absolute = path.join(record.projectRoot, file.path);
+      try {
+        if (file.existedBefore) {
+          await fs.mkdir(path.dirname(absolute), { recursive: true });
+          await fs.writeFile(absolute, file.beforeContent, 'utf8');
+        } else {
+          await fs.rm(absolute, { force: true });
+        }
+        await emitRuntime('file.reverted', { path: file.path });
+      } catch (error) {
+        await emitRuntime('file.revert.failed', { path: file.path, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    void emit;
   }
 
   private async runAndEmitValidation(
@@ -613,6 +984,42 @@ function chunkText(text: string): string[] {
  */
 function resolveMaxTurns(toolBudget: number): number {
   return Math.max(20, Math.min(160, Math.floor(Math.max(1, toolBudget) * 2) + 20));
+}
+
+/**
+ * Build the full aggregated diff of every applied change for the pre-validation gate.
+ * Prefers the real `git diff` when the repo is git-connected, and always appends a
+ * ledger-derived unified diff for files git omits (e.g. newly created untracked files),
+ * so the user reviews a complete picture. Falls back entirely to the change ledger when
+ * there is no git repository.
+ */
+interface DiffLedgerEntry {
+  path: string;
+  beforeContent: string;
+  afterContent: string;
+  deleted: boolean;
+}
+
+async function buildAggregatedDiff(
+  root: string,
+  entries: DiffLedgerEntry[],
+): Promise<{ isGit: boolean; unifiedDiff: string; files: Array<{ path: string; deleted: boolean; unifiedDiff: string }> }> {
+  const files = entries.map((entry) => ({
+    path: entry.path,
+    deleted: entry.deleted,
+    unifiedDiff: createUnifiedDiff(entry.path, entry.beforeContent, entry.deleted ? '' : entry.afterContent),
+  }));
+
+  const git = await new GitManager().diff(root);
+  if (!git.unavailable) {
+    const combined = [git.stagedDiff, git.diff].filter(Boolean).join('\n');
+    const missing = files.filter((file) => file.unifiedDiff && !combined.includes(file.path)).map((file) => file.unifiedDiff);
+    const aggregate = [combined, ...missing].filter(Boolean).join('\n');
+    if (aggregate.trim()) return { isGit: true, unifiedDiff: aggregate, files };
+  }
+
+  const ledgerDiff = files.map((file) => file.unifiedDiff).filter(Boolean).join('\n');
+  return { isGit: false, unifiedDiff: ledgerDiff, files };
 }
 
 export function runtimeSourceFingerprintForTests(): string {

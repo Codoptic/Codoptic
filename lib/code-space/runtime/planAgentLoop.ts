@@ -6,19 +6,21 @@ import { CODE_MODE_TOOL_SPECS } from './toolExecutor';
 import { selectEvidenceFiles } from './codeAgentLoop';
 import { REQUIRED_PLAN_SECTIONS } from './planningEngine';
 import {
+  buildAmbiguityClarificationGate,
   buildWorkflowKernelPrompt,
   formatContextSufficiencyMarkdown,
   formatWorkflowDodMarkdown,
   type ContextSufficiencyReport,
+  type PromptAmbiguityReport,
 } from './workflowPolicy';
-import { allocateContextBudget, skeletonizeFileContent } from './contextWindowManager';
+import { allocateContextBudget, formatEvidenceBody } from './contextWindowManager';
 
 /** Terminal tools unique to Plan mode. They signal completion via CodeAgentContext fields. */
 const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'ask_clarifying_questions',
     description:
-      'Ask the user up to 3 clarifying questions ONLY when missing information would materially change scope, safety, architecture, or acceptance criteria. Each question may offer choices. Calling this pauses the run for the user to answer; do not also call write_plan_artifact in the same turn.',
+      'Ask the user 2-6 well-scoped multiple-choice questions when missing information would materially change scope, safety, architecture, or acceptance criteria. Each question MUST include a short `rationale` (why the answer changes the design) and at least 2 labeled `options` ({label, description}). Calling this pauses the run for the user to answer; do not also call write_plan_artifact in the same turn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -28,10 +30,22 @@ const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
             type: 'object',
             properties: {
               question: { type: 'string' },
-              choices: { type: 'array', items: { type: 'string' } },
+              rationale: { type: 'string', description: 'Why this materially changes scope, design, or acceptance criteria.' },
+              options: {
+                type: 'array',
+                description: 'At least 2 labeled choices the user can pick from.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string' },
+                    description: { type: 'string' },
+                  },
+                  required: ['label'],
+                },
+              },
               allowMultiple: { type: 'boolean' },
             },
-            required: ['question'],
+            required: ['question', 'rationale', 'options'],
           },
         },
       },
@@ -69,10 +83,10 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     'Behave like a senior engineer scoping a change: resolve intent, read the exact files and line ranges that matter, and only then author the plan. Do NOT write code and do NOT edit source files — your only mutation is the plan artifact.',
     '',
     'Workflow you must follow:',
-    '1. Resolve intent. If missing information would materially change scope, safety, architecture, or acceptance criteria, call ask_clarifying_questions (max 3). Otherwise state assumptions and continue.',
+    '1. Resolve intent. Only call ask_clarifying_questions when the request is genuinely ambiguous — vague qualitative goals, no concrete target, or several materially different designs with no safe default — using 2-6 MCQs (each with a rationale and >=2 labeled options) BEFORE planning. If the target and acceptance criteria are reasonably clear, do NOT ask: state your assumptions explicitly and proceed to author the plan.',
     '2. Gather real evidence with read_file (use startLine/endLine to read precise ranges), search_text, dependency_trace, repo_map, and git tools. Do not rely on filenames alone — read the code.',
     '3. Respect the context-sufficiency gate. If it is not satisfied, recall more files/imports/tests/configs before finalizing.',
-    '4. Author the plan yourself, grounded in what you actually read: narrow the intent, protect scope with explicit non-goals, prevent duplicate/speculative architecture, name the specific files with per-file changes and reasons (cite line ranges where helpful), and order small milestones.',
+    '4. Author the plan yourself, grounded in what you actually read: narrow the intent, protect scope with explicit non-goals, lay out 2-3 candidate approaches with pros/cons and a clear recommendation, prevent duplicate/speculative architecture, name the specific files with per-file changes and reasons (cite line ranges where helpful), and order small milestones.',
     '5. Call write_plan_artifact exactly once with the complete markdown. Then stop.',
     '',
     'The plan markdown MUST include these section headings verbatim:',
@@ -116,14 +130,12 @@ export async function buildPlanSeedMessage(
   sufficiency: ContextSufficiencyReport,
   clarificationAnswers?: string,
   model = '',
+  ambiguity?: PromptAmbiguityReport,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
     .map((file) => {
-      let body = file.content.length > budget.maxCharsPerFile
-        ? `${file.content.slice(0, budget.maxCharsPerFile)}\n[TRUNCATED — read_file for the rest]`
-        : file.content;
-      if (budget.useSkeleton) body = skeletonizeFileContent(file.path, body);
+      const body = formatEvidenceBody(file.path, file.content, budget);
       return [`--- FILE ${file.path} (${file.summary}) ---`, body, file.truncated ? '[TRUNCATED]' : ''].filter(Boolean).join('\n');
     })
     .join('\n\n');
@@ -138,6 +150,7 @@ export async function buildPlanSeedMessage(
     'Planning task:',
     prompt,
     '',
+    ambiguity?.ambiguous ? [buildAmbiguityClarificationGate(ambiguity), ''].join('\n') : '',
     clarificationAnswers ? ['The user already answered your clarifying questions — do NOT ask again:', clarificationAnswers, ''].join('\n') : '',
     'Context sufficiency gate (recall more evidence if this is not satisfied before finalizing):',
     formatContextSufficiencyMarkdown(sufficiency),

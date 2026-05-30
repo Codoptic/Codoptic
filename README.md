@@ -91,6 +91,15 @@ The right-hand agent panel is where the review loop lives:
 
 The bottom panel complements that by collecting output, problems, debug events, and terminal activity in one place.
 
+Two gates make the loop trustworthy:
+
+- **Clarification gate.** Genuinely ambiguous requests trigger multiple-choice clarifying questions (each with a rationale and labeled options) before any plan or code is written.
+- **Pre-validation diff gate.** Before validation runs, the agent surfaces the full aggregated diff of every change (a real `git diff` when the repo is git-connected, otherwise a change-ledger diff). You confirm to run the project's detected validation commands, or cancel to revert.
+
+### Knowledge graph
+
+On the first Plan run for a project, Code Space builds a code knowledge graph (an offline AST/import-graph pipeline under `tools/graphify/`) and caches it in `.codoptic-cache/knowledge-graph/`. The graph is reused on later runs to bias context selection toward the repository's central modules ("god nodes"), and a **Knowledge graph** link above the chat opens an interactive vis.js map of the codebase. An optional Foundry semantic pass can annotate central files, but the code graph always works offline.
+
 ### Why It Feels Different
 
 Instead of hiding all reasoning inside a single chat response, Codoptic makes the workflow explicit:

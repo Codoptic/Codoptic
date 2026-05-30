@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "test:visual": "vitest run tests/visual",
     "format": "prettier --write .",
-    "render:example": "tsx scripts/render-example.ts"
+    "render:example": "tsx scripts/render-example.ts",
+    "eval:agent": "tsx scripts/agent-eval/run.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
