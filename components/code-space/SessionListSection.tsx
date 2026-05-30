@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Archive, History, Pencil, Trash2, X } from 'lucide-react';
 import { useEffect, useState, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { CodeSpaceAgentSession } from '@/lib/code-space/core';
 import { CollapsibleSection } from './CollapsibleSection';
 
@@ -165,58 +166,80 @@ export function SessionListSection({
         </div>
       </CollapsibleSection>
 
-      {deleteTarget ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-session-title"
-          className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeDeleteDialog();
-          }}
-        >
-          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-[#30363d] bg-[#161b22] text-[#e6edf3] shadow-2xl">
-            <div className="border-b border-[#30363d] bg-[#0d1117] px-5 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5 rounded-lg border border-[#f8514944] bg-[#f851491a] p-2 text-[#f85149]">
-                    <AlertTriangle size={18} />
-                  </span>
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#f85149]">Confirm deletion</p>
-                    <h2 id="delete-session-title" className="mt-1 text-lg font-semibold">Delete session?</h2>
+      {deleteTarget && typeof document !== 'undefined'
+        ? createPortal(
+            // Root Cause vs Logic: the AgentPanel right rail applies `font-mono` to its entire
+            // subtree, so when this modal rendered inline it inherited the terminal font shown in
+            // the screenshot bug report. Mounting through a portal at document.body escapes that
+            // context, and the explicit `font-sans` keeps the dialog readable even if a future
+            // ancestor toggles its typography.
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-session-title"
+              className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/70 px-4 font-sans backdrop-blur-sm"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) closeDeleteDialog();
+              }}
+            >
+              <div className="w-full max-w-md overflow-hidden rounded-xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+                <div className="flex items-center justify-between border-b border-slate-700 bg-slate-850 px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle size={14} className="shrink-0 text-red-400" />
+                    <h2 id="delete-session-title" className="text-[13px] font-medium text-slate-100">
+                      Delete session
+                    </h2>
                   </div>
+                  <button
+                    type="button"
+                    onClick={closeDeleteDialog}
+                    aria-label="Close delete session dialog"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700 bg-slate-800 text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-100"
+                  >
+                    <X size={13} />
+                  </button>
                 </div>
-                <button type="button" onClick={closeDeleteDialog} className="rounded-md border border-transparent p-1 text-[#8b949e] hover:border-[#30363d] hover:bg-[#21262d]" aria-label="Close delete session dialog">
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
 
-            <div className="space-y-4 px-5 py-4">
-              <p className="text-sm leading-6 text-[#8b949e]">
-                This removes the coding session from the local workspace history. Project files on disk will stay unchanged.
-              </p>
-              <div className="rounded-xl border border-[#30363d] bg-[#0d1117] px-3 py-2">
-                <div className="text-[10px] uppercase tracking-wider text-[#6e7681]">Session</div>
-                <div className="mt-1 truncate text-sm font-semibold text-[#e6edf3]">{deleteTarget.title}</div>
-              </div>
-              <div className="rounded-lg border border-[#f8514933] bg-[#2d1517]/60 px-3 py-2 text-[11px] leading-5 text-[#ffb4ae]">
-                This action cannot be undone from the session list.
-              </div>
-            </div>
+                <div className="space-y-3 px-4 py-4">
+                  <p className="text-[13px] leading-relaxed text-slate-300">
+                    This removes the coding session from your local workspace history. Project files on disk are not changed.
+                  </p>
+                  <div className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
+                    <div className="text-[10px] font-medium uppercase tracking-wider text-slate-500">
+                      Session
+                    </div>
+                    <div className="mt-0.5 truncate text-[13px] font-medium text-slate-100">
+                      {deleteTarget.title}
+                    </div>
+                  </div>
+                  <p className="text-[12px] leading-relaxed text-red-300">
+                    This action cannot be undone from the session list.
+                  </p>
+                </div>
 
-            <div className="flex justify-end gap-2 border-t border-[#30363d] bg-[#0d1117] px-5 py-4">
-              <button type="button" onClick={closeDeleteDialog} disabled={isDeleting} className="rounded-lg border border-[#30363d] bg-[#161b22] px-4 py-2 text-sm text-[#c9d1d9] hover:bg-[#21262d] disabled:opacity-50">
-                Cancel
-              </button>
-              <button type="button" onClick={() => void confirmDelete()} disabled={isDeleting} className="rounded-lg bg-[#da3633] px-4 py-2 text-sm font-semibold text-white hover:bg-[#f85149] disabled:opacity-50">
-                {isDeleting ? 'Deleting…' : 'Delete session'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                <div className="flex items-center justify-end gap-2 border-t border-slate-700 bg-slate-850 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={closeDeleteDialog}
+                    disabled={isDeleting}
+                    className="inline-flex h-8 items-center rounded-md border border-slate-700 bg-slate-800 px-3 text-[12px] text-slate-200 transition-colors hover:bg-slate-700 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmDelete()}
+                    disabled={isDeleting}
+                    className="inline-flex h-8 items-center rounded-md border border-red-500/50 bg-red-500/15 px-3 text-[12px] font-medium text-red-300 transition-colors hover:bg-red-500/25 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isDeleting ? 'Deleting…' : 'Delete session'}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }
