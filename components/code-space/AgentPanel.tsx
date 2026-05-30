@@ -15,6 +15,7 @@ import { SessionListSection } from './SessionListSection';
 import { FileMentionInput } from './FileMentionInput';
 import { PlanClarificationPanel } from './PlanClarificationPanel';
 import { PlanLink } from './PlanLink';
+import { countDiffLines, type CodeSpacePendingDiff } from '@/components/code-space/diffHunks';
 import type { FileMentionIndex } from '@/lib/code-space/mentions/index';
 import { buildMentionIndex } from '@/lib/code-space/mentions/index';
 import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionIndex';
@@ -26,14 +27,7 @@ interface AgentPanelProps {
   activeProjectName?: string;
   isRunning: boolean;
   toolBudget: number;
-  pendingDiffs: Array<{
-    diffId: string;
-    filePath: string;
-    oldContent: string;
-    newContent: string;
-    explanation?: string;
-    unifiedDiff?: string;
-  }>;
+  pendingDiffs: CodeSpacePendingDiff[];
   appliedDiffs: Array<{
     filePath: string;
     beforeContent: string;
@@ -377,7 +371,10 @@ export function AgentPanel({
         {visibleDiffs.length > 0 && (
           <CollapsibleSection title="Code changes" defaultOpen compact rightSlot={<span className="text-[9px] text-[#6d6d6d]">{visibleDiffs.length}</span>}>
             <div className="space-y-2 rounded border border-[#2a2a2a] bg-[#111111] p-2">
-              {visibleDiffs.map((diff) => (
+              {visibleDiffs.map((diff) => {
+                const lineCounts = countDiffLines(diff.unifiedDiff, 'hunks' in diff ? diff.hunks : undefined);
+                const hunkCount = 'hunks' in diff && diff.hunks?.length ? diff.hunks.length : 1;
+                return (
                 <div key={diff.diffId} className="rounded border border-[#30363d] bg-[#0f1114]">
                   <div className="flex items-center gap-2 border-b border-[#1f1f1f] px-2 py-1">
                     <button
@@ -388,6 +385,17 @@ export function AgentPanel({
                     >
                       {diff.filePath}
                     </button>
+                    {diff.kind === 'pending' ? (
+                      <>
+                        <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[9px]">
+                          <span className="text-[#3fb950]">+{lineCounts.added}</span>{' '}
+                          <span className="text-[#f85149]">-{lineCounts.removed}</span>
+                        </span>
+                        <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e]">
+                          {hunkCount} patch{hunkCount === 1 ? '' : 'es'}
+                        </span>
+                      </>
+                    ) : null}
                     <span className={`ml-auto text-[9px] uppercase tracking-wider ${executionPolicyMeta.accentClassName}`}>
                       {diff.kind === 'applied' ? 'applied' : executionPolicy === 'auto' ? 'auto mode enabled' : 'confirm mode required'}
                     </span>
@@ -407,7 +415,8 @@ export function AgentPanel({
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </CollapsibleSection>
         )}

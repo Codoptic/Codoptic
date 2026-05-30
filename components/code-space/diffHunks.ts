@@ -108,3 +108,99 @@ export function applyAcceptedDiffHunks(originalContent: string, hunks: DiffHunk[
 export function everyHunkResolved(hunks: DiffHunk[], status: DiffHunkStatus): boolean {
   return hunks.every((hunk) => status[hunk.id] === 'accepted' || status[hunk.id] === 'rejected');
 }
+
+export interface CodeSpacePendingDiff {
+  diffId: string;
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+  deleted?: boolean;
+  explanation?: string;
+  unifiedDiff?: string;
+  hunks: DiffHunk[];
+  hunkStatus: DiffHunkStatus;
+  applyingHunkId?: string;
+  applyingAll?: boolean;
+  error?: string;
+}
+
+export interface DiffLineCounts {
+  added: number;
+  removed: number;
+}
+
+export function countHunkLines(hunk: DiffHunk): DiffLineCounts {
+  let added = 0;
+  let removed = 0;
+  for (const line of hunk.lines) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+  }
+  return { added, removed };
+}
+
+export function countDiffLines(unifiedDiff?: string, hunks?: DiffHunk[]): DiffLineCounts {
+  if (hunks?.length) {
+    return hunks.reduce(
+      (totals, hunk) => {
+        const counts = countHunkLines(hunk);
+        return { added: totals.added + counts.added, removed: totals.removed + counts.removed };
+      },
+      { added: 0, removed: 0 },
+    );
+  }
+
+  if (!unifiedDiff) return { added: 0, removed: 0 };
+
+  let added = 0;
+  let removed = 0;
+  for (const line of unifiedDiff.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+  }
+  return { added, removed };
+}
+
+export function unresolvedHunks(hunks: DiffHunk[], status: DiffHunkStatus): DiffHunk[] {
+  return hunks.filter((hunk) => !status[hunk.id]);
+}
+
+export function hasAcceptedHunks(status: DiffHunkStatus): boolean {
+  return Object.values(status).some((value) => value === 'accepted');
+}
+
+export function resolvedContentForHunk(diff: CodeSpacePendingDiff, extraAcceptedHunkId?: string): string {
+  const acceptedIds = acceptedHunkIdSet(diff.hunkStatus, extraAcceptedHunkId);
+  if (diff.deleted) return acceptedIds.size > 0 ? '' : diff.oldContent;
+  return applyAcceptedDiffHunks(diff.oldContent, diff.hunks, acceptedIds);
+}
+
+// Motivation vs Logic: partial hunk accepts shift line numbers in the merged editor buffer; this walk mirrors
+// applyAcceptedDiffHunks so view zones and overlay widgets stay anchored to the correct visible line.
+export function hunkAnchorLineInMergedContent(
+  originalContent: string,
+  hunks: DiffHunk[],
+  acceptedIds: ReadonlySet<string>,
+  targetHunkId: string,
+): number {
+  const orderedHunks = [...hunks].sort((a, b) => a.oldStart - b.oldStart || a.index - b.index);
+  let cursor = 0;
+  let mergedLine = 1;
+
+  for (const hunk of orderedHunks) {
+    const start = Math.max(0, hunk.oldStart - 1);
+    const end = Math.max(start, start + hunk.oldCount);
+    mergedLine += start - cursor;
+
+    if (hunk.id === targetHunkId) return mergedLine;
+
+    if (acceptedIds.has(hunk.id)) {
+      mergedLine += hunk.lines.filter((line) => line.startsWith(' ') || line.startsWith('+')).length;
+    } else {
+      mergedLine += end - start;
+    }
+    cursor = end;
+  }
+
+  return mergedLine;
+}

@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentPanel } from '../AgentPanel';
+import { splitUnifiedDiffIntoHunks } from '../diffHunks';
 import type { CodeSpaceAgentSession } from '@/lib/code-space/core';
 import type { CodeSpaceAgentMode } from '@/lib/code-space/agentModes';
 import type { CodeSpaceExecutionPolicy } from '@/lib/code-space/executionPolicy';
@@ -161,8 +162,17 @@ describe('AgentPanel', () => {
 
   it('opens changed file when clicking diff file button', () => {
     const onOpenDiffFile = vi.fn();
+    const unifiedDiff = '@@ -1 +1 @@\n-a\n+b';
     const pendingDiffs = [
-      { diffId: 'd1', filePath: 'src/example.ts', oldContent: 'a', newContent: 'b', unifiedDiff: `@@ -1 +1 @@\n-a\n+b` },
+      {
+        diffId: 'd1',
+        filePath: 'src/example.ts',
+        oldContent: 'a',
+        newContent: 'b',
+        unifiedDiff,
+        hunks: splitUnifiedDiffIntoHunks(unifiedDiff, 'a', 'b'),
+        hunkStatus: {},
+      },
     ];
     const { container } = renderPanel(vi.fn(), { pendingDiffs, onOpenDiffFile });
     const fileButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('src/example.ts'));
@@ -173,12 +183,24 @@ describe('AgentPanel', () => {
   });
 
   it('shows Accept and Reject actions in confirm mode for pending changes', () => {
+    const unifiedDiff = '@@ -1 +1 @@\n-a\n+b';
     const pendingDiffs = [
-      { diffId: 'd1', filePath: 'src/example.ts', oldContent: 'a', newContent: 'b' },
+      {
+        diffId: 'd1',
+        filePath: 'src/example.ts',
+        oldContent: 'a',
+        newContent: 'b',
+        unifiedDiff,
+        hunks: splitUnifiedDiffIntoHunks(unifiedDiff, 'a', 'b'),
+        hunkStatus: {},
+      },
     ];
     const { container } = renderPanel(vi.fn(), { pendingDiffs, executionPolicy: 'manual' as CodeSpaceExecutionPolicy });
     expect(container.textContent).toContain('Accept');
     expect(container.textContent).toContain('Reject');
+    expect(container.textContent).toContain('+1');
+    expect(container.textContent).toContain('-1');
+    expect(container.textContent).toContain('1 patch');
   });
 
   it('keeps applied patch containers visible in the code changes rail', () => {

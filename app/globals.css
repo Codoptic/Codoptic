@@ -253,7 +253,32 @@ textarea {
   background: rgba(63, 185, 80, 0.16);
 }
 
+.code-space-diff-removed-line {
+  background: rgba(248, 81, 73, 0.16);
+  text-decoration: line-through;
+}
+
 .code-space-diff-glyph {
   background: #3fb950;
   width: 4px !important;
+}
+
+.code-space-inline-hunk-preview {
+  margin: 4px 12px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* Motivation vs Logic: action footer lives inside the patch preview view-zone, so it must stay a
+   single-row flex strip with non-wrapping pill buttons. Without `flex-wrap: nowrap` Monaco's
+   narrow viewzone widths would wrap the buttons onto separate rows (the "external stacked"
+   appearance fixed here). */
+.code-space-inline-hunk-actions {
+  flex-wrap: nowrap;
+  min-height: 28px;
+}
+
+.code-space-inline-hunk-actions button {
+  white-space: nowrap;
+  line-height: 1.1;
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import Editor, { DiffEditor, type OnMount } from '@monaco-editor/react';
+import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import {
   Archive,
@@ -77,6 +77,17 @@ import { registerDslLanguage } from '@/components/editor/dslLanguage';
 import { ProviderConfig } from '@/components/agent/ProviderConfig';
 import { AgentPanel } from '@/components/code-space/AgentPanel';
 import { CodeSpaceWorkspaceEnhancements } from '@/components/code-space/CodeSpaceWorkspaceEnhancements';
+import { InlinePatchReview } from '@/components/code-space/InlinePatchReview';
+import {
+  acceptedHunkIdSet,
+  applyAcceptedDiffHunks,
+  countDiffLines,
+  everyHunkResolved,
+  hasAcceptedHunks,
+  resolvedContentForHunk,
+  splitUnifiedDiffIntoHunks,
+  type CodeSpacePendingDiff,
+} from '@/components/code-space/diffHunks';
 import { SessionRenameDialog } from '@/components/shared/SessionRenameDialog';
 import { useAppDialogs } from '@/components/shared/useAppDialogs';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
@@ -121,6 +132,28 @@ const DEFAULT_SESSION_EXAMPLES = [
 
 function nowId(prefix: string): string {
   return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildPendingDiffFromEvent(event: {
+  diffId: string;
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+  deleted?: boolean;
+  explanation?: string;
+  unifiedDiff?: string;
+}): CodeSpacePendingDiff {
+  return {
+    diffId: event.diffId,
+    filePath: event.filePath,
+    oldContent: event.oldContent,
+    newContent: event.newContent,
+    deleted: event.deleted,
+    explanation: event.explanation,
+    unifiedDiff: event.unifiedDiff,
+    hunks: splitUnifiedDiffIntoHunks(event.unifiedDiff, event.oldContent, event.newContent),
+    hunkStatus: {},
+  };
 }
 
 function extractChangedLineNumbers(unifiedDiff?: string): number[] {
@@ -347,15 +380,7 @@ export function CodeSpaceWorkspace() {
 
   // Agent state
   const [agentRunning, setAgentRunning] = useState(false);
-  const [pendingDiffs, setPendingDiffs] = useState<Array<{
-    diffId: string;
-    filePath: string;
-    oldContent: string;
-    newContent: string;
-    deleted?: boolean;
-    explanation?: string;
-    unifiedDiff?: string;
-  }>>([]);
+  const [pendingDiffs, setPendingDiffs] = useState<CodeSpacePendingDiff[]>([]);
   const [executionPolicy, setExecutionPolicy] = useState<CodeSpaceExecutionPolicy>(DEFAULT_CODE_SPACE_EXECUTION_POLICY);
   const [terminalStream, setTerminalStream] = useState('');
   const [agentChangesets, setAgentChangesets] = useState<Array<{
@@ -1399,53 +1424,19 @@ export function CodeSpaceWorkspace() {
   }, [activeTab, saveCodeSpaceTab]);
 
   // Root Cause vs Logic: auto mode only changed how diffs were labeled; the workspace still held them in a manual review queue. Reuse the existing apply path so auto mode can commit the patch immediately and manual mode can keep the same confirmation flow.
-  const applyPendingDiff = useCallback(
-    async (
-      diff: {
-        diffId: string;
-        filePath: string;
-        oldContent: string;
-        newContent: string;
-        deleted?: boolean;
-        explanation?: string;
-        unifiedDiff?: string;
-      },
-      options?: { removeOnFailure?: boolean },
-    ) => {
-      if (applyingDiffIdsRef.current.has(diff.diffId) || !activeProject?.rootPath) return;
-      applyingDiffIdsRef.current.add(diff.diffId);
+  const finalizePendingDiff = useCallback(
+    (diff: CodeSpacePendingDiff) => {
       const session = activeSession ?? ensureSession();
-      try {
-        const response = await fetch('/api/code-space/patches', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                action: 'apply',
-                rootPath: activeProject.rootPath,
-                projectId: activeProject.id,
-                runId: session.id,
-                patchId: diff.diffId,
-                files: [
-                  {
-                    path: diff.filePath,
-                    beforeContent: diff.oldContent,
-                    afterContent: diff.newContent,
-                    deleted: diff.deleted,
-                  },
-                ],
-              }),
-            });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
-        const acceptedAt = Date.now();
-        setPendingDiffs((current) => current.filter((item) => item.diffId !== diff.diffId));
+      const acceptedAt = Date.now();
+      const afterContent = diff.deleted ? '' : applyAcceptedDiffHunks(diff.oldContent, diff.hunks, acceptedHunkIdSet(diff.hunkStatus));
+      if (hasAcceptedHunks(diff.hunkStatus)) {
         setAgentChangesets((current) => [
-          ...current,
+          ...current.filter((item) => item.filePath !== diff.filePath),
           {
             filePath: diff.filePath,
             beforeContent: diff.oldContent,
-            afterContent: diff.newContent,
-            deleted: diff.deleted,
+            afterContent,
+            deleted: diff.deleted && afterContent === '',
             acceptedAt,
           },
         ]);
@@ -1453,18 +1444,55 @@ export function CodeSpaceWorkspace() {
           ...current,
           filesChanged: Array.from(new Set([...current.filesChanged, diff.filePath])),
           agentChangesets: [
-            ...current.agentChangesets,
+            ...current.agentChangesets.filter((item) => item.filePath !== diff.filePath),
             {
               filePath: diff.filePath,
               beforeContent: diff.oldContent,
-              afterContent: diff.newContent,
-              deleted: diff.deleted,
+              afterContent,
+              deleted: diff.deleted && afterContent === '',
               acceptedAt,
             },
           ],
           updatedAt: Date.now(),
         }));
-        await refreshGitStatus(activeProject);
+      }
+      setPendingDiffs((current) => current.filter((item) => item.diffId !== diff.diffId));
+      if (activeProject) void refreshGitStatus(activeProject);
+    },
+    [activeProject, activeSession, ensureSession, patchSession, refreshGitStatus],
+  );
+
+  const applyPendingDiff = useCallback(
+    async (diff: CodeSpacePendingDiff, options?: { removeOnFailure?: boolean }) => {
+      if (applyingDiffIdsRef.current.has(diff.diffId) || !activeProject?.rootPath) return;
+      applyingDiffIdsRef.current.add(diff.diffId);
+      const session = activeSession ?? ensureSession();
+      try {
+        const response = await fetch('/api/code-space/patches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'apply',
+            rootPath: activeProject.rootPath,
+            projectId: activeProject.id,
+            runId: session.id,
+            patchId: diff.diffId,
+            files: [
+              {
+                path: diff.filePath,
+                beforeContent: diff.oldContent,
+                afterContent: diff.newContent,
+                deleted: diff.deleted,
+              },
+            ],
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
+        finalizePendingDiff({
+          ...diff,
+          hunkStatus: Object.fromEntries(diff.hunks.map((hunk) => [hunk.id, 'accepted' as const])),
+        });
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error));
         if (options?.removeOnFailure) {
@@ -1474,7 +1502,144 @@ export function CodeSpaceWorkspace() {
         applyingDiffIdsRef.current.delete(diff.diffId);
       }
     },
-    [activeProject, activeSession, ensureSession, patchSession, refreshGitStatus],
+    [activeProject, activeSession, ensureSession, finalizePendingDiff],
+  );
+
+  const updatePendingDiff = useCallback((diffId: string, updater: (current: CodeSpacePendingDiff) => CodeSpacePendingDiff) => {
+    setPendingDiffs((current) => current.map((item) => (item.diffId === diffId ? updater(item) : item)));
+  }, []);
+
+  const acceptPendingHunk = useCallback(
+    async (diffId: string, hunkId: string) => {
+      const diff = pendingDiffs.find((item) => item.diffId === diffId);
+      if (!diff || !activeProject?.rootPath) return;
+      const hunk = diff.hunks.find((item) => item.id === hunkId);
+      if (!hunk || diff.hunkStatus[hunkId]) return;
+
+      updatePendingDiff(diffId, (current) => ({ ...current, applyingHunkId: hunkId, error: undefined }));
+      const beforeContent = resolvedContentForHunk(diff);
+      const afterContent = resolvedContentForHunk(diff, hunkId);
+
+      try {
+        const session = activeSession ?? ensureSession();
+        const response = await fetch('/api/code-space/patches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'apply',
+            rootPath: activeProject.rootPath,
+            projectId: activeProject.id,
+            runId: session.id,
+            patchId: `${diff.diffId}:${hunkId}`,
+            files: [
+              {
+                path: diff.filePath,
+                beforeContent,
+                afterContent,
+                deleted: diff.deleted && afterContent === '',
+              },
+            ],
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
+
+        const updatedDiff: CodeSpacePendingDiff = {
+          ...diff,
+          applyingHunkId: undefined,
+          hunkStatus: { ...diff.hunkStatus, [hunkId]: 'accepted' as const },
+          error: undefined,
+        };
+        updatePendingDiff(diffId, () => updatedDiff);
+        if (everyHunkResolved(updatedDiff.hunks, updatedDiff.hunkStatus)) {
+          finalizePendingDiff(updatedDiff);
+        } else if (activeProject) {
+          void refreshGitStatus(activeProject);
+        }
+      } catch (error) {
+        updatePendingDiff(diffId, (current) => ({
+          ...current,
+          applyingHunkId: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    },
+    [activeProject, activeSession, ensureSession, finalizePendingDiff, pendingDiffs, refreshGitStatus, updatePendingDiff],
+  );
+
+  const rejectPendingHunk = useCallback(
+    (diffId: string, hunkId: string) => {
+      const diff = pendingDiffs.find((item) => item.diffId === diffId);
+      if (!diff) return;
+      const updatedDiff: CodeSpacePendingDiff = {
+        ...diff,
+        hunkStatus: { ...diff.hunkStatus, [hunkId]: 'rejected' as const },
+        error: undefined,
+      };
+      updatePendingDiff(diffId, () => updatedDiff);
+      if (everyHunkResolved(updatedDiff.hunks, updatedDiff.hunkStatus)) {
+        finalizePendingDiff(updatedDiff);
+      }
+    },
+    [finalizePendingDiff, pendingDiffs, updatePendingDiff],
+  );
+
+  const acceptAllPendingHunks = useCallback(
+    async (diffId: string) => {
+      const diff = pendingDiffs.find((item) => item.diffId === diffId);
+      if (!diff || !activeProject?.rootPath) return;
+      updatePendingDiff(diffId, (current) => ({ ...current, applyingAll: true, error: undefined }));
+
+      try {
+        const session = activeSession ?? ensureSession();
+        const beforeContent = resolvedContentForHunk(diff);
+        const afterContent = diff.deleted ? '' : diff.newContent;
+        const response = await fetch('/api/code-space/patches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'apply',
+            rootPath: activeProject.rootPath,
+            projectId: activeProject.id,
+            runId: session.id,
+            patchId: `${diff.diffId}:all`,
+            files: [
+              {
+                path: diff.filePath,
+                beforeContent,
+                afterContent,
+                deleted: diff.deleted,
+              },
+            ],
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
+        finalizePendingDiff({
+          ...diff,
+          hunkStatus: Object.fromEntries(diff.hunks.map((hunk) => [hunk.id, 'accepted' as const])),
+        });
+      } catch (error) {
+        updatePendingDiff(diffId, (current) => ({
+          ...current,
+          applyingAll: false,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      }
+    },
+    [activeProject, activeSession, ensureSession, finalizePendingDiff, pendingDiffs, updatePendingDiff],
+  );
+
+  const rejectAllPendingHunks = useCallback(
+    (diffId: string) => {
+      const diff = pendingDiffs.find((item) => item.diffId === diffId);
+      if (!diff) return;
+      finalizePendingDiff({
+        ...diff,
+        hunkStatus: Object.fromEntries(diff.hunks.map((hunk) => [hunk.id, 'rejected' as const])),
+      });
+    },
+    [finalizePendingDiff, pendingDiffs],
   );
 
   const handleRunAgent = useCallback(async (userPrompt: string, attachments: SelectedMention[] = [], options: CodeSpacePromptOptions = {}) => {
@@ -1649,7 +1814,7 @@ export function CodeSpaceWorkspace() {
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
             if (event.type === 'diff_proposed') {
-              const diff = {
+              const diff = buildPendingDiffFromEvent({
                 diffId: event.diffId,
                 filePath: event.filePath,
                 oldContent: event.oldContent,
@@ -1657,7 +1822,7 @@ export function CodeSpaceWorkspace() {
                 deleted: event.deleted,
                 explanation: event.explanation,
                 unifiedDiff: event.unifiedDiff,
-              };
+              });
               if (shouldAutoApplyCodeSpaceDiffs(executionPolicyRef.current, event.autoApplied)) {
                 void applyPendingDiff(diff, { removeOnFailure: true });
               } else {
@@ -2185,16 +2350,17 @@ export function CodeSpaceWorkspace() {
 
   const acceptPendingDiff = useCallback(
     async (diffId: string) => {
-      const diff = pendingDiffs.find((item) => item.diffId === diffId);
-      if (!diff) return;
-      await applyPendingDiff(diff);
+      await acceptAllPendingHunks(diffId);
     },
-    [applyPendingDiff, pendingDiffs],
+    [acceptAllPendingHunks],
   );
 
-  const rejectPendingDiff = useCallback((diffId: string) => {
-    setPendingDiffs((current) => current.filter((item) => item.diffId !== diffId));
-  }, []);
+  const rejectPendingDiff = useCallback(
+    (diffId: string) => {
+      rejectAllPendingHunks(diffId);
+    },
+    [rejectAllPendingHunks],
+  );
 
   const openDiffFile = useCallback((filePath: string) => {
     if (!activeProject) return;
@@ -2369,10 +2535,8 @@ export function CodeSpaceWorkspace() {
   const activeTabProject = activeTab ? projects.find((project) => project.id === activeTab.projectId) ?? activeProject : null;
   const activeTabPayload = activeTab ? fileContents[activeTab.id] : null;
   const activeTabIsLoading = activeTab ? loadingFileIdsRef.current.has(activeTab.id) : false;
-  const activeTabDiff = activeTab
-    ? pendingDiffs.find((item) => item.filePath === activeTab.path) ??
-      agentChangesets.find((item) => item.filePath === activeTab.path)
-    : null;
+  const activePendingDiff = activeTab ? pendingDiffs.find((item) => item.filePath === activeTab.path) ?? null : null;
+  const activePendingDiffCounts = activePendingDiff ? countDiffLines(activePendingDiff.unifiedDiff, activePendingDiff.hunks) : null;
   const breadcrumbs = activeProject && activeTab ? [activeProject.name, ...activeTab.path.split('/').filter(Boolean)] : [];
   // Motivation vs Logic: showing a quick snapshot of the root entries keeps the preview actionable before any file is opened.
   const activeProjectPreviewKey = activeProject ? `${activeProject.id}:` : '';
@@ -2553,37 +2717,34 @@ export function CodeSpaceWorkspace() {
               {crumb}
             </span>
           )) : <span>No file selected</span>}
+          {activePendingDiff && activePendingDiffCounts ? (
+            <span className="ml-auto inline-flex items-center gap-2 text-[10px]">
+              <span className="text-[#3fb950]">+{activePendingDiffCounts.added}</span>
+              <span className="text-[#f85149]">-{activePendingDiffCounts.removed}</span>
+              <span className="rounded border border-[#30363d] px-1.5 py-0.5 uppercase tracking-wider text-[#79c0ff]">
+                {activePendingDiff.hunks.length} patch{activePendingDiff.hunks.length === 1 ? '' : 'es'}
+              </span>
+            </span>
+          ) : null}
         </div>
 
         <div className="min-h-0 flex-1 bg-[#1e1e1e]">
           {activeTab ? (
             activeTabPayload ? (
-              activeTabDiff ? (
-                <DiffEditor
-                  height="100%"
-                  theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
+              activePendingDiff ? (
+                <InlinePatchReview
+                  filePath={activeTab.path}
                   language={activeTab.language}
-                  original={'beforeContent' in activeTabDiff ? activeTabDiff.beforeContent : activeTabDiff.oldContent}
-                  modified={activeTabDiff.deleted ? '' : 'afterContent' in activeTabDiff ? activeTabDiff.afterContent : activeTabDiff.newContent}
-                  originalLanguage={activeTab.language}
-                  modifiedLanguage={activeTab.language}
-                  onMount={(_, monaco) => {
-                    // Motivation vs Logic: Reviewable patches should be inspectable in the main editor before
-                    // acceptance, not only as a cramped sidebar snippet. Monaco's diff editor gives users the
-                    // familiar red/green file-level review surface while preserving the existing accept/reject flow.
-                    monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
+                  theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
+                  diff={activePendingDiff}
+                  minimapEnabled={minimapEnabled}
+                  wordWrap={wordWrap}
+                  onAcceptHunk={(hunkId) => void acceptPendingHunk(activePendingDiff.diffId, hunkId)}
+                  onRejectHunk={(hunkId) => rejectPendingHunk(activePendingDiff.diffId, hunkId)}
+                  onAcceptAll={() => void acceptAllPendingHunks(activePendingDiff.diffId)}
+                  onRejectAll={() => rejectAllPendingHunks(activePendingDiff.diffId)}
+                  onEditorMount={(_, monaco) => {
                     monacoRef.current = monaco;
-                  }}
-                  options={{
-                    readOnly: true,
-                    originalEditable: false,
-                    minimap: { enabled: minimapEnabled },
-                    wordWrap: wordWrap ? 'on' : 'off',
-                    fontSize: 13,
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    renderSideBySide: true,
-                    scrollBeyondLastLine: false,
-                    automaticLayout: true,
                   }}
                 />
               ) : activeTab.language === 'markdown' && activeTab.preview ? (

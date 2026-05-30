@@ -1,16 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CodeSpaceProject } from '@/lib/code-space/core';
 import { readCodeSpacePreferences, readCodeSpaceProjects } from '@/lib/code-space/persistence';
-import {
-  acceptedHunkIdSet,
-  applyAcceptedDiffHunks,
-  everyHunkResolved,
-  splitUnifiedDiffIntoHunks,
-  type DiffHunk,
-  type DiffHunkStatus,
-} from '@/components/code-space/diffHunks';
 import { useAppDialogs } from '@/components/shared/useAppDialogs';
 
 type ExplorerNodeType = 'file' | 'dir';
@@ -28,49 +20,6 @@ interface ExplorerMenuState {
   x: number;
   y: number;
   target: ExplorerTarget;
-}
-
-interface AgentDiffEvent {
-  type: 'diff_proposed';
-  diffId: string;
-  filePath: string;
-  oldContent: string;
-  newContent: string;
-  deleted?: boolean;
-  explanation?: string;
-  unifiedDiff?: string;
-}
-
-interface ReviewDiff {
-  diffId: string;
-  filePath: string;
-  oldContent: string;
-  newContent: string;
-  deleted?: boolean;
-  explanation?: string;
-  unifiedDiff?: string;
-  rootPath: string;
-  projectId: string;
-  runId?: string;
-  hunks: DiffHunk[];
-  hunkStatus: DiffHunkStatus;
-  applyingHunkId?: string;
-  applyingAll?: boolean;
-  error?: string;
-  createdAt: number;
-}
-
-interface AgentRequestContext {
-  rootPath: string;
-  runId?: string;
-  projectIdPromise: Promise<string>;
-}
-
-interface EditorRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
 }
 
 const NON_PATH_TITLES = new Set([
@@ -148,17 +97,6 @@ async function getActiveProject(): Promise<CodeSpaceProject | null> {
   );
 }
 
-async function resolveProjectIdForRoot(rootPath: string): Promise<string> {
-  const normalizedRoot = rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  const preferences = readCodeSpacePreferences();
-  const projects = await readCodeSpaceProjects();
-  const project =
-    projects.find((item) => item.rootPath?.replace(/\\/g, '/').replace(/\/+$/, '') === normalizedRoot) ??
-    projects.find((item) => item.id === preferences.activeProjectId) ??
-    projects.find((item) => Boolean(item.rootPath));
-  return project?.id ?? preferences.activeProjectId ?? 'code-space-project';
-}
-
 async function resolveTargetFromButton(button: HTMLButtonElement): Promise<ExplorerTarget | null> {
   const project = await getActiveProject();
   if (!project?.rootPath) return null;
@@ -223,154 +161,10 @@ export async function postFileAction(
   return true;
 }
 
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === 'string') return input;
-  if (input instanceof URL) return input.toString();
-  return input.url;
-}
-
-async function requestBodyText(input: RequestInfo | URL, init?: RequestInit): Promise<string> {
-  if (typeof init?.body === 'string') return init.body;
-  if (input instanceof Request) return input.clone().text();
-  return '';
-}
-
-async function parseAgentDiffStream(
-  stream: ReadableStream<Uint8Array>,
-  context: AgentRequestContext,
-  onDiff: (event: AgentDiffEvent, context: AgentRequestContext, projectId: string) => void,
-): Promise<void> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  const projectId = await context.projectIdPromise;
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const event = JSON.parse(line.slice(6)) as { type?: string };
-        if (event.type === 'diff_proposed') {
-          onDiff(event as AgentDiffEvent, context, projectId);
-        }
-      } catch {
-        // Ignore malformed Server-Sent Event fragments; the workspace consumes its own copy.
-      }
-    }
-  }
-}
-
-function renderDiffLineClass(line: string): string {
-  if (line.startsWith('+') && !line.startsWith('+++')) return 'bg-[#12351f] text-[#3fb950]';
-  if (line.startsWith('-') && !line.startsWith('---')) return 'bg-[#3a1618] text-[#f85149]';
-  if (line.startsWith('@@')) return 'text-[#79c0ff]';
-  return 'text-[#c9d1d9]';
-}
-
-function resolvedContentForHunk(reviewDiff: ReviewDiff, extraAcceptedHunkId?: string): string {
-  const acceptedIds = acceptedHunkIdSet(reviewDiff.hunkStatus, extraAcceptedHunkId);
-  if (reviewDiff.deleted) return acceptedIds.size > 0 ? '' : reviewDiff.oldContent;
-  return applyAcceptedDiffHunks(reviewDiff.oldContent, reviewDiff.hunks, acceptedIds);
-}
-
-function hasAcceptedHunks(reviewDiff: ReviewDiff): boolean {
-  return Object.values(reviewDiff.hunkStatus).some((status) => status === 'accepted');
-}
-
-function findSidebarReviewButton(filePath: string, label: 'Accept' | 'Reject'): HTMLButtonElement | null {
-  const normalized = normalizeRelativePath(filePath);
-  const openButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button[title]')).find((button) => {
-    const title = button.getAttribute('title') ?? '';
-    return title.startsWith('Open ') && normalizeRelativePath(title.replace(/^Open\s+/, '')) === normalized;
-  });
-  const card = openButton?.closest('div.rounded.border');
-  if (!card) return null;
-  return Array.from(card.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === label) ?? null;
-}
-
-function clearWorkspacePendingDiff(filePath: string): void {
-  let attempts = 0;
-  const tryClear = () => {
-    attempts += 1;
-    const rejectButton = findSidebarReviewButton(filePath, 'Reject');
-    if (rejectButton) {
-      rejectButton.click();
-      return true;
-    }
-    return attempts >= 40;
-  };
-
-  if (tryClear()) return;
-  const intervalId = window.setInterval(() => {
-    if (tryClear()) window.clearInterval(intervalId);
-  }, 120);
-}
-
-function useCodeEditorRect(): EditorRect | null {
-  const [rect, setRect] = useState<EditorRect | null>(null);
-
-  useEffect(() => {
-    const update = () => {
-      const editorRegion = document.querySelector<HTMLElement>('.code-space-workbench > section');
-      if (!editorRegion) {
-        setRect(null);
-        return;
-      }
-      const next = editorRegion.getBoundingClientRect();
-      setRect({ left: next.left, top: next.top, width: next.width, height: next.height });
-    };
-
-    update();
-    const intervalId = window.setInterval(update, 400);
-    window.addEventListener('resize', update);
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('resize', update);
-    };
-  }, []);
-
-  return rect;
-}
-
-function useActiveCodeSpaceFilePath(): string | null {
-  const [filePath, setFilePath] = useState<string | null>(null);
-
-  useEffect(() => {
-    const update = () => {
-      const activeExplorerButton = document.querySelector<HTMLButtonElement>('.code-space-workbench button[aria-current="true"][title]');
-      const activePath = activeExplorerButton?.getAttribute('title');
-      setFilePath(activePath ? normalizeRelativePath(activePath) : null);
-    };
-
-    update();
-    const intervalId = window.setInterval(update, 300);
-    document.addEventListener('click', update, true);
-    return () => {
-      window.clearInterval(intervalId);
-      document.removeEventListener('click', update, true);
-    };
-  }, []);
-
-  return filePath;
-}
-
 export function CodeSpaceWorkspaceEnhancements() {
   const [selectedTarget, setSelectedTarget] = useState<ExplorerTarget | null>(null);
   const [menu, setMenu] = useState<ExplorerMenuState | null>(null);
-  const [reviewDiffs, setReviewDiffs] = useState<ReviewDiff[]>([]);
   const mountedRef = useRef(true);
-  const editorRect = useCodeEditorRect();
-  const activeFilePath = useActiveCodeSpaceFilePath();
-  // Motivation vs Logic: every explorer mutation used to reach for `window.prompt`/`alert`/`confirm`,
-  // which leaked the page origin and looked alien next to the workspace chrome. The dialog hook
-  // gives us promise-based prompts/confirms/alerts backed by portal-mounted modals so the same
-  // imperative flow can stay readable while rendering in-app UI.
   const { prompt, confirm, alert, dialogs } = useAppDialogs();
 
   const reportFileActionError = useCallback(
@@ -490,185 +284,10 @@ export function CodeSpaceWorkspaceEnhancements() {
     await postFileAction(target, { action: 'delete', path: target.path }, dirname(target.path), { onError: reportFileActionError });
   }, [closeMenu, confirm, reportFileActionError]);
 
-  const removeReviewDiff = useCallback((diffId: string) => {
-    setReviewDiffs((current) => current.filter((item) => item.diffId !== diffId));
-  }, []);
-
-  const updateReviewDiff = useCallback((diffId: string, updater: (current: ReviewDiff) => ReviewDiff) => {
-    setReviewDiffs((current) => current.map((item) => (item.diffId === diffId ? updater(item) : item)));
-  }, []);
-
-  const markDiffResolved = useCallback((reviewDiff: ReviewDiff) => {
-    removeReviewDiff(reviewDiff.diffId);
-    clearWorkspacePendingDiff(reviewDiff.filePath);
-  }, [removeReviewDiff]);
-
-  const rejectHunk = useCallback((reviewDiff: ReviewDiff, hunk: DiffHunk) => {
-    updateReviewDiff(reviewDiff.diffId, (current) => {
-      const next = {
-        ...current,
-        hunkStatus: { ...current.hunkStatus, [hunk.id]: 'rejected' as const },
-        error: undefined,
-      };
-      if (everyHunkResolved(next.hunks, next.hunkStatus)) {
-        window.setTimeout(() => markDiffResolved(next), 0);
-      }
-      return next;
-    });
-  }, [markDiffResolved, updateReviewDiff]);
-
-  const acceptHunk = useCallback(async (reviewDiff: ReviewDiff, hunk: DiffHunk) => {
-    updateReviewDiff(reviewDiff.diffId, (current) => ({ ...current, applyingHunkId: hunk.id, error: undefined }));
-
-    const beforeContent = resolvedContentForHunk(reviewDiff);
-    const afterContent = resolvedContentForHunk(reviewDiff, hunk.id);
-
-    try {
-      const response = await fetch('/api/code-space/patches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'apply',
-          rootPath: reviewDiff.rootPath,
-          projectId: reviewDiff.projectId,
-          runId: reviewDiff.runId,
-          patchId: `${reviewDiff.diffId}:${hunk.id}`,
-          files: [
-            {
-              path: reviewDiff.filePath,
-              beforeContent,
-              afterContent,
-              deleted: reviewDiff.deleted && afterContent === '',
-            },
-          ],
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
-
-      updateReviewDiff(reviewDiff.diffId, (current) => {
-        const next = {
-          ...current,
-          applyingHunkId: undefined,
-          hunkStatus: { ...current.hunkStatus, [hunk.id]: 'accepted' as const },
-          error: undefined,
-        };
-        if (everyHunkResolved(next.hunks, next.hunkStatus)) {
-          window.setTimeout(() => markDiffResolved(next), 0);
-        }
-        return next;
-      });
-      document.querySelector<HTMLButtonElement>('.code-space-workbench button[title="Refresh tree"]')?.click();
-    } catch (error) {
-      updateReviewDiff(reviewDiff.diffId, (current) => ({
-        ...current,
-        applyingHunkId: undefined,
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }, [markDiffResolved, updateReviewDiff]);
-
-  const acceptAllForDiff = useCallback(async (reviewDiff: ReviewDiff) => {
-    updateReviewDiff(reviewDiff.diffId, (current) => ({ ...current, applyingAll: true, error: undefined }));
-    const beforeContent = resolvedContentForHunk(reviewDiff);
-    const afterContent = reviewDiff.deleted ? '' : reviewDiff.newContent;
-
-    try {
-      const response = await fetch('/api/code-space/patches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'apply',
-          rootPath: reviewDiff.rootPath,
-          projectId: reviewDiff.projectId,
-          runId: reviewDiff.runId,
-          patchId: `${reviewDiff.diffId}:all`,
-          files: [
-            {
-              path: reviewDiff.filePath,
-              beforeContent,
-              afterContent,
-              deleted: reviewDiff.deleted,
-            },
-          ],
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? 'Patch apply failed');
-      markDiffResolved(reviewDiff);
-      document.querySelector<HTMLButtonElement>('.code-space-workbench button[title="Refresh tree"]')?.click();
-    } catch (error) {
-      updateReviewDiff(reviewDiff.diffId, (current) => ({
-        ...current,
-        applyingAll: false,
-        error: error instanceof Error ? error.message : String(error),
-      }));
-    }
-  }, [markDiffResolved, updateReviewDiff]);
-
-  const rejectAllForDiff = useCallback((reviewDiff: ReviewDiff) => {
-    markDiffResolved(reviewDiff);
-  }, [markDiffResolved]);
-
   useEffect(() => {
     mountedRef.current = true;
-    const originalFetch = window.fetch.bind(window);
-
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = requestUrl(input);
-      let context: AgentRequestContext | null = null;
-
-      if (url.includes('/api/code-space/agent')) {
-        const bodyText = await requestBodyText(input, init).catch(() => '');
-        try {
-          const parsed = JSON.parse(bodyText) as { projectRoot?: string; sessionId?: string };
-          if (parsed.projectRoot) {
-            context = {
-              rootPath: parsed.projectRoot,
-              runId: parsed.sessionId,
-              projectIdPromise: resolveProjectIdForRoot(parsed.projectRoot),
-            };
-          }
-        } catch {
-          context = null;
-        }
-      }
-
-      const response = await originalFetch(input, init);
-      if (!context || !response.body) return response;
-
-      const [workspaceBody, reviewBody] = response.body.tee();
-      void parseAgentDiffStream(reviewBody, context, (event, streamContext, projectId) => {
-        if (!mountedRef.current) return;
-        const hunks = splitUnifiedDiffIntoHunks(event.unifiedDiff, event.oldContent, event.newContent);
-        const nextReviewDiff: ReviewDiff = {
-          diffId: event.diffId,
-          filePath: event.filePath,
-          oldContent: event.oldContent,
-          newContent: event.newContent,
-          deleted: event.deleted,
-          explanation: event.explanation,
-          unifiedDiff: event.unifiedDiff,
-          rootPath: streamContext.rootPath,
-          projectId,
-          runId: streamContext.runId,
-          hunks,
-          hunkStatus: {},
-          createdAt: Date.now(),
-        };
-        setReviewDiffs((current) => [...current.filter((item) => item.diffId !== event.diffId), nextReviewDiff]);
-      }).catch(() => undefined);
-
-      return new Response(workspaceBody, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    };
-
     return () => {
       mountedRef.current = false;
-      window.fetch = originalFetch;
     };
   }, []);
 
@@ -752,105 +371,11 @@ export function CodeSpaceWorkspaceEnhancements() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const unresolvedReviewDiffs = useMemo(
-    () => reviewDiffs.filter((item) => !everyHunkResolved(item.hunks, item.hunkStatus)).sort((a, b) => a.createdAt - b.createdAt),
-    [reviewDiffs],
-  );
-  const visibleReviewDiffs = useMemo(() => {
-    if (!activeFilePath) return unresolvedReviewDiffs;
-    const scoped = unresolvedReviewDiffs.filter((item) => normalizeRelativePath(item.filePath) === activeFilePath);
-    return scoped.length ? scoped : unresolvedReviewDiffs;
-  }, [activeFilePath, unresolvedReviewDiffs]);
-
-  const hasVisibleBusyDiff = visibleReviewDiffs.some((item) => item.applyingAll || Boolean(item.applyingHunkId));
-  const reviewStyle = editorRect
-    ? {
-        left: `${editorRect.left}px`,
-        top: `${editorRect.top + 36}px`,
-        width: `${editorRect.width}px`,
-        height: `${Math.max(220, editorRect.height - 36)}px`,
-      }
-    : undefined;
-
-  const acceptAllVisible = useCallback(() => {
-    for (const reviewDiff of visibleReviewDiffs) {
-      void acceptAllForDiff(reviewDiff);
-    }
-  }, [acceptAllForDiff, visibleReviewDiffs]);
-
-  const rejectAllVisible = useCallback(() => {
-    for (const reviewDiff of visibleReviewDiffs) {
-      rejectAllForDiff(reviewDiff);
-    }
-  }, [rejectAllForDiff, visibleReviewDiffs]);
-
   const target = menu?.target;
   const directoryLabel = target ? (target.type === 'dir' ? target.path : target.directoryPath || 'project root') : '';
 
   return (
     <>
-      {editorRect && reviewStyle && visibleReviewDiffs.length > 0 ? (
-        <div data-code-space-inline-patch-review="true" className="fixed z-[900] font-mono text-xs text-[#e6edf3]" style={reviewStyle}>
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#1e1e1ef2] via-[#1e1e1ed9] to-[#1e1e1ef2]" />
-          <div className="pointer-events-auto absolute right-4 top-2 z-10 flex items-center gap-2 rounded-md border border-[#30363d] bg-[#161b22e6] px-2 py-1 shadow-lg backdrop-blur">
-            <span className="px-1 text-[10px] text-[#8b949e]">{visibleReviewDiffs.length} file{visibleReviewDiffs.length === 1 ? '' : 's'}</span>
-            <button type="button" disabled={hasVisibleBusyDiff} onClick={rejectAllVisible} className="rounded border border-[#30363d] px-2 py-1 text-[10px] text-[#f85149] hover:bg-[#2d1517] disabled:cursor-not-allowed disabled:opacity-40">
-              Reject All
-            </button>
-            <button type="button" disabled={hasVisibleBusyDiff} onClick={acceptAllVisible} className="rounded bg-[#238636] px-2 py-1 text-[10px] text-white hover:bg-[#2ea043] disabled:cursor-not-allowed disabled:opacity-40">
-              Accept All
-            </button>
-          </div>
-          <div className="pointer-events-auto absolute inset-0 overflow-auto px-10 pb-8 pt-14">
-            <div className="mx-auto max-w-6xl space-y-4">
-              {visibleReviewDiffs.map((reviewDiff) => (
-                <div key={reviewDiff.diffId} className="rounded-md border border-[#30363d] bg-[#0d1117f2] shadow-xl">
-                  <div className="flex flex-wrap items-center gap-2 border-b border-[#1f242d] px-3 py-2">
-                    <span className="truncate text-[12px] text-[#58a6ff]">{reviewDiff.filePath}</span>
-                    <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e]">
-                      {reviewDiff.deleted ? 'delete' : `${reviewDiff.hunks.length} patch${reviewDiff.hunks.length === 1 ? '' : 'es'}`}
-                    </span>
-                    {hasAcceptedHunks(reviewDiff) ? <span className="rounded border border-[#3fb95055] px-1.5 py-0.5 text-[9px] uppercase text-[#3fb950]">partial applied</span> : null}
-                  </div>
-                  {reviewDiff.explanation ? <p className="px-3 pt-2 text-[10px] leading-4 text-[#8b949e]">{reviewDiff.explanation}</p> : null}
-                  {reviewDiff.error ? <p className="mx-3 mt-2 rounded border border-[#f8514944] bg-[#2d1517] px-2 py-1 text-[10px] text-[#f85149]">{reviewDiff.error}</p> : null}
-                  <div className="space-y-3 p-3">
-                    {reviewDiff.hunks.map((hunk) => {
-                      const status = reviewDiff.hunkStatus[hunk.id];
-                      const isBusy = reviewDiff.applyingHunkId === hunk.id || reviewDiff.applyingAll;
-                      const isResolved = status === 'accepted' || status === 'rejected';
-                      return (
-                        <div key={hunk.id} className="overflow-hidden rounded border border-[#242a32] bg-[#0b0f14]">
-                          <div className="border-b border-[#1f242d] bg-[#111827] px-3 py-1.5 text-[9px] uppercase tracking-wider text-[#79c0ff]">
-                            Patch {hunk.index + 1} <span className="ml-2 normal-case tracking-normal text-[#6e7681]">{hunk.header}</span>
-                          </div>
-                          <div className="overflow-auto py-1 text-[11px] leading-5">
-                            {[hunk.header, ...hunk.lines].map((line, index) => (
-                              <div key={`${hunk.id}:${index}:${line.slice(0, 20)}`} className={`whitespace-pre-wrap break-all px-3 ${renderDiffLineClass(line)}`}>
-                                {line || ' '}
-                              </div>
-                            ))}
-                          </div>
-                          <div className="flex items-center justify-end gap-2 border-t border-[#1f242d] bg-[#0f1114] px-3 py-2">
-                            {status ? <span className={status === 'accepted' ? 'mr-auto text-[9px] uppercase text-[#3fb950]' : 'mr-auto text-[9px] uppercase text-[#f85149]'}>{status}</span> : null}
-                            <button type="button" disabled={isBusy || isResolved} onClick={() => rejectHunk(reviewDiff, hunk)} className="rounded border border-[#30363d] px-2 py-1 text-[10px] text-[#f85149] hover:bg-[#2d1517] disabled:cursor-not-allowed disabled:opacity-40">
-                              Reject patch
-                            </button>
-                            <button type="button" disabled={isBusy || isResolved} onClick={() => void acceptHunk(reviewDiff, hunk)} className="rounded bg-[#238636] px-2 py-1 text-[10px] text-white hover:bg-[#2ea043] disabled:cursor-not-allowed disabled:opacity-40">
-                              {isBusy ? 'Applying…' : 'Accept patch'}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {menu && target ? (
         <div
           data-code-space-explorer-menu="true"
