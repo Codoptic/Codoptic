@@ -13,6 +13,7 @@ coverage
 # ignoring the cache root a user can accidentally `git add` an embedded checkout into the app repo.
 .cache/
 .codoptic-cache
+
 playwright-report
 test-results
 tests/

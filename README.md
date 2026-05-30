@@ -15,6 +15,9 @@ It is designed to live inside the repository you want to analyze, so the app can
 ![Example Diagram](examples/patch.png)  
 **Applying code changes in patches**   
 
+![Knowledge Graph](examples/patch.png)  
+**Knowledge graph for token saver**  
+
 ## About
 
 Codoptic combines three closely related workflows in one app:
