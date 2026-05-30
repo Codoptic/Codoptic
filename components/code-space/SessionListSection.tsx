@@ -42,16 +42,13 @@ export function SessionListSection({
     if (!deleteTarget || isDeleting) return;
     setIsDeleting(true);
 
-    // Root Cause vs Logic: the parent workspace still owns session removal and currently protects
-    // that path with window.confirm. This modal is the visible confirmation layer, so the one parent
-    // confirm call is auto-approved only for this controlled handoff and immediately restored.
-    const nativeConfirm = window.confirm;
-    window.confirm = () => true;
+    // Root Cause vs Logic: this modal is the only confirmation layer for session deletion now
+    // that the parent workspace no longer triggers `window.confirm`. The parent exposes a
+    // confirm-free removal callback, so we can call it directly without shadowing globals.
     try {
       await onDeleteSession(deleteTarget);
       setDeleteTarget(null);
     } finally {
-      window.confirm = nativeConfirm;
       setIsDeleting(false);
     }
   };

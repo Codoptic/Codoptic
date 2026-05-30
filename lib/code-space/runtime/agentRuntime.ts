@@ -21,7 +21,7 @@ import { SubagentRunner } from './subagentRunner';
 import type { TerminalCommand } from './terminalPolicy';
 import type { LoadedInstruction } from './instructionLoader';
 import { RepairLoop } from './repairLoop';
-import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse } from './responsePolicy';
+import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse, tightenAgentSummary } from './responsePolicy';
 import { CodeAgentLoop, buildCodeSystemPrompt, buildCodeSeedMessage, type CodeAgentLoopOptions } from './codeAgentLoop';
 import { PLAN_MODE_TOOL_SPECS, buildPlanSystemPrompt, buildPlanSeedMessage, buildPlanFinalizationDirective } from './planAgentLoop';
 import { ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, formatUnresolvedEditFailures, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
@@ -533,13 +533,16 @@ export class AgentRuntime {
           existedBefore: entry.beforeContent.length > 0,
         })),
       });
+      // Concise-output guard: tighten the model summary so a verbose multi-section dump
+      // never leaks into the proposal chat reply (the rich diff is shown elsewhere in the UI).
+      const tightenedProposalSummary = tightenAgentSummary(loopResult.summary);
       const proposalSummary = [
         `Proposed ${proposed.length} change(s) to ${request.projectName}. Review the full diff, accept the patches, then confirm to run validation.`,
         diffReport.isGit ? '(diff source: git)' : '(diff source: in-memory change ledger — no git repo detected)',
         '',
-        loopResult.summary || '',
+        tightenedProposalSummary,
       ]
-        .filter((line) => line !== undefined)
+        .filter((line) => line !== undefined && line !== '')
         .join('\n');
       emit({
         type: 'diff_confirmation_required',
@@ -551,7 +554,7 @@ export class AgentRuntime {
         isGit: diffReport.isGit,
         summary: proposalSummary,
       });
-      const proposalAnswer = buildCodeProposalResponse(request.projectName, proposed, loopResult.summary);
+      const proposalAnswer = buildCodeProposalResponse(request.projectName, proposed, tightenedProposalSummary);
       await streamAnswer(proposalAnswer, emit, emitRuntime);
       await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged: proposed });
       emit({ type: 'agent_done', summary: proposalAnswer, filesChanged: proposed });
@@ -559,14 +562,14 @@ export class AgentRuntime {
     }
 
     if (ledger.size === 0) {
-      const answer = [
-        loopResult.summary || 'Code mode ended without applying a patch.',
-        '',
-        'No files were changed. The run is marked needs_review because v3.2 requires concrete file changes for implementation tasks or an exact blocker after context recall.',
-        `Context gate: ${sufficiency.status} (${sufficiency.score}/100).`,
-        sufficiency.blockers.length ? `Blockers: ${sufficiency.blockers.join('; ')}` : '',
-        sufficiency.warnings.length ? `Warnings: ${sufficiency.warnings.join('; ')}` : '',
-      ].filter(Boolean).join('\n');
+      // Concise-output guard: blocked agents tend to dump multi-section reports here
+      // ("Summary of intent and actions", "DoD status vs checklist", "Options for you"). Tighten
+      // to a single short paragraph and only attach a brief blocker/warning suffix when present —
+      // never the full v3.2 boilerplate the runtime used to append.
+      const tightened = tightenAgentSummary(loopResult.summary) || 'No files were changed.';
+      const blocker = sufficiency.blockers[0];
+      const suffix = blocker ? ` Blocker: ${blocker}` : sufficiency.warnings[0] ? ` Note: ${sufficiency.warnings[0]}` : '';
+      const answer = `${tightened}${suffix}`.trim();
       await streamAnswer(answer, emit, emitRuntime);
       await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
       emit({ type: 'validation_result', id: `validation:${runId}:no_changes`, command: 'v3.2 implementation gate', status: 'failed', output: 'Code mode produced no applied files after recall/repair gates.' });
@@ -609,11 +612,12 @@ export class AgentRuntime {
 
     const filesChanged = Array.from(ctx.ledger.keys());
     await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
+    const tightenedGateSummary = tightenAgentSummary(loopResult.summary);
     const gateSummary = [
       `Applied ${filesChanged.length} change(s) to ${request.projectName}. Review the full diff below and confirm to run validation.`,
       diffReport.isGit ? '(diff source: git)' : '(diff source: in-memory change ledger — no git repo detected)',
       '',
-      loopResult.summary || '',
+      tightenedGateSummary,
       '',
       'Files changed:',
       ...filesChanged.map((file) => `- ${file}`),

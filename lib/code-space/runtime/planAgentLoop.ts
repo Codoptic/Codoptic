@@ -96,6 +96,13 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     '- Prefer the smallest coherent change; never invent services, dependencies, databases, queues, or broad rewrites without repository evidence.',
     '- Every major change must tie back to the user objective.',
     '- Be honest: if assumptions are wrong or evidence is missing, set the plan status to needs_review with the exact blocker rather than guessing.',
+    '',
+    // Motivation vs Logic: Plan mode emits two surfaces — the plan markdown (rich, sectioned) and
+    // the chat summary (must be tight). Same prompt, two distinct outputs.
+    'Communication style — the chat summary (NOT the plan markdown) must stay tight:',
+    '- The `summary` field on write_plan_artifact is at most 2 short sentences (~200 chars). One paragraph, no markdown headings.',
+    '- Never produce sectioned chat output like "Summary of intent and actions", "Evidence inspected", "DoD status vs checklist", "Next steps / Options for you". Sectioned content belongs ONLY inside the plan markdown.',
+    '- Never offer the user a menu of options ("retry / repair / apply manually"). If you genuinely need a decision, call ask_clarifying_questions; otherwise commit to a recommendation in the plan.',
     instructionFiles.length ? `\nProject instruction files in effect: ${instructionFiles.join(', ')}. Honor their conventions.` : '',
   ]
     .filter(Boolean)

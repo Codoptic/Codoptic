@@ -11,6 +11,7 @@ import {
   type DiffHunk,
   type DiffHunkStatus,
 } from '@/components/code-space/diffHunks';
+import { useAppDialogs } from '@/components/shared/useAppDialogs';
 
 type ExplorerNodeType = 'file' | 'dir';
 
@@ -198,7 +199,15 @@ function refreshExplorerPath(folderPath: string): void {
   }, 80);
 }
 
-export async function postFileAction(target: ExplorerTarget, body: Record<string, unknown>, refreshPath: string): Promise<boolean> {
+// Motivation vs Logic: `onError` lets callers surface failures through the in-app modal stack
+// (see `useAppDialogs`) instead of the browser's native `window.alert`. Without it, the
+// function stays silent on failure so the test harness can keep its fetch-only assertions.
+export async function postFileAction(
+  target: ExplorerTarget,
+  body: Record<string, unknown>,
+  refreshPath: string,
+  options?: { onError?: (message: string) => void },
+): Promise<boolean> {
   const response = await fetch('/api/code-space/files', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -206,7 +215,8 @@ export async function postFileAction(target: ExplorerTarget, body: Record<string
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    window.alert(data.error ?? 'File operation failed');
+    const message = typeof data?.error === 'string' && data.error ? data.error : 'File operation failed';
+    options?.onError?.(message);
     return false;
   }
   refreshExplorerPath(refreshPath);
@@ -357,6 +367,22 @@ export function CodeSpaceWorkspaceEnhancements() {
   const mountedRef = useRef(true);
   const editorRect = useCodeEditorRect();
   const activeFilePath = useActiveCodeSpaceFilePath();
+  // Motivation vs Logic: every explorer mutation used to reach for `window.prompt`/`alert`/`confirm`,
+  // which leaked the page origin and looked alien next to the workspace chrome. The dialog hook
+  // gives us promise-based prompts/confirms/alerts backed by portal-mounted modals so the same
+  // imperative flow can stay readable while rendering in-app UI.
+  const { prompt, confirm, alert, dialogs } = useAppDialogs();
+
+  const reportFileActionError = useCallback(
+    (message: string) => {
+      void alert({
+        title: 'File operation failed',
+        message,
+        variant: 'error',
+      });
+    },
+    [alert],
+  );
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -367,55 +393,102 @@ export function CodeSpaceWorkspaceEnhancements() {
     setMenu({ x, y, target });
   }, []);
 
+  const validateBareName = useCallback((value: string): string | null => {
+    if (value.includes('/') || value.includes('\\')) {
+      return 'Enter a name only. Use create file/folder for nested paths.';
+    }
+    return null;
+  }, []);
+
   const renameTarget = useCallback(async (target: ExplorerTarget) => {
     closeMenu();
-    const nextName = window.prompt(`Rename ${target.type === 'dir' ? 'folder' : 'file'}`, target.name)?.trim();
+    const kindLabel = target.type === 'dir' ? 'folder' : 'file';
+    const nextName = await prompt({
+      title: `Rename ${kindLabel}`,
+      description: `Renames ${target.path} in place. Names cannot contain slashes.`,
+      label: `New ${kindLabel} name`,
+      defaultValue: target.name,
+      confirmLabel: 'Rename',
+      validate: validateBareName,
+      selectOnOpen: true,
+    });
     if (!nextName || nextName === target.name) return;
-    if (nextName.includes('/') || nextName.includes('\\')) {
-      window.alert('Enter a name only. Use create file/folder for nested paths.');
-      return;
-    }
     const parent = dirname(target.path);
     const nextPath = joinRelative(parent, nextName);
-    const ok = await postFileAction(target, { action: 'rename', path: target.path, nextPath }, parent);
+    const ok = await postFileAction(
+      target,
+      { action: 'rename', path: target.path, nextPath },
+      parent,
+      { onError: reportFileActionError },
+    );
     if (ok) {
       setSelectedTarget({ ...target, path: nextPath, name: nextName, directoryPath: target.type === 'dir' ? nextPath : parent });
     }
-  }, [closeMenu]);
+  }, [closeMenu, prompt, reportFileActionError, validateBareName]);
 
   const createFileInDirectory = useCallback(async (target: ExplorerTarget) => {
     closeMenu();
     const directory = target.type === 'dir' ? target.path : target.directoryPath;
-    const candidate = window.prompt('Create file name', 'untitled.txt')?.trim();
+    const candidate = await prompt({
+      title: 'Create file',
+      description: directory ? `Creates a new file inside ${directory}.` : 'Creates a new file at the project root.',
+      label: 'File name',
+      defaultValue: 'untitled.txt',
+      confirmLabel: 'Create file',
+      validate: validateBareName,
+      selectOnOpen: true,
+    });
     if (!candidate) return;
     const path = joinRelative(directory, candidate);
-    await postFileAction(target, { action: 'write', path, content: '' }, directory);
-  }, [closeMenu]);
+    await postFileAction(target, { action: 'write', path, content: '' }, directory, { onError: reportFileActionError });
+  }, [closeMenu, prompt, reportFileActionError, validateBareName]);
 
   const createFolderInDirectory = useCallback(async (target: ExplorerTarget) => {
     closeMenu();
     const directory = target.type === 'dir' ? target.path : target.directoryPath;
-    const candidate = window.prompt('Create folder name', 'new-folder')?.trim();
+    const candidate = await prompt({
+      title: 'Create folder',
+      description: directory ? `Creates a new folder inside ${directory}.` : 'Creates a new folder at the project root.',
+      label: 'Folder name',
+      defaultValue: 'new-folder',
+      confirmLabel: 'Create folder',
+      validate: validateBareName,
+      selectOnOpen: true,
+    });
     if (!candidate) return;
     const path = joinRelative(directory, candidate);
-    await postFileAction(target, { action: 'mkdir', path }, directory);
-  }, [closeMenu]);
+    await postFileAction(target, { action: 'mkdir', path }, directory, { onError: reportFileActionError });
+  }, [closeMenu, prompt, reportFileActionError, validateBareName]);
 
   const duplicateTarget = useCallback(async (target: ExplorerTarget) => {
     closeMenu();
     const parent = dirname(target.path);
     const defaultName = `${target.name}.copy`;
-    const candidate = window.prompt(`Duplicate ${target.type === 'dir' ? 'folder' : 'file'} as`, defaultName)?.trim();
+    const kindLabel = target.type === 'dir' ? 'folder' : 'file';
+    const candidate = await prompt({
+      title: `Duplicate ${kindLabel}`,
+      description: `Copies ${target.path} inside ${parent || 'the project root'}.`,
+      label: `New ${kindLabel} name`,
+      defaultValue: defaultName,
+      confirmLabel: 'Duplicate',
+      validate: validateBareName,
+      selectOnOpen: true,
+    });
     if (!candidate) return;
     const nextPath = joinRelative(parent, candidate);
-    await postFileAction(target, { action: 'duplicate', path: target.path, nextPath }, parent);
-  }, [closeMenu]);
+    await postFileAction(target, { action: 'duplicate', path: target.path, nextPath }, parent, { onError: reportFileActionError });
+  }, [closeMenu, prompt, reportFileActionError, validateBareName]);
 
   const deleteTarget = useCallback(async (target: ExplorerTarget) => {
     closeMenu();
-    if (!window.confirm(`Delete ${target.path}? This cannot be undone here.`)) return;
-    await postFileAction(target, { action: 'delete', path: target.path }, dirname(target.path));
-  }, [closeMenu]);
+    const accepted = await confirm({
+      title: `Delete ${target.type === 'dir' ? 'folder' : 'file'}`,
+      message: `Delete ${target.path}? This cannot be undone here.`,
+      confirmLabel: 'Delete',
+    });
+    if (!accepted) return;
+    await postFileAction(target, { action: 'delete', path: target.path }, dirname(target.path), { onError: reportFileActionError });
+  }, [closeMenu, confirm, reportFileActionError]);
 
   const removeReviewDiff = useCallback((diffId: string) => {
     setReviewDiffs((current) => current.filter((item) => item.diffId !== diffId));
@@ -807,6 +880,8 @@ export function CodeSpaceWorkspaceEnhancements() {
           </div>
         </div>
       ) : null}
+
+      {dialogs}
     </>
   );
 }

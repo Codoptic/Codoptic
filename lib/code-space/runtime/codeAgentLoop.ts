@@ -250,6 +250,28 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '- Prefer the smallest change that correctly solves the problem.',
     '- Edits are checkpointed and can be restored if a change makes the result worse.',
     '- The user sees applied diffs, validation results, and your final attempt_completion summary.',
+    '',
+    // Motivation vs Logic: models often hand back multi-section technical reports ("Summary of intent
+    // and actions", "DoD status vs checklist", "Options for you") when they get stuck. That output is
+    // confusing for end users. Pin the communication contract here so every Code-mode reply is short
+    // and decisive, and so blockers are surfaced via tool calls rather than menu prose.
+    'Communication style (the user only sees this — keep it tight):',
+    '- attempt_completion.summary MUST be at most 4 short sentences (~240 chars). One paragraph, no markdown headings, no bullet sections.',
+    '- Never produce sectioned reports like "Summary of intent and actions", "Evidence inspected", "DoD status vs checklist", "Validation plan", "Next steps / Options for you", "If you want me to proceed".',
+    '- Never offer the user a menu ("Option A: retry edit / Option B: repair & edit / Option C: apply manually"). If the next step needs a real human decision, surface it as a single sentence blocker — do not list options.',
+    '- Do not narrate tool internals (e.g. "the edit tool rejected the change with a syntax pre-validation error"). Either retry the edit with a smaller SEARCH or report the exact unresolved blocker.',
+    '- Lead with what changed (or that nothing matched), then validation status, then the single blocker if any. Skip preambles like "I will now…" / "Let me…".',
+    '',
+    // Motivation vs Logic: the previous failure mode was the agent searching once for the literal
+    // URL, finding zero hits, and then inventing an adjacent normalization task. Pin a regex-first
+    // protocol so find-replace work is comprehensive but bounded.
+    'Find-and-replace protocol (URLs, hostnames, env keys, identifiers, deprecated symbols):',
+    '- Use search_text with a regex (it is case-insensitive). Do not rely on a single literal substring match.',
+    '- Try at least three variants before declaring zero matches: the exact literal, a host/path-only fragment (e.g. `binkhoale1812[-_]?medical[-_]?chatbot\\.hf\\.space`), and the most distinctive identifier substring (e.g. `binkhoale1812`).',
+    '- For URLs, anchor on the host and accept any scheme/path: `https?://[^/\\s"\\\'\\)]*<host-fragment>`.',
+    '- Also search the replacement string. If the replacement already coexists with the old value, the migration may be partially done — note it briefly and proceed with the remaining occurrences.',
+    '- If every variant returns zero matches, briefly say "no occurrences of <pattern> found" via attempt_completion and stop. Do NOT invent unrelated normalization, casing fixes, or refactors the user did not request.',
+    '- When matches exist, replace every occurrence in a single edit_file batch (one edit per file), then re-run the same regex to confirm the count is zero.',
     instructionFiles.length ? `\nProject instruction files in effect: ${instructionFiles.join(', ')}. Honor their conventions.` : '',
   ]
     .filter(Boolean)

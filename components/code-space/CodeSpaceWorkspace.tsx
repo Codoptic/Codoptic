@@ -78,6 +78,7 @@ import { ProviderConfig } from '@/components/agent/ProviderConfig';
 import { AgentPanel } from '@/components/code-space/AgentPanel';
 import { CodeSpaceWorkspaceEnhancements } from '@/components/code-space/CodeSpaceWorkspaceEnhancements';
 import { SessionRenameDialog } from '@/components/shared/SessionRenameDialog';
+import { useAppDialogs } from '@/components/shared/useAppDialogs';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import { nameSessionAsync } from '@/lib/code-space/sessionNaming';
 import { useMentionIndex } from '@/lib/code-space/mentions/useMentionIndex';
@@ -254,6 +255,10 @@ export function CodeSpaceWorkspace() {
   const setMode = useDiagramStore((s) => s.setMode);
   const theme = useDiagramStore((s) => s.theme);
   const provider = useDiagramStore((s) => s.provider);
+  // Motivation vs Logic: replaces every `window.prompt`/`window.confirm` flow in this workspace
+  // with portal-mounted modals so renames, deletes, and clones share consistent in-app chrome
+  // instead of leaking the page origin in the native browser dialog.
+  const { prompt: openPromptDialog, confirm: openConfirmDialog, dialogs: appDialogs } = useAppDialogs();
   const [projects, setProjects] = useState<CodeSpaceProject[]>([]);
   const [sessions, setSessions] = useState<CodeSpaceAgentSession[]>([]);
   const [tabs, setTabs] = useState<CodeSpaceEditorTab[]>([]);
@@ -601,11 +606,12 @@ export function CodeSpaceWorkspace() {
     closeSessionRenameDialog();
   }, [closeSessionRenameDialog]);
 
-  const deleteSession = useCallback(
+  // Root Cause vs Logic: the previous implementation called `window.confirm` inline, which
+  // forced `SessionListSection` to shadow `window.confirm` to avoid a double prompt. The flow
+  // is now split: `removeSessionRecord` performs the destructive work, and `deleteSession`
+  // wraps it with the shared modal so every entry point gets the same in-app confirmation.
+  const removeSessionRecord = useCallback(
     async (session: CodeSpaceAgentSession) => {
-      if (!window.confirm(`Delete session "${session.title}"? This cannot be undone.`)) {
-        return;
-      }
       setSessions((current) => {
         const next = current.filter((item) => item.id !== session.id);
         setActiveSessionId((activeId) => {
@@ -623,6 +629,19 @@ export function CodeSpaceWorkspace() {
       }
     },
     [deleteCodeSpaceSession, setActiveSessionId, setSessions],
+  );
+
+  const deleteSession = useCallback(
+    async (session: CodeSpaceAgentSession) => {
+      const accepted = await openConfirmDialog({
+        title: 'Delete session',
+        message: `Delete session "${session.title}"? This cannot be undone.`,
+        confirmLabel: 'Delete session',
+      });
+      if (!accepted) return;
+      await removeSessionRecord(session);
+    },
+    [openConfirmDialog, removeSessionRecord],
   );
 
   type SessionRowProps = {
@@ -986,10 +1005,18 @@ export function CodeSpaceWorkspace() {
   );
 
   const promptToCloneGithub = useCallback(async () => {
-    const selection = window.prompt('Enter the GitHub repo URL');
+    const selection = await openPromptDialog({
+      title: 'Clone GitHub repository',
+      description: 'Paste an HTTPS or SSH URL. Codoptic clones the repo and adds it as a new project.',
+      label: 'Repository URL',
+      placeholder: 'https://github.com/owner/repo.git',
+      confirmLabel: 'Clone repository',
+      helperText: 'Press Enter to clone or Escape to cancel.',
+      selectOnOpen: false,
+    });
     if (!selection) return;
     await cloneGithubProject(selection);
-  }, [cloneGithubProject]);
+  }, [cloneGithubProject, openPromptDialog]);
 
   // Motivation vs Logic: Browsers can't hand the Code Space backend an absolute folder path
   // (the `<input webkitdirectory>` API hides `file.path` outside Electron), so we delegate
@@ -1127,14 +1154,22 @@ export function CodeSpaceWorkspace() {
   }, [activeProject, projectNameInput, renameProjectInternal]);
 
   const promptProjectRename = useCallback(
-    (project: CodeSpaceProject) => {
-      const candidate = window.prompt('Rename project', project.name);
-      if (!candidate) return;
-      const nextName = candidate.trim();
-      if (!nextName || nextName === project.name) return;
-      void renameProjectInternal(project, nextName);
+    async (project: CodeSpaceProject) => {
+      const candidate = await openPromptDialog({
+        title: 'Rename project',
+        description: `Renames the project folder for ${project.name}.`,
+        label: 'Project name',
+        defaultValue: project.name,
+        confirmLabel: 'Rename project',
+        validate: (value) => (value.includes('/') || value.includes('\\')
+          ? 'Project names cannot contain slashes.'
+          : null),
+        selectOnOpen: true,
+      });
+      if (!candidate || candidate === project.name) return;
+      void renameProjectInternal(project, candidate);
     },
-    [renameProjectInternal],
+    [openPromptDialog, renameProjectInternal],
   );
 
   const confirmProjectDeletion = useCallback(async () => {
@@ -1268,21 +1303,46 @@ export function CodeSpaceWorkspace() {
     [activeProject, loadTree, refreshGitStatus],
   );
 
-  const createFile = useCallback(() => {
-    const target = window.prompt('Create file at project-relative path');
+  // Motivation vs Logic: the toolbar file actions used to call `window.prompt`/`window.confirm`
+  // directly, which broke focus, leaked the page origin, and looked alien next to the editor
+  // chrome. They now route through the shared dialog hook so the experience matches every other
+  // mutation in Code Space.
+  const createFile = useCallback(async () => {
+    const target = await openPromptDialog({
+      title: 'Create file',
+      description: 'Provide a path relative to the project root (e.g. src/components/Button.tsx).',
+      label: 'File path',
+      placeholder: 'path/to/file.ts',
+      confirmLabel: 'Create file',
+      selectOnOpen: false,
+    });
     if (!target) return;
     void runFileAction({ action: 'write', path: target, content: '' });
-  }, [runFileAction]);
+  }, [openPromptDialog, runFileAction]);
 
-  const createFolder = useCallback(() => {
-    const target = window.prompt('Create folder at project-relative path');
+  const createFolder = useCallback(async () => {
+    const target = await openPromptDialog({
+      title: 'Create folder',
+      description: 'Provide a path relative to the project root (e.g. src/components/widgets).',
+      label: 'Folder path',
+      placeholder: 'path/to/folder',
+      confirmLabel: 'Create folder',
+      selectOnOpen: false,
+    });
     if (!target) return;
     void runFileAction({ action: 'mkdir', path: target });
-  }, [runFileAction]);
+  }, [openPromptDialog, runFileAction]);
 
-  const renameActiveFile = useCallback(() => {
+  const renameActiveFile = useCallback(async () => {
     if (!activeTab) return;
-    const target = window.prompt('Rename to project-relative path', activeTab.path);
+    const target = await openPromptDialog({
+      title: 'Rename file',
+      description: 'Provide the new project-relative path. Existing folders along the path will be reused.',
+      label: 'New file path',
+      defaultValue: activeTab.path,
+      confirmLabel: 'Rename file',
+      selectOnOpen: true,
+    });
     if (!target || target === activeTab.path) return;
     void runFileAction({ action: 'rename', path: activeTab.path, nextPath: target });
     const nextLanguage = detectCodeSpaceLanguage(target);
@@ -1299,24 +1359,37 @@ export function CodeSpaceWorkspace() {
     };
     setTabs((current) => current.map((tab) => (tab.id === activeTab.id ? nextTab : tab)));
     void saveCodeSpaceTab(nextTab);
-  }, [activeTab, runFileAction, saveCodeSpaceTab]);
+  }, [activeTab, openPromptDialog, runFileAction, saveCodeSpaceTab]);
 
-  const duplicateActiveFile = useCallback(() => {
+  const duplicateActiveFile = useCallback(async () => {
     if (!activeTab) return;
-    const target = window.prompt('Duplicate to project-relative path', `${activeTab.path}.copy`);
+    const target = await openPromptDialog({
+      title: 'Duplicate file',
+      description: `Copy ${activeTab.path} to a new project-relative path.`,
+      label: 'New file path',
+      defaultValue: `${activeTab.path}.copy`,
+      confirmLabel: 'Duplicate file',
+      selectOnOpen: true,
+    });
     if (!target) return;
     void runFileAction({ action: 'duplicate', path: activeTab.path, nextPath: target });
-  }, [activeTab, runFileAction]);
+  }, [activeTab, openPromptDialog, runFileAction]);
 
-  const deleteActiveFile = useCallback(() => {
-    if (!activeTab || !window.confirm(`Delete ${activeTab.path}? This cannot be undone here.`)) return;
+  const deleteActiveFile = useCallback(async () => {
+    if (!activeTab) return;
+    const accepted = await openConfirmDialog({
+      title: 'Delete file',
+      message: `Delete ${activeTab.path}? This cannot be undone here.`,
+      confirmLabel: 'Delete file',
+    });
+    if (!accepted) return;
     const tabIdToRemove = activeTab.id;
     void runFileAction({ action: 'delete', path: activeTab.path });
     setTabs((current) => current.filter((tab) => tab.id !== tabIdToRemove));
     setActiveTabId(null);
     // Root Cause vs Logic: file deletions previously kept their tab rows in IndexedDB, so they popped back after refresh; delete the persisted entry too.
     void deleteCodeSpaceTab(tabIdToRemove);
-  }, [activeTab, runFileAction]);
+  }, [activeTab, openConfirmDialog, runFileAction]);
 
   const toggleActiveTabPreview = useCallback(() => {
     if (!activeTab || activeTab.language !== 'markdown') return;
@@ -2398,7 +2471,7 @@ export function CodeSpaceWorkspace() {
                         title="Rename project"
                         onClick={(event) => {
                           event.stopPropagation();
-                          promptProjectRename(project);
+                          void promptProjectRename(project);
                         }}
                         className="pointer-events-auto rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]"
                       >
@@ -2683,7 +2756,7 @@ export function CodeSpaceWorkspace() {
             onOpenKnowledgeGraph={() => setKnowledgeGraphModalOpen(true)}
             onSelectSession={(sessionId) => setActiveSessionId((current) => (current === sessionId ? null : sessionId))}
             onRenameSession={renameSession}
-            onDeleteSession={(session) => void deleteSession(session)}
+            onDeleteSession={(session) => removeSessionRecord(session)}
             onSubmitPrompt={handleRunAgent}
             onCancelRun={handleCancelRun}
             onAcceptDiff={(diffId) => void acceptPendingDiff(diffId)}
@@ -3021,6 +3094,7 @@ export function CodeSpaceWorkspace() {
         onSave={handleSessionRenameSave}
         onCancel={handleSessionRenameCancel}
       />
+      {appDialogs}
       {providerConfigOpen && (
         <div
           role="dialog"

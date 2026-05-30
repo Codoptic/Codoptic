@@ -1,10 +1,13 @@
 import {
   buildCodeCompletionResponse,
   buildPlanCompletionResponse,
+  tightenAgentSummary,
   type CodeResponseInput,
   type PlanResponseInput,
   type RunValidationResult,
 } from '@/lib/code-space/agent/runResponses';
+
+export { tightenAgentSummary };
 
 export function buildAskFinalResponse(input: {
   projectName: string;

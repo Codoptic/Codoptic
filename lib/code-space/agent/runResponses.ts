@@ -87,13 +87,54 @@ export function buildCodeCompletionResponse(input: CodeResponseInput): string {
   return lines.join(' ');
 }
 
+/**
+ * Aggressively trim a model-authored summary down to a single short paragraph for the user-facing
+ * chat reply. Strips multi-section markdown reports ("## Summary of intent and actions",
+ * "## DoD status vs checklist", etc.), "Options for you" menus, and any narration after the first
+ * paragraph.
+ *
+ * Motivation vs Logic: blocked agents tend to dump long sectioned reports with DoD checklists and
+ * option menus into the chat. The skills/system-prompt tell them not to, but we also normalize
+ * here so a non-compliant model cannot leak that text to the user. Cap is ~280 chars so the
+ * concise-output skill's "≤ 4 short sentences" contract holds end-to-end.
+ */
+export function tightenAgentSummary(summary: string | undefined | null): string {
+  if (!summary) return '';
+  const lines = summary.split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => /^\s*#{1,6}\s+\S/.test(line));
+  const truncated = headingIndex >= 0 ? lines.slice(0, headingIndex) : lines;
+
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+  for (const line of truncated) {
+    if (line.trim() === '') {
+      if (current.length) {
+        paragraphs.push(current.join(' '));
+        current = [];
+      }
+      continue;
+    }
+    current.push(line.trim());
+  }
+  if (current.length) paragraphs.push(current.join(' '));
+  const firstPara = paragraphs.find((value) => value.trim()) ?? '';
+
+  let trimmed = firstPara.replace(/\s+/g, ' ').trim();
+  if (trimmed.length > 280) {
+    const cut = trimmed.slice(0, 280);
+    const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
+    trimmed = sentenceEnd > 120 ? cut.slice(0, sentenceEnd + 1).trim() : `${cut.trim()}…`;
+  }
+  return trimmed;
+}
+
 function normalizeSummary(summary?: string, proposedOnly = false): string | null {
-  const trimmed = summary?.trim();
-  if (!trimmed) return null;
-  if (/^done\b/i.test(trimmed)) return null;
-  if (/^plan ready\b/i.test(trimmed)) return null;
-  if (/\b(unable to produce|cannot produce|could not produce|insufficient evidence|not enough evidence|no reviewable code patch was produced)\b/i.test(trimmed)) return null;
-  let normalized = trimmed.replace(/\s+/g, ' ').slice(0, 240);
+  const tightened = tightenAgentSummary(summary);
+  if (!tightened) return null;
+  if (/^done\b/i.test(tightened)) return null;
+  if (/^plan ready\b/i.test(tightened)) return null;
+  if (/\b(unable to produce|cannot produce|could not produce|insufficient evidence|not enough evidence|no reviewable code patch was produced)\b/i.test(tightened)) return null;
+  let normalized = tightened.slice(0, 240);
   if (proposedOnly) {
     normalized = normalized
       .replace(/^fixed\b/i, 'Proposed a fix for')
