@@ -1510,7 +1510,7 @@ export function CodeSpaceWorkspace() {
   }, []);
 
   const acceptPendingHunk = useCallback(
-    async (diffId: string, hunkId: string) => {
+    async (diffId: string, hunkId: string, afterContentOverride?: string) => {
       const diff = pendingDiffs.find((item) => item.diffId === diffId);
       if (!diff || !activeProject?.rootPath) return;
       const hunk = diff.hunks.find((item) => item.id === hunkId);
@@ -1518,7 +1518,7 @@ export function CodeSpaceWorkspace() {
 
       updatePendingDiff(diffId, (current) => ({ ...current, applyingHunkId: hunkId, error: undefined }));
       const beforeContent = resolvedContentForHunk(diff);
-      const afterContent = resolvedContentForHunk(diff, hunkId);
+      const afterContent = afterContentOverride ?? resolvedContentForHunk(diff, hunkId);
 
       try {
         const session = activeSession ?? ensureSession();
@@ -2739,7 +2739,9 @@ export function CodeSpaceWorkspace() {
                   diff={activePendingDiff}
                   minimapEnabled={minimapEnabled}
                   wordWrap={wordWrap}
-                  onAcceptHunk={(hunkId) => void acceptPendingHunk(activePendingDiff.diffId, hunkId)}
+                  onAcceptHunk={(hunkId, afterContent) =>
+                    void acceptPendingHunk(activePendingDiff.diffId, hunkId, afterContent)
+                  }
                   onRejectHunk={(hunkId) => rejectPendingHunk(activePendingDiff.diffId, hunkId)}
                   onAcceptAll={() => void acceptAllPendingHunks(activePendingDiff.diffId)}
                   onRejectAll={() => rejectAllPendingHunks(activePendingDiff.diffId)}

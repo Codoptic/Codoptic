@@ -26,12 +26,10 @@ vi.mock('@monaco-editor/react', () => ({
     React.useEffect(() => {
       const editor = {
         getPosition: () => ({ lineNumber: 1, column: 1 }),
-        getOption: () => 18,
-        changeViewZones: (callback: (accessor: { addZone: () => string; removeZone: () => void }) => void) => {
-          callback({ addZone: () => 'zone-1', removeZone: () => undefined });
-        },
-        addOverlayWidget: () => undefined,
-        removeOverlayWidget: () => undefined,
+        getModel: () => ({
+          getLinesContent: () => (value ?? '').split('\n'),
+        }),
+        deltaDecorations: (_old: string[], decorations: unknown[]) => decorations.map((_, index) => `dec-${index}`),
         addContentWidget: () => undefined,
         removeContentWidget: () => undefined,
         addCommand: () => undefined,
@@ -40,7 +38,16 @@ vi.mock('@monaco-editor/react', () => ({
         editor: {
           setTheme: () => undefined,
           EditorOption: { lineHeight: 1 },
-          ContentWidgetPositionPreference: { ABOVE: 0 },
+          ContentWidgetPositionPreference: { EXCLUSIVE: 0 },
+          OverviewRulerLane: { Left: 1 },
+        },
+        Range: class MockRange {
+          constructor(
+            public startLineNumber: number,
+            public startColumn: number,
+            public endLineNumber: number,
+            public endColumn: number,
+          ) {}
         },
         KeyMod: { CtrlCmd: 1, Shift: 2 },
         KeyCode: { Enter: 3, Backspace: 4, KeyY: 5, KeyN: 6 },

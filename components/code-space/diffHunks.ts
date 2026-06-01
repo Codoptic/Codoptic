@@ -175,32 +175,156 @@ export function resolvedContentForHunk(diff: CodeSpacePendingDiff, extraAccepted
   return applyAcceptedDiffHunks(diff.oldContent, diff.hunks, acceptedIds);
 }
 
-// Motivation vs Logic: partial hunk accepts shift line numbers in the merged editor buffer; this walk mirrors
-// applyAcceptedDiffHunks so view zones and overlay widgets stay anchored to the correct visible line.
+export type InlineReviewLineKind = 'plain' | 'added' | 'removed' | 'context';
+
+export interface InlineReviewLineMeta {
+  hunkId?: string;
+  kind: InlineReviewLineKind;
+}
+
+export interface InlinePatchReviewModel {
+  content: string;
+  lineMeta: InlineReviewLineMeta[];
+}
+
+function hunkDiffLineText(line: string): string {
+  if (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')) return line.slice(1);
+  return line;
+}
+
+function hunkDiffLineKind(line: string): InlineReviewLineKind {
+  if (line.startsWith('+') && !line.startsWith('+++')) return 'added';
+  if (line.startsWith('-') && !line.startsWith('---')) return 'removed';
+  return 'context';
+}
+
+// Motivation vs Logic: Cursor-style review keeps pending hunks inside the Monaco buffer (added/removed/context
+// rows with line numbers) instead of a detached PATCH view-zone block.
+export function buildInlinePatchReviewModel(
+  originalContent: string,
+  hunks: DiffHunk[],
+  acceptedIds: ReadonlySet<string>,
+  hunkStatus: DiffHunkStatus = {},
+): InlinePatchReviewModel {
+  const originalLines = originalContent.split('\n');
+  const orderedHunks = [...hunks].sort((a, b) => a.oldStart - b.oldStart || a.index - b.index);
+  const lines: string[] = [];
+  const lineMeta: InlineReviewLineMeta[] = [];
+  let cursor = 0;
+
+  const push = (text: string, meta: InlineReviewLineMeta) => {
+    lines.push(text);
+    lineMeta.push(meta);
+  };
+
+  for (const hunk of orderedHunks) {
+    const start = Math.max(0, hunk.oldStart - 1);
+    const end = Math.max(start, start + hunk.oldCount);
+
+    for (let index = cursor; index < start; index += 1) {
+      push(originalLines[index] ?? '', { kind: 'plain' });
+    }
+
+    if (acceptedIds.has(hunk.id)) {
+      for (const line of hunk.lines) {
+        if (line.startsWith(' ') || line.startsWith('+')) {
+          push(hunkDiffLineText(line), { kind: 'plain', hunkId: hunk.id });
+        }
+      }
+    } else if (hunkStatus[hunk.id] === 'rejected') {
+      for (let index = start; index < end; index += 1) {
+        push(originalLines[index] ?? '', { kind: 'plain' });
+      }
+    } else {
+      for (const line of hunk.lines) {
+        if (line.startsWith('---') || line.startsWith('+++')) continue;
+        push(hunkDiffLineText(line), { hunkId: hunk.id, kind: hunkDiffLineKind(line) });
+      }
+    }
+
+    cursor = end;
+  }
+
+  for (let index = cursor; index < originalLines.length; index += 1) {
+    push(originalLines[index] ?? '', { kind: 'plain' });
+  }
+
+  return { content: lines.join('\n'), lineMeta };
+}
+
+export function hunkLineRangeInInlineReview(
+  lineMeta: readonly InlineReviewLineMeta[],
+  targetHunkId: string,
+): { startLine: number; endLine: number } | null {
+  let startLine = 0;
+  let endLine = 0;
+  for (let index = 0; index < lineMeta.length; index += 1) {
+    if (lineMeta[index]?.hunkId !== targetHunkId) continue;
+    const lineNumber = index + 1;
+    if (!startLine) startLine = lineNumber;
+    endLine = lineNumber;
+  }
+  return startLine ? { startLine, endLine } : null;
+}
+
+// Root Cause vs Logic: accept must honor in-buffer edits; when the user changes line count we fall back to the
+// structured hunk merge so patch application never sends corrupted content.
+export function fileContentFromInlineReviewEditor(
+  editorLines: readonly string[],
+  lineMeta: readonly InlineReviewLineMeta[],
+  originalContent: string,
+  hunks: DiffHunk[],
+  hunkStatus: DiffHunkStatus,
+  extraAcceptedHunkId?: string,
+): string {
+  if (editorLines.length !== lineMeta.length) {
+    return resolvedContentForHunk({ oldContent: originalContent, hunks, hunkStatus, diffId: '', filePath: '', newContent: '' }, extraAcceptedHunkId);
+  }
+
+  const acceptedIds = acceptedHunkIdSet(hunkStatus, extraAcceptedHunkId);
+  const originalLines = originalContent.split('\n');
+  const output: string[] = [];
+  let index = 0;
+
+  while (index < lineMeta.length) {
+    const meta = lineMeta[index];
+    if (!meta?.hunkId) {
+      output.push(editorLines[index] ?? '');
+      index += 1;
+      continue;
+    }
+
+    const hunkId = meta.hunkId;
+    const hunk = hunks.find((item) => item.id === hunkId);
+    const start = hunk ? Math.max(0, hunk.oldStart - 1) : 0;
+    const end = hunk ? Math.max(start, start + hunk.oldCount) : start;
+
+    if (hunkStatus[hunkId] === 'rejected' || !acceptedIds.has(hunkId)) {
+      output.push(...originalLines.slice(start, end));
+      while (index < lineMeta.length && lineMeta[index]?.hunkId === hunkId) index += 1;
+      continue;
+    }
+
+    while (index < lineMeta.length && lineMeta[index]?.hunkId === hunkId) {
+      const row = lineMeta[index];
+      if (row?.kind !== 'removed') output.push(editorLines[index] ?? '');
+      index += 1;
+    }
+  }
+
+  return output.join('\n');
+}
+
+// Motivation vs Logic: partial hunk accepts shift line numbers in the merged editor buffer; inline review uses
+// buildInlinePatchReviewModel so content widgets and decorations anchor to real editor lines.
 export function hunkAnchorLineInMergedContent(
   originalContent: string,
   hunks: DiffHunk[],
   acceptedIds: ReadonlySet<string>,
   targetHunkId: string,
+  hunkStatus: DiffHunkStatus = {},
 ): number {
-  const orderedHunks = [...hunks].sort((a, b) => a.oldStart - b.oldStart || a.index - b.index);
-  let cursor = 0;
-  let mergedLine = 1;
-
-  for (const hunk of orderedHunks) {
-    const start = Math.max(0, hunk.oldStart - 1);
-    const end = Math.max(start, start + hunk.oldCount);
-    mergedLine += start - cursor;
-
-    if (hunk.id === targetHunkId) return mergedLine;
-
-    if (acceptedIds.has(hunk.id)) {
-      mergedLine += hunk.lines.filter((line) => line.startsWith(' ') || line.startsWith('+')).length;
-    } else {
-      mergedLine += end - start;
-    }
-    cursor = end;
-  }
-
-  return mergedLine;
+  const { lineMeta } = buildInlinePatchReviewModel(originalContent, hunks, acceptedIds, hunkStatus);
+  const range = hunkLineRangeInInlineReview(lineMeta, targetHunkId);
+  return range?.startLine ?? 1;
 }

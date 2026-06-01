@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildInlinePatchReviewModel,
   countDiffLines,
   countHunkLines,
+  fileContentFromInlineReviewEditor,
   hunkAnchorLineInMergedContent,
+  hunkLineRangeInInlineReview,
   splitUnifiedDiffIntoHunks,
   acceptedHunkIdSet,
 } from '../diffHunks';
@@ -29,6 +32,36 @@ describe('countHunkLines', () => {
     const hunk = hunks[0];
     expect(hunk).toBeDefined();
     expect(countHunkLines(hunk!)).toEqual({ added: 1, removed: 1 });
+  });
+});
+
+describe('buildInlinePatchReviewModel', () => {
+  it('inlines pending hunks with added and removed rows in the buffer', () => {
+    const hunks = splitUnifiedDiffIntoHunks('@@ -1 +1 @@\n-old\n+new', 'old', 'new');
+    const model = buildInlinePatchReviewModel('old', hunks, new Set());
+    expect(model.content).toBe('old\nnew');
+    expect(model.lineMeta).toEqual([
+      { hunkId: 'hunk:0', kind: 'removed' },
+      { hunkId: 'hunk:0', kind: 'added' },
+    ]);
+  });
+});
+
+describe('fileContentFromInlineReviewEditor', () => {
+  it('uses edited added lines when accepting a hunk', () => {
+    const hunks = splitUnifiedDiffIntoHunks('@@ -1 +1 @@\n-old\n+new', 'old', 'new');
+    const model = buildInlinePatchReviewModel('old', hunks, new Set());
+    const edited = ['old', 'edited'];
+    const result = fileContentFromInlineReviewEditor(edited, model.lineMeta, 'old', hunks, {}, 'hunk:0');
+    expect(result).toBe('edited');
+  });
+});
+
+describe('hunkLineRangeInInlineReview', () => {
+  it('returns the first and last line for a pending hunk', () => {
+    const hunks = splitUnifiedDiffIntoHunks('@@ -1,2 +1,2 @@\n-a\n+b\n context', 'a\nx', 'b\nx');
+    const model = buildInlinePatchReviewModel('a\nx', hunks, new Set());
+    expect(hunkLineRangeInInlineReview(model.lineMeta, 'hunk:0')).toEqual({ startLine: 1, endLine: 3 });
   });
 });
 

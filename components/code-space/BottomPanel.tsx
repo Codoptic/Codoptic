@@ -1,17 +1,17 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
   Bot,
   CheckCircle2,
-  Loader2,
   MessageCircle,
   TerminalSquare,
   Trash2,
 } from 'lucide-react';
 import type { CodeSpaceAgentSession, CodeSpaceBottomTab } from '@/lib/code-space/core';
+import { CodeSpaceTerminal } from '@/components/code-space/CodeSpaceTerminal';
 
 interface BottomPanelProps {
   activeSession: CodeSpaceAgentSession | null;
@@ -35,17 +35,6 @@ interface ProblemEntry {
   timestamp?: number;
 }
 
-interface TerminalEntry {
-  id: string;
-  command: string;
-  stdout: string;
-  stderr: string;
-  exitCode?: number;
-  status: 'running' | 'success' | 'error';
-  timestamp: number;
-  completedAt?: number;
-}
-
 const TAB_META: Record<CodeSpaceBottomTab, { label: string; icon: typeof AlertCircle }> = {
   problems: { label: 'Problems', icon: AlertTriangle },
   output: { label: 'Output', icon: TerminalSquare },
@@ -61,55 +50,8 @@ const severityOrder: Record<ProblemEntry['severity'], number> = {
 
 const EMPTY_PLACEHOLDER = 'No events yet — run a prompt, tool, or command to fill this area.';
 
-function splitCommandLine(value: string): string[] {
-  const tokens: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i] ?? '';
-    if (quote) {
-      if (char === '\\' && i + 1 < value.length) {
-        current += value[i + 1];
-        i += 1;
-        continue;
-      }
-      if (char === quote) {
-        quote = null;
-        continue;
-      }
-      current += char;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        tokens.push(current);
-        current = '';
-      }
-      continue;
-    }
-    current += char;
-  }
-  if (current) tokens.push(current);
-  return tokens;
-}
-
-function randomId() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
 function entrySignature(parts: Array<string | number | boolean | null | undefined>): string {
   return parts.map((part) => String(part ?? '')).join('|');
-}
-
-function formatTerminalPrompt(projectName: string): string {
-  return `${projectName || 'terminal'} %`;
 }
 
 // Motivation vs Logic: Align the bottom console with Cursor's Problems/Output/Debug/Terminal workflow so
@@ -127,10 +69,6 @@ export function BottomPanel({
   projectName,
   projectRoot,
 }: BottomPanelProps) {
-  const [terminalHistory, setTerminalHistory] = useState<TerminalEntry[]>([]);
-  const [terminalBusy, setTerminalBusy] = useState(false);
-  const [terminalError, setTerminalError] = useState<string | null>(null);
-  const [commandInput, setCommandInput] = useState('');
   const [clearedSignatures, setClearedSignatures] = useState<{
     problems: Set<string>;
     output: Set<string>;
@@ -142,8 +80,6 @@ export function BottomPanel({
     debug: new Set(),
     workspaceError: null,
   });
-  const terminalScrollRef = useRef<HTMLDivElement | null>(null);
-
   const toolCalls = activeSession?.toolCalls ?? [];
   const verificationResults = activeSession?.verificationResults ?? [];
   const plan = activeSession?.plan ?? [];
@@ -241,13 +177,7 @@ export function BottomPanel({
   const problemsCount = visibleProblems.length;
   const outputCount = visibleOutput.length;
   const debugCount = visibleDebug.visiblePlan.length + visibleDebug.visibleTodos.length + visibleDebug.visibleMessages.length;
-  const terminalCount = terminalHistory.length;
-
-  useEffect(() => {
-    const scrollNode = terminalScrollRef.current;
-    if (!scrollNode) return;
-    scrollNode.scrollTo({ top: scrollNode.scrollHeight });
-  }, [terminalHistory, bottomActiveTab, projectName]);
+  const terminalCount = projectRoot ? 1 : 0;
 
   const handleClearLogs = () => {
     setClearedSignatures((current) => {
@@ -268,77 +198,6 @@ export function BottomPanel({
         workspaceError: visibleWorkspaceError ?? current.workspaceError,
       };
     });
-  };
-
-  const handleTerminalSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!projectRoot) {
-      setTerminalError('Open a project to run terminal commands.');
-      return;
-    }
-    const trimmed = commandInput.trim();
-    if (!trimmed || terminalBusy) return;
-    const tokens = splitCommandLine(trimmed);
-    if (!tokens.length) return;
-    const [command, ...args] = tokens;
-    const entryId = randomId();
-    setTerminalBusy(true);
-    setTerminalError(null);
-    setTerminalHistory((current) => [
-      ...current,
-      {
-        id: entryId,
-        command: trimmed,
-        stdout: '',
-        stderr: '',
-        exitCode: undefined,
-        status: 'running',
-        timestamp: Date.now(),
-      },
-    ]);
-    try {
-      const response = await fetch('/api/code-space/terminal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rootPath: projectRoot, command, args }),
-      });
-      const payload = await response.json();
-      setTerminalHistory((current) =>
-        current.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                stdout: payload.stdout ?? '',
-                stderr: payload.stderr ?? '',
-                exitCode: typeof payload.exitCode === 'number' ? payload.exitCode : response.ok ? 0 : 1,
-                status: response.ok ? 'success' : 'error',
-                completedAt: Date.now(),
-              }
-            : entry,
-        ),
-      );
-      if (!response.ok) {
-        setTerminalError(payload.error ?? 'Command failed');
-      }
-      setCommandInput('');
-    } catch (err) {
-      setTerminalHistory((current) =>
-        current.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                stderr: err instanceof Error ? err.message : String(err),
-                exitCode: 1,
-                status: 'error',
-                completedAt: Date.now(),
-              }
-            : entry,
-        ),
-      );
-      setTerminalError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setTerminalBusy(false);
-    }
   };
 
   const renderTabContent = () => {
@@ -484,63 +343,7 @@ export function BottomPanel({
         </div>
       );
     }
-    // Motivation vs Logic: We do not have a persistent PTY backend here, so the terminal must feel like a real shell
-    // through prompt rows, scrollback, and inline results while still executing one command per request.
-    return (
-      <div className="flex h-full flex-col rounded border border-[#232323] bg-[#0c0c0c] font-mono text-[11px] text-[#d4d4d4]">
-        <div ref={terminalScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 leading-5">
-          {terminalHistory.length ? (
-            terminalHistory.map((entry) => (
-              <div key={entry.id} className="rounded border border-[#1f1f1f] bg-[#111111] p-3">
-                <div className="flex items-start gap-2">
-                  <span className="shrink-0 text-[#6f6f6f]">{formatTerminalPrompt(projectName)}</span>
-                  <span className="break-all text-[#d4d4d4]">{entry.command}</span>
-                  <span className="ml-auto shrink-0">
-                    {entry.status === 'running' ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-[#2a2a2a] px-2 py-0.5 text-[9px] uppercase tracking-widest text-[#8b8b8b]">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Running
-                      </span>
-                    ) : (
-                      <span className={`rounded-full px-2 py-0.5 text-[9px] uppercase tracking-widest ${entry.status === 'success' ? 'bg-[#1a4c28] text-[#76f59e]' : 'bg-[#5c1616] text-[#ffb3b3]'}`}>
-                        {entry.status === 'success' ? `exit ${entry.exitCode ?? 0}` : 'error'}
-                      </span>
-                    )}
-                  </span>
-                </div>
-                {(entry.stdout || entry.stderr) && (
-                  <div className="mt-2 space-y-1 pl-4">
-                    {entry.stdout && <pre className="whitespace-pre-wrap text-[#c6d0e1]">{entry.stdout}</pre>}
-                    {entry.stderr && <pre className="whitespace-pre-wrap text-[#ffb3b3]">{entry.stderr}</pre>}
-                  </div>
-                )}
-              </div>
-            ))
-          ) : (
-            <div className="rounded border border-dashed border-[#2a2a2a] px-3 py-4 text-[#8b8b8b]">
-              Terminal output will appear here once you run a command.
-            </div>
-          )}
-        </div>
-        <form onSubmit={handleTerminalSubmit} className="border-t border-[#232323] bg-[#101010] px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="shrink-0 text-[#6f6f6f]">{formatTerminalPrompt(projectName)}</span>
-            <input
-              value={commandInput}
-              onChange={(event) => setCommandInput(event.target.value)}
-              disabled={terminalBusy || !projectRoot}
-              placeholder={projectRoot ? 'type a command and press Enter' : 'Open a project to use the terminal'}
-              className="min-w-0 flex-1 border-0 bg-transparent p-0 text-[#e6edf3] outline-none placeholder:text-[#5f5f5f] disabled:cursor-not-allowed disabled:opacity-40"
-              autoCapitalize="off"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-          </div>
-          {terminalError && <p className="mt-1 text-[#ff7b72]">{terminalError}</p>}
-        </form>
-      </div>
-    );
+    return <CodeSpaceTerminal projectRoot={projectRoot} active={bottomActiveTab === 'terminal'} />;
   };
 
   return (
@@ -608,7 +411,13 @@ export function BottomPanel({
           </button>
         </div>
       </div>
-      <div className="h-[calc(100%-2.25rem)] overflow-auto p-3 text-[12px] text-[#d4d4d4]">{renderTabContent()}</div>
+      <div
+        className={`h-[calc(100%-2.25rem)] text-[12px] text-[#d4d4d4] ${
+          bottomActiveTab === 'terminal' ? 'min-h-0 overflow-hidden p-1' : 'overflow-auto p-3'
+        }`}
+      >
+        {renderTabContent()}
+      </div>
     </div>
   );
 }

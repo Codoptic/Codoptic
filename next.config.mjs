@@ -3,6 +3,7 @@ const nextConfig = {
   reactStrictMode: true,
   experimental: {
     serverActions: { bodySizeLimit: '32mb' },
+    serverComponentsExternalPackages: ['@lydell/node-pty'],
   },
   webpack: (config, { isServer }) => {
     // Inline .txt assets (DSL examples, test fixtures)
