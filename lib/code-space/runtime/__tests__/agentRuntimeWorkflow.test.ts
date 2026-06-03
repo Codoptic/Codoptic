@@ -78,7 +78,7 @@ describe('AgentRuntime workflow contracts', () => {
         projectName: 'demo',
         messages: [
           { role: 'user', content: 'Plan a runtime refactor for app.ts' },
-          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+          { role: 'user', content: 'Plan clarification answers: preserve the exported run API and validate with the detected test command.' },
         ],
         mode: 'plan',
         model: 'test',
@@ -118,7 +118,7 @@ describe('AgentRuntime workflow contracts', () => {
         projectName: 'demo',
         messages: [
           { role: 'user', content: 'Plan a runtime refactor for app.ts' },
-          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+          { role: 'user', content: 'Plan clarification answers: preserve the exported run API and validate with the detected test command.' },
         ],
         mode: 'plan',
         model: 'test',
@@ -142,9 +142,14 @@ describe('AgentRuntime workflow contracts', () => {
     expect(events.some((event) => event.type === 'diff_proposed' || event.type === 'file_applied')).toBe(false);
   });
 
-  it('plan mode pauses for approach clarification before calling the model', async () => {
+  it('plan mode pauses for LLM-authored high-level clarification after reading evidence', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-clarify-'));
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'read_file', input: { path: 'app.ts' } }] }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't2', name: 'ask_clarifying_questions', input: { questions: [{ question: 'Should this refactor preserve the exported run API or introduce a new runtime entrypoint?', rationale: 'The selected boundary changes whether callers keep importing run or migrate to a new module.', options: [{ label: 'Preserve run API', description: 'Keep the existing exported function as the public boundary.' }, { label: 'New entrypoint', description: 'Introduce a replacement runtime boundary and plan caller migration.' }] }] } }] }))
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
 
     const events: AgentSSEEvent[] = [];
     await new AgentRuntime().run(
@@ -168,22 +173,25 @@ describe('AgentRuntime workflow contracts', () => {
     );
 
     const clarify = events.find((event) => event.type === 'clarifying_questions_created');
-    expect(clarify && clarify.type === 'clarifying_questions_created' ? clarify.questions[0]?.question : '').toMatch(/implementation approach/i);
+    expect(clarify && clarify.type === 'clarifying_questions_created' ? clarify.questions[0]?.question : '').toMatch(/run API|entrypoint/i);
     expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
-    expect(mockedTurn).not.toHaveBeenCalled();
+    expect(mockedTurn.mock.calls.length).toBe(3);
+    expect(events.some((event) => event.type === 'structured_event' && event.event.type === 'file.read')).toBe(true);
   });
 
-  it('forces plan clarification before accepting a model-authored plan', async () => {
-    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-force-clarify-'));
+  it('does not synthesize clarification questions when the model can author a plan', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-no-force-clarify-'));
     await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf8');
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
 
-    mockedTurn.mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN, summary: 'Refactor app.run', status: 'ready', inspectedFiles: ['app.ts'] } }] }));
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN, summary: 'Refactor app.run', status: 'ready', inspectedFiles: ['app.ts'] } }] }))
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
 
     const events: AgentSSEEvent[] = [];
     await new AgentRuntime().run(
       {
-        sessionId: 'session-plan-force-clarify',
+        sessionId: 'session-plan-no-force-clarify',
         projectRoot: tmpDir,
         projectName: 'demo',
         messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
@@ -201,9 +209,8 @@ describe('AgentRuntime workflow contracts', () => {
       },
     );
 
-    const clarify = events.find((event) => event.type === 'clarifying_questions_created');
-    expect(clarify?.type).toBe('clarifying_questions_created');
-    expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
+    expect(events.some((event) => event.type === 'clarifying_questions_created')).toBe(false);
+    expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(true);
   });
 
   it('always produces a previewable plan artifact after clarification even if the model never calls write_plan_artifact', async () => {
@@ -222,7 +229,7 @@ describe('AgentRuntime workflow contracts', () => {
         projectName: 'medbot',
         messages: [
           { role: 'user', content: 'Plan a refactor for app.ts' },
-          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+          { role: 'user', content: 'Plan clarification answers: preserve the exported run API and validate with the detected test command.' },
         ],
         mode: 'plan',
         model: 'test',

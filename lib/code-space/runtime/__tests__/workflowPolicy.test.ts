@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ContextGraphResult } from '../contextGraphEngine';
 import {
   assessContextSufficiency,
+  buildAmbiguityClarificationGate,
   buildRecallDirective,
-  buildFallbackClarifyingQuestions,
   buildWorkflowKernelPrompt,
   formatWorkflowDodMarkdown,
 } from '../workflowPolicy';
@@ -77,10 +77,16 @@ describe('v3.2 workflow policy', () => {
     expect(buildRecallDirective({ status: 'needs_recall', confidence: 'medium', score: 42, blockers: [], warnings: ['missing tests'], requiredEvidence: ['tests'], recommendedRecall: ['example.test.ts'] })).toContain('example.test.ts');
   });
 
-  it('asks the user to choose one implementation approach before planning', () => {
-    const questions = buildFallbackClarifyingQuestions('run-1');
-    expect(questions[0]?.question).toMatch(/implementation approach/i);
-    expect(questions[0]?.choices).toContain('Minimal owner change');
-    expect(questions[0]?.choices).toContain('Coordinated related changes');
+  it('keeps clarification guidance evidence-first and non-canned', () => {
+    const guidance = buildAmbiguityClarificationGate({
+      ambiguous: true,
+      score: 75,
+      reasons: ['Prompt requests a broad capability with multiple plausible designs.'],
+    });
+
+    expect(guidance).toContain('First read/search enough repository evidence');
+    expect(guidance).toContain('high-level product, architecture, data-model');
+    expect(guidance).not.toContain('Minimal owner change');
+    expect(guidance).not.toContain('How should we verify');
   });
 });
