@@ -67,7 +67,7 @@ export interface CodeAgentContext {
   /** Paths proposed (but NOT written) under suggest_only autonomy — pending user accept/reject. */
   proposedFiles: Set<string>;
   /** Latest proposed before/after per path (suggest_only); used for final pre-completion validation. */
-  proposedLedger: Map<string, Pick<LedgerEntry, 'beforeContent' | 'afterContent'>>;
+  proposedLedger: Map<string, Pick<LedgerEntry, 'beforeContent' | 'afterContent' | 'existedBefore'>>;
   /** Recoverable edit_file failures per path — cleared when a working edit lands. */
   editFailures: Map<string, EditFailure[]>;
   /** Files the model has read this run. */
@@ -583,7 +583,7 @@ export class ToolExecutor {
       existedBefore[filePath] = disk != null;
     }
 
-    const grouped = applyGroupedEditBlocks(currentFiles, edits);
+    const grouped = applyGroupedEditBlocks(currentFiles, edits, { existingFiles: existedBefore });
     if (!grouped.ok) {
       for (const diagnostic of grouped.diagnostics) {
         const code = toEditFailureCode(diagnostic.code);
@@ -641,6 +641,7 @@ export class ToolExecutor {
         // card instead of stacking, so applying it sends original→cumulative and never conflicts.
         const existing = ctx.proposedLedger.get(normalized);
         const originalBefore = existing ? existing.beforeContent : preview.beforeContent;
+        const originalExisted = existing ? existing.existedBefore : preview.beforeExists;
         const cumulativeDiff = createUnifiedDiff(normalized, originalBefore, preview.afterContent);
         await ctx.emit({
           type: 'diff_proposed',
@@ -653,7 +654,7 @@ export class ToolExecutor {
           autoApplied: false,
         });
         ctx.proposedFiles.add(normalized);
-        ctx.proposedLedger.set(normalized, { beforeContent: originalBefore, afterContent: preview.afterContent });
+        ctx.proposedLedger.set(normalized, { beforeContent: originalBefore, afterContent: preview.afterContent, existedBefore: originalExisted });
         clearEditFailures(ctx, normalized);
         if (decision.approvalRequired) await ctx.emitRuntime('tool.approval.required', { tool: 'edit_file', path: normalized, reason: decision.reason });
         continue;
@@ -665,7 +666,7 @@ export class ToolExecutor {
           projectId: ctx.projectId,
           runId: ctx.runId,
           patchId: `patch:${ctx.runId}:${normalized}`,
-          files: [{ path: normalized, beforeContent: preview.beforeContent, afterContent: preview.afterContent }],
+          files: [{ path: normalized, beforeContent: preview.beforeContent, afterContent: preview.afterContent, existedBefore: preview.beforeExists }],
         });
         if (result.checkpoint) {
           ctx.checkpoints.push(result.checkpoint);
@@ -711,7 +712,7 @@ export class ToolExecutor {
 
       const existing = ctx.ledger.get(normalized);
       const original = existing ? existing.beforeContent : preview.beforeContent;
-      ctx.ledger.set(normalized, { beforeContent: original, afterContent: preview.afterContent, deleted: false, existedBefore: existing ? existing.existedBefore : existedBefore[normalized] ?? false });
+      ctx.ledger.set(normalized, { beforeContent: original, afterContent: preview.afterContent, deleted: false, existedBefore: existing ? existing.existedBefore : preview.beforeExists });
       applied.push(normalized);
       await ctx.emit({ type: 'file_applied', filePath: normalized, beforeContent: original, afterContent: preview.afterContent, explanation: preview.explanation, unifiedDiff: preview.unifiedDiff, hash: hashContent(preview.afterContent) });
       await ctx.emitRuntime(existedBefore[normalized] ? 'file.updated' : 'file.created', { path: normalized });

@@ -14,7 +14,7 @@ export async function POST(req: Request, { params }: { params: { patchId: string
   const store = getCodeSpaceStore();
   const data = await store.read();
   const patch = data.patches.find((item) => item.id === params.patchId) as (typeof data.patches[number] & {
-    files?: Array<{ path: string; beforeContent: string; afterContent: string; deleted?: boolean }>;
+    files?: Array<{ path: string; beforeContent: string; afterContent: string; existedBefore?: boolean; deleted?: boolean }>;
   }) | undefined;
   if (!patch) return NextResponse.json({ error: 'Patch not found' }, { status: 404 });
   if (!patch.files?.length) {

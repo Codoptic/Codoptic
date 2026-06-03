@@ -1,8 +1,8 @@
 // Motivation vs Logic: The mention picker needs a vocabulary shared between the index, query
 // service, composer UI, and agent payload so each layer can hand off structured records without
 // re-parsing strings. These types encode the spec's contract: forward-slash relative paths,
-// basename-only display, full-path tooltip, and a `kind` discriminator that survives all the way
-// to `/api/code-space/agent` as `attachments[]`.
+// compact chip display, full-path tooltip/copy text, and a `kind` discriminator that survives
+// all the way to `/api/code-space/agent` as `attachments[]`.
 
 export type MentionEntryType = 'file' | 'folder';
 

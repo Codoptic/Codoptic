@@ -4,11 +4,12 @@
 // `<textarea>` that stored mentions as `[basename](path)` markdown text inside the value; the
 // mirror highlighted the entire `[...](...)` substring, which is why the visible "chip" still
 // showed the full project path. The rewrite uses a contenteditable div with atomic
-// `contenteditable=false` mention chips. Visible chip text is basename-only; the relative path
-// lives on `data-mention-path` and `title` for tooltip + a11y. The DOM is the source of truth
-// during user interaction; React only mounts the initial empty state and listens for external
-// resets (e.g. clearing the input after submit). On every input/selection change we recompute
-// the active `@token`, run it through `queryMentionSuggestions`, and reposition the suggestor.
+// `contenteditable=false` mention chips. Visible chip text stays compact, but the relative path
+// lives on `data-mention-path`, `title`, and the serialized markdown form so tooltips, copy, and
+// agent payloads all preserve the full project-root path. The DOM is the source of truth during
+// user interaction; React only mounts the initial empty state and listens for external resets
+// (e.g. clearing the input after submit). On every input/selection change we recompute the active
+// `@token`, run it through `queryMentionSuggestions`, and reposition the suggestor.
 
 import React, {
   useCallback,
@@ -26,7 +27,11 @@ import { queryMentionSuggestions } from '@/lib/code-space/mentions/query';
 import type { MentionSuggestion, SelectedMention } from '@/lib/code-space/mentions/types';
 import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionIndex';
 import { MentionSuggestor } from './mentions/MentionSuggestor';
-import { createMentionChipNode, MENTION_CHIP_CLASS } from './mentions/MentionChip';
+import {
+  createMentionChipNode,
+  mentionChipMarkdown,
+  MENTION_CHIP_CLASS,
+} from './mentions/MentionChip';
 
 const MAX_SUGGESTIONS = 10;
 const TOKEN_CHAR_RE = /[A-Za-z0-9_./\-]/;
@@ -55,26 +60,44 @@ interface ActiveToken {
   range: Range;
 }
 
-// Serialize the editor's DOM tree into (text, mentions). Mentions are recognised by their
-// `data-mention-chip="true"` flag; everything else contributes plain text. `&nbsp;` (U+00A0) is
-// converted back to a regular space so the submitted text is human-readable.
-function serializeEditor(root: HTMLElement): { text: string; mentions: SelectedMention[] } {
-  let text = '';
-  const mentions: SelectedMention[] = [];
+function readMentionDisplayName(el: HTMLElement, fallback: string): string {
+  return el.getAttribute('data-mention-display-name') ?? fallback;
+}
 
-  const walk = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += (node.textContent ?? '').replace(/\u00A0/g, ' ');
-      return;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    const el = node as HTMLElement;
-    if (el.getAttribute && el.getAttribute('data-mention-chip') === 'true') {
+function serializeMentionChip(el: HTMLElement): string {
+  const type = (el.getAttribute('data-mention-type') as 'file' | 'folder') ?? 'file';
+  const relativePath = el.getAttribute('data-mention-path') ?? '';
+  const basename = el.getAttribute('data-mention-name') ?? el.textContent ?? '';
+  const displayName = readMentionDisplayName(el, type === 'folder' ? `${basename}/` : basename);
+  const mention: SelectedMention = {
+    id: `mention:preview:${relativePath}`,
+    type,
+    basename,
+    displayName,
+    relativePath,
+  };
+  return mentionChipMarkdown(mention);
+}
+
+function serializeNode(node: Node, mentions: SelectedMention[] | null = null): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? '').replace(/\u00A0/g, ' ');
+  }
+  if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    let text = '';
+    node.childNodes.forEach((child) => {
+      text += serializeNode(child, mentions);
+    });
+    return text;
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+  const el = node as HTMLElement;
+  if (el.getAttribute && el.getAttribute('data-mention-chip') === 'true') {
+    if (mentions) {
       const type = (el.getAttribute('data-mention-type') as 'file' | 'folder') ?? 'file';
       const relativePath = el.getAttribute('data-mention-path') ?? '';
       const basename = el.getAttribute('data-mention-name') ?? el.textContent ?? '';
-      const displayName = type === 'folder' ? `${basename}/` : basename;
-      text += `@${basename}`;
+      const displayName = readMentionDisplayName(el, type === 'folder' ? `${basename}/` : basename);
       mentions.push({
         id: `mention:${mentions.length}:${relativePath}`,
         type,
@@ -82,15 +105,23 @@ function serializeEditor(root: HTMLElement): { text: string; mentions: SelectedM
         displayName,
         relativePath,
       });
-      return;
     }
-    if (el.tagName === 'BR') {
-      text += '\n';
-      return;
-    }
-    el.childNodes.forEach(walk);
-  };
-  root.childNodes.forEach(walk);
+    return serializeMentionChip(el);
+  }
+  if (el.tagName === 'BR') return '\n';
+  let text = '';
+  el.childNodes.forEach((child) => {
+    text += serializeNode(child, mentions);
+  });
+  return text;
+}
+
+// Serialize the editor's DOM tree into (text, mentions). Mentions are recognised by their
+// `data-mention-chip="true"` flag; everything else contributes plain text. `&nbsp;` (U+00A0) is
+// converted back to a regular space so the submitted text is human-readable.
+function serializeEditor(root: HTMLElement): { text: string; mentions: SelectedMention[] } {
+  const mentions: SelectedMention[] = [];
+  const text = serializeNode(root, mentions);
   return { text, mentions };
 }
 
@@ -365,6 +396,27 @@ export function FileMentionInput({
     [handleInput],
   );
 
+  const handleCopy = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
+    const root = editorRef.current;
+    if (!root) return;
+    const doc = root.ownerDocument;
+    if (!doc) return;
+    const selection = doc.getSelection?.();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.commonAncestorContainer)) return;
+
+    const fragment = range.cloneContents();
+    const copied = serializeNode(fragment);
+    if (!copied) return;
+
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    event.preventDefault();
+    clipboard.setData('text/plain', copied);
+    clipboard.setData('text/html', copied);
+  }, []);
+
   const handleBeforeInput = useCallback(
     (event: Event) => {
       const inputEvent = event as InputEvent;
@@ -452,6 +504,7 @@ export function FileMentionInput({
         onInput={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onCopy={handleCopy}
         onFocus={handleFocus}
         onBlur={handleBlur}
         className="mention-editor max-h-28 min-h-[28px] w-full overflow-y-auto rounded border border-[#30363d] bg-[#161b22] px-2 py-1.5 font-mono text-[11px] leading-5 text-[#e6edf3] outline-none focus-within:border-[#58a6ff]"

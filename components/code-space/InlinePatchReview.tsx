@@ -88,7 +88,7 @@ class HunkActionContentWidget implements Monaco.editor.IContentWidget {
   getPosition(): Monaco.editor.IContentWidgetPosition | null {
     return {
       position: { lineNumber: this.getAnchorLine(), column: 1 },
-      preference: [this.monaco.editor.ContentWidgetPositionPreference.EXCLUSIVE],
+      preference: [this.monaco.editor.ContentWidgetPositionPreference.EXACT],
     };
   }
 }

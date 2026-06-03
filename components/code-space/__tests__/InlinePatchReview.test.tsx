@@ -38,7 +38,7 @@ vi.mock('@monaco-editor/react', () => ({
         editor: {
           setTheme: () => undefined,
           EditorOption: { lineHeight: 1 },
-          ContentWidgetPositionPreference: { EXCLUSIVE: 0 },
+          ContentWidgetPositionPreference: { EXACT: 0 },
           OverviewRulerLane: { Left: 1 },
         },
         Range: class MockRange {

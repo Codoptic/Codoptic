@@ -37,9 +37,9 @@ function highlightBasename(basename: string, ranges: MentionMatchRange[]): React
     if (start > cursor) parts.push(basename.slice(cursor, start));
     if (end > start) {
       parts.push(
-        <mark key={`m:${idx}`} className="mention-suggestor__match">
+        <span key={`m:${idx}`} className="mention-suggestor__match">
           {basename.slice(start, end)}
-        </mark>,
+        </span>,
       );
     }
     cursor = Math.max(cursor, end);
@@ -109,6 +109,7 @@ export function MentionSuggestor({
             data-suggestion-index={index}
             data-mention-type={suggestion.type}
             data-mention-path={suggestion.relativePath}
+            title={suggestion.tooltip}
             onMouseDown={(event) => {
               event.preventDefault();
               onSelect(suggestion);

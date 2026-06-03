@@ -11,6 +11,7 @@ export interface EditBlockPreview {
   path: string;
   beforeContent: string;
   afterContent: string;
+  beforeExists: boolean;
   explanation: string;
   unifiedDiff: string;
   beforeHash: string;
@@ -33,6 +34,10 @@ export interface EditBlockDiagnostic {
 export type EditBlockResult =
   | { ok: true; previews: EditBlockPreview[] }
   | { ok: false; diagnostics: EditBlockDiagnostic[] };
+
+export interface EditBlockApplyOptions {
+  fileExists?: boolean;
+}
 
 function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -59,18 +64,37 @@ export function normalizeAgentPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/');
 }
 
-export function applyEditBlocksToContent(path: string, beforeContent: string, edits: EditBlock[]): EditBlockResult {
+export function applyEditBlocksToContent(path: string, beforeContent: string, edits: EditBlock[], options: EditBlockApplyOptions = {}): EditBlockResult {
   const normalizedPath = normalizeAgentPath(path);
   if (!normalizedPath || normalizedPath.startsWith('../') || normalizedPath.includes('/../')) {
     return { ok: false, diagnostics: [{ path, code: 'INVALID_PATH', message: `Invalid edit path: ${path}` }] };
   }
 
   let nextContent = beforeContent;
+  let exists = options.fileExists ?? true;
   const diagnostics: EditBlockDiagnostic[] = [];
 
   for (const edit of edits) {
     if (!edit.search) {
-      diagnostics.push({ path: normalizedPath, code: 'EMPTY_SEARCH', message: 'SEARCH block cannot be empty.' });
+      if (!exists) {
+        nextContent = edit.replace;
+        exists = true;
+        continue;
+      }
+      diagnostics.push({
+        path: normalizedPath,
+        code: 'EMPTY_SEARCH',
+        message: 'SEARCH block can only be empty when creating a file that does not exist.',
+      });
+      continue;
+    }
+
+    if (!exists) {
+      diagnostics.push({
+        path: normalizedPath,
+        code: 'SEARCH_NOT_FOUND',
+        message: 'Target file does not exist. Use an empty SEARCH block to create it safely through edit_file.',
+      });
       continue;
     }
 
@@ -104,6 +128,7 @@ export function applyEditBlocksToContent(path: string, beforeContent: string, ed
         path: normalizedPath,
         beforeContent,
         afterContent: nextContent,
+        beforeExists: options.fileExists ?? true,
         explanation: edits.map((edit) => edit.reason).filter(Boolean).join('\n') || 'Surgical edit block proposal',
         unifiedDiff: createUnifiedDiff(normalizedPath, beforeContent, nextContent),
         beforeHash: hashContent(beforeContent),
@@ -113,7 +138,7 @@ export function applyEditBlocksToContent(path: string, beforeContent: string, ed
   };
 }
 
-export function applyGroupedEditBlocks(files: Record<string, string>, edits: EditBlock[]): EditBlockResult {
+export function applyGroupedEditBlocks(files: Record<string, string>, edits: EditBlock[], options: { existingFiles?: Record<string, boolean> } = {}): EditBlockResult {
   const grouped = new Map<string, EditBlock[]>();
   for (const edit of edits) {
     const normalized = normalizeAgentPath(edit.path);
@@ -124,7 +149,7 @@ export function applyGroupedEditBlocks(files: Record<string, string>, edits: Edi
   const diagnostics: EditBlockDiagnostic[] = [];
   for (const [filePath, fileEdits] of grouped) {
     const before = files[filePath] ?? '';
-    const result = applyEditBlocksToContent(filePath, before, fileEdits);
+    const result = applyEditBlocksToContent(filePath, before, fileEdits, { fileExists: options.existingFiles?.[filePath] ?? true });
     if (!result.ok) diagnostics.push(...result.diagnostics);
     else previews.push(...result.previews);
   }

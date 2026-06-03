@@ -2,6 +2,7 @@ export interface PatchProposalFileInput {
   path: string;
   beforeContent: string;
   afterContent: string;
+  existedBefore?: boolean;
   deleted?: boolean;
 }
 

@@ -79,6 +79,14 @@ function optionEls(): HTMLElement[] {
   return Array.from(container!.querySelectorAll<HTMLElement>('[role="option"]'));
 }
 
+function selectNode(node: Node) {
+  const range = document.createRange();
+  range.selectNode(node);
+  const sel = document.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
 afterEach(() => {
   if (root) act(() => root?.unmount());
   container?.remove();
@@ -185,7 +193,7 @@ describe('FileMentionInput (contenteditable)', () => {
     expect(container!.querySelector('[data-testid="mention-dropdown"]')).toBeNull();
   });
 
-  it('clicking a suggestion inserts a basename-only chip with full-path metadata', () => {
+  it('clicking a suggestion inserts a chip with markdown-style text and full-path metadata', () => {
     const onChange = vi.fn();
     renderInput({
       onChange,
@@ -206,16 +214,17 @@ describe('FileMentionInput (contenteditable)', () => {
     expect(chip!.textContent).toBe('controlPanel.tsx');
     expect(chip!.getAttribute('data-mention-path')).toBe('app/components/control/controlPanel.tsx');
     expect(chip!.getAttribute('data-mention-name')).toBe('controlPanel.tsx');
+    expect(chip!.getAttribute('data-mention-display-name')).toBe('controlPanel.tsx');
     expect(chip!.getAttribute('data-mention-type')).toBe('file');
     expect(chip!.getAttribute('title')).toBe('app/components/control/controlPanel.tsx');
     expect(chip!.getAttribute('aria-label')).toBe('File app/components/control/controlPanel.tsx');
-    // Critical regression: the chip's visible text is the basename, not the full path.
+    // Critical regression: the DOM stays compact, but the serialized prompt text preserves the full path.
     expect(chip!.textContent).not.toContain('app/components');
     expect(chip!.textContent).not.toContain('/');
 
     // onChange was called with (text, mentions).
     const lastCall = onChange.mock.calls.at(-1) ?? [];
-    expect(lastCall[0]).toContain('@controlPanel.tsx');
+    expect(lastCall[0]).toContain('[controlPanel.tsx](app/components/control/controlPanel.tsx)');
     expect(Array.isArray(lastCall[1])).toBe(true);
     expect(lastCall[1][0].relativePath).toBe('app/components/control/controlPanel.tsx');
   });
@@ -292,6 +301,41 @@ describe('FileMentionInput (contenteditable)', () => {
     expect(chip!.textContent).toBe('backend/');
     expect(chip!.getAttribute('data-mention-type')).toBe('folder');
     expect(chip!.getAttribute('data-mention-path')).toBe('backend');
+    expect(chip!.getAttribute('data-mention-display-name')).toBe('backend/');
     expect(chip!.getAttribute('aria-label')).toBe('Folder backend');
+  });
+
+  it('copies a selected chip as markdown text with the full project path', () => {
+    renderInput({
+      filePaths: ['app/components/control/controlPanel.tsx'],
+    });
+    typeIntoEditor('@control');
+    const target = optionEls().find((el) =>
+      el.getAttribute('data-mention-path') === 'app/components/control/controlPanel.tsx',
+    );
+    expect(target).toBeTruthy();
+    act(() => {
+      target!.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }),
+      );
+    });
+    const chip = container!.querySelector<HTMLSpanElement>('[data-mention-chip="true"]');
+    expect(chip).toBeTruthy();
+    act(() => {
+      selectNode(chip!);
+    });
+    const setData = vi.fn();
+    const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
+    Object.defineProperty(copyEvent, 'clipboardData', {
+      value: { setData },
+    });
+    act(() => {
+      editor().dispatchEvent(copyEvent);
+    });
+
+    expect(setData).toHaveBeenCalledWith(
+      'text/plain',
+      '[controlPanel.tsx](app/components/control/controlPanel.tsx)',
+    );
   });
 });

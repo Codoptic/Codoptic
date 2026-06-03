@@ -85,6 +85,48 @@ describe('ToolExecutor.edit_file', () => {
     expect(ctx.checkpoints.length).toBe(0);
   });
 
+  it('creates a missing file with an empty search block', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('edit_file', {
+        edits: [
+          {
+            path: 'docs/milestones/m3/deliverables.md',
+            search: '',
+            replace: '# Deliverables\n\n- Review patch creation flow.\n',
+            reason: 'add milestone deliverables',
+          },
+        ],
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(await readFile(path.join(tmpDir, 'docs/milestones/m3/deliverables.md'), 'utf8')).toBe('# Deliverables\n\n- Review patch creation flow.\n');
+    expect(ctx.ledger.get('docs/milestones/m3/deliverables.md')?.existedBefore).toBe(false);
+    expect(events.some((event) => event.type === 'file_applied')).toBe(true);
+  });
+
+  it('does not treat an existing blank file as a create target', async () => {
+    await writeFile(path.join(tmpDir, 'blank.md'), '', 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('edit_file', { edits: [{ path: 'blank.md', search: '', replace: '# Title\n', reason: 'replace blank file' }] }),
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/can only be empty when creating/i);
+    expect(await readFile(path.join(tmpDir, 'blank.md'), 'utf8')).toBe('');
+    expect(ctx.ledger.size).toBe(0);
+  });
+
   it('proposes instead of writing under suggest_only autonomy', async () => {
     await writeFile(path.join(tmpDir, 'a.ts'), 'export const x = 1;\n', 'utf8');
     const events: AgentSSEEvent[] = [];
@@ -102,6 +144,21 @@ describe('ToolExecutor.edit_file', () => {
     expect(ctx.proposedFiles.has('a.ts')).toBe(true);
     expect(ctx.proposedLedger.get('a.ts')?.afterContent).toContain('x = 2');
     expect(ctx.ledger.size).toBe(0);
+  });
+
+  it('proposes a missing file creation with explicit nonexistence metadata', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('edit_file', { edits: [{ path: 'new.md', search: '', replace: 'hello\n', reason: 'add doc' }] }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(ctx.proposedLedger.get('new.md')).toMatchObject({ beforeContent: '', afterContent: 'hello\n', existedBefore: false });
+    await expect(readFile(path.join(tmpDir, 'new.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects invalid Python proposals under suggest_only instead of surfacing them for review', async () => {

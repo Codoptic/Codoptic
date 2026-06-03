@@ -72,6 +72,51 @@ describe('unified patch lifecycle', () => {
     expect(await readFile(path.join(tmpDir, 'file.ts'), 'utf8')).toBe(cumulative);
   });
 
+  it('creates a missing file only when the proposal records it as nonexistent', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-create-'));
+
+    const result = await applyPatchFiles({
+      root: tmpDir,
+      projectId: 'project',
+      runId: 'run',
+      patchId: 'patch',
+      files: [{ path: 'docs/new.md', beforeContent: '', afterContent: 'new\n', existedBefore: false }],
+    });
+
+    expect(result.status).toBe('applied');
+    expect(await readFile(path.join(tmpDir, 'docs/new.md'), 'utf8')).toBe('new\n');
+  });
+
+  it('rejects a create proposal if the file appeared before apply', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-create-conflict-'));
+    await writeFile(path.join(tmpDir, 'new.md'), 'user content\n', 'utf8');
+
+    await expect(
+      applyPatchFiles({
+        root: tmpDir,
+        projectId: 'project',
+        runId: 'run',
+        patchId: 'patch',
+        files: [{ path: 'new.md', beforeContent: '', afterContent: 'agent content\n', existedBefore: false }],
+      }),
+    ).rejects.toMatchObject({ code: 'PATCH_CONFLICT' });
+    expect(await readFile(path.join(tmpDir, 'new.md'), 'utf8')).toBe('user content\n');
+  });
+
+  it('rejects an update proposal if an originally blank file is now missing', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-blank-missing-'));
+
+    await expect(
+      applyPatchFiles({
+        root: tmpDir,
+        projectId: 'project',
+        runId: 'run',
+        patchId: 'patch',
+        files: [{ path: 'blank.md', beforeContent: '', afterContent: 'filled\n', existedBefore: true }],
+      }),
+    ).rejects.toMatchObject({ code: 'PATCH_CONFLICT' });
+  });
+
   it('creates a checkpoint before writing files', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-patch-checkpoint-'));
     await writeFile(path.join(tmpDir, 'file.ts'), 'old\n', 'utf8');

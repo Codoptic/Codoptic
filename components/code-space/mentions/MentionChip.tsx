@@ -11,7 +11,6 @@
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
 
 export const MENTION_CHIP_CLASS = 'mention-chip';
-const FOLDER_LABEL_SUFFIX = '/';
 
 function ariaLabelFor(mention: SelectedMention): string {
   return mention.type === 'file'
@@ -19,18 +18,22 @@ function ariaLabelFor(mention: SelectedMention): string {
     : `Folder ${mention.relativePath}`;
 }
 
-function chipText(mention: SelectedMention): string {
+export function mentionChipLabel(mention: SelectedMention): string {
   if (mention.type === 'folder') {
-    const last = mention.relativePath.split('/').filter(Boolean).pop() ?? mention.basename;
-    return `${last}${FOLDER_LABEL_SUFFIX}`;
+    return mention.displayName || `${mention.basename}/`;
   }
-  return mention.basename;
+  return mention.displayName || mention.basename;
+}
+
+export function mentionChipMarkdown(mention: SelectedMention): string {
+  return `[${mentionChipLabel(mention)}](${mention.relativePath})`;
 }
 
 /**
  * Build the DOM node that lives inside the contenteditable composer. The composer treats the
  * returned span as opaque (contenteditable=false) and reads back its `data-mention-*` attributes
- * when serializing to (text, mentions) on submit. Keep this in sync with `MentionChip` below.
+ * when serializing to (text, mentions) on submit or copy. Keep this in sync with `MentionChip`
+ * below.
  */
 export function createMentionChipNode(
   doc: Document,
@@ -43,11 +46,12 @@ export function createMentionChipNode(
   span.setAttribute('data-mention-type', mention.type);
   span.setAttribute('data-mention-path', mention.relativePath);
   span.setAttribute('data-mention-name', mention.basename);
+  span.setAttribute('data-mention-display-name', mention.displayName);
   span.setAttribute('title', mention.relativePath);
   span.setAttribute('aria-label', ariaLabelFor(mention));
   span.setAttribute('role', 'button');
   span.setAttribute('tabindex', '-1');
-  span.textContent = chipText(mention);
+  span.textContent = mentionChipLabel(mention);
   return span;
 }
 
@@ -59,11 +63,11 @@ export interface MentionChipProps {
 
 /**
  * Read-only render of a mention chip outside the composer. Same shape as
- * `createMentionChipNode` so screen readers see the full path while the visible label stays
- * basename-only.
+ * `createMentionChipNode` so screen readers and tooltips still expose the full path while the
+ * visible label stays compact.
  */
 export function MentionChip({ mention, onRemove, removable = false }: MentionChipProps) {
-  const visible = chipText(mention);
+  const visible = mentionChipLabel(mention);
   const ariaLabel = ariaLabelFor(mention);
   return (
     <span
@@ -74,6 +78,7 @@ export function MentionChip({ mention, onRemove, removable = false }: MentionChi
       data-mention-type={mention.type}
       data-mention-path={mention.relativePath}
       data-mention-name={mention.basename}
+      data-mention-display-name={mention.displayName}
     >
       <span className="mention-chip__label">{visible}</span>
       {removable && onRemove ? (

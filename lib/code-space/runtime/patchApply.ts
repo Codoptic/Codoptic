@@ -8,6 +8,7 @@ export interface PatchApplyFile {
   path: string;
   beforeContent: string;
   afterContent: string;
+  existedBefore?: boolean;
   deleted?: boolean;
 }
 
@@ -90,6 +91,29 @@ export async function applyPatchFiles({
       fileExists = false;
     }
 
+    if (file.existedBefore === false && fileExists) {
+      const diff = firstDifference(current, file.beforeContent) ?? { index: 0, line: 1, column: 1 };
+      conflicts.push({
+        path: file.path,
+        line: diff.line,
+        column: diff.column,
+        currentPreview: current.slice(Math.max(0, diff.index - 160), diff.index + 160),
+        expectedPreview: '(file did not exist when patch was proposed)',
+      });
+      continue;
+    }
+
+    if (file.existedBefore === true && !fileExists) {
+      conflicts.push({
+        path: file.path,
+        line: 1,
+        column: 1,
+        currentPreview: '(file is missing)',
+        expectedPreview: file.beforeContent.slice(0, 320),
+      });
+      continue;
+    }
+
     if (file.deleted) {
       if (!fileExists) {
         alreadyApplied.push(file.path);
@@ -108,11 +132,11 @@ export async function applyPatchFiles({
       continue;
     }
 
-    if (current === file.afterContent) {
+    if (current === file.afterContent && (file.existedBefore !== false || fileExists)) {
       alreadyApplied.push(file.path);
       continue;
     }
-    if (current !== file.beforeContent) {
+    if (file.existedBefore !== false && current !== file.beforeContent) {
       const diff = firstDifference(current, file.beforeContent) ?? { index: 0, line: 1, column: 1 };
       conflicts.push({
         path: file.path,

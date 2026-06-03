@@ -399,7 +399,7 @@ export class AgentRuntime {
         inspectedFiles: context.files.map((file) => ({ path: file.path, summary: file.summary })),
         validationCommands: validationCommands.map((command) => ({ command: [command.command, ...command.args].join(' '), reason: command.reason })),
       }),
-      `Note: this plan was auto-synthesized from the gathered evidence because the model did not finalize one itself. Context gate: ${sufficiency.status} (${sufficiency.score}/100). Review it before building.`,
+      'Note: this plan was auto-synthesized from the gathered evidence because the model did not finalize one itself. Review it before building.',
     ].join('\n\n');
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [fallback.filePath] });
@@ -513,6 +513,7 @@ export class AgentRuntime {
         beforeContent: entry.beforeContent,
         afterContent: entry.afterContent,
         deleted: false,
+        existedBefore: entry.existedBefore,
       }));
       const diffReport = await buildAggregatedDiff(root, proposalEntries);
       await savePendingValidation({
@@ -530,7 +531,7 @@ export class AgentRuntime {
           beforeContent: entry.beforeContent,
           afterContent: entry.afterContent,
           deleted: false,
-          existedBefore: entry.beforeContent.length > 0,
+          existedBefore: entry.existedBefore,
         })),
       });
       // Concise-output guard: tighten the model summary so a verbose multi-section dump

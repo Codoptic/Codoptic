@@ -12,6 +12,7 @@ const PatchFile = z.object({
   path: z.string().min(1),
   beforeContent: z.string(),
   afterContent: z.string(),
+  existedBefore: z.boolean().optional(),
   deleted: z.boolean().optional(),
 });
 
@@ -49,18 +50,21 @@ function resolveInside(root: string, relativePath: string): string {
   return target;
 }
 
-async function readCurrentFiles(root: string, filePaths: string[]): Promise<Record<string, string>> {
+async function readCurrentFiles(root: string, filePaths: string[]): Promise<{ contents: Record<string, string>; exists: Record<string, boolean> }> {
   const files: Record<string, string> = {};
+  const exists: Record<string, boolean> = {};
   for (const filePath of filePaths) {
     const target = resolveInside(root, filePath);
     try {
       files[filePath] = await fs.readFile(target, 'utf8');
+      exists[filePath] = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       files[filePath] = '';
+      exists[filePath] = false;
     }
   }
-  return files;
+  return { contents: files, exists };
 }
 
 export async function POST(req: Request) {
@@ -79,7 +83,7 @@ export async function POST(req: Request) {
     if (parsed.data.action === 'preview-edit-blocks') {
       const filePaths = Array.from(new Set(parsed.data.edits.map((edit) => edit.path.replace(/\\/g, '/').replace(/^\/+/, ''))));
       const currentFiles = await readCurrentFiles(guarded.resolved, filePaths);
-      const result = applyGroupedEditBlocks(currentFiles, parsed.data.edits);
+      const result = applyGroupedEditBlocks(currentFiles.contents, parsed.data.edits, { existingFiles: currentFiles.exists });
       if (!result.ok) {
         return NextResponse.json({ error: 'Edit block validation failed', code: 'EDIT_BLOCK_INVALID', diagnostics: result.diagnostics }, { status: 409 });
       }

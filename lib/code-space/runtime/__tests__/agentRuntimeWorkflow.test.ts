@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantTurn } from '@/lib/agent/providers';
 import { chatTurnWithTools } from '@/lib/agent/providers';
 import { AgentRuntime, runtimeSourceFingerprintForTests } from '../agentRuntime';
-import { REQUIRED_PLAN_SECTIONS } from '../planningEngine';
+import { PlanningEngine, REQUIRED_PLAN_SECTIONS } from '../planningEngine';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 
 vi.mock('@/lib/agent/providers', () => ({
@@ -206,6 +206,45 @@ describe('AgentRuntime workflow contracts', () => {
     expect(mockedTurn.mock.calls.length).toBeGreaterThan(1);
     const done = events.find((event) => event.type === 'agent_done');
     expect(done?.filesChanged).toContain('.agent/plans/session-plan-fallback.md');
+  });
+
+  it('keeps private runbook diagnostics out of deterministic plan artifacts', () => {
+    const content = new PlanningEngine().buildPlanArtifact({
+      projectName: 'demo',
+      prompt: 'Plan a runtime refactor for app.ts',
+      validationCommands: [],
+      context: {
+        filesConsidered: 1,
+        files: [],
+        selectedFiles: [],
+        omittedRelevantCandidates: ['app.ts', 'app.test.ts'],
+        terms: [],
+        dependencyEdges: [],
+        testCandidates: [],
+        validationCandidates: [],
+        missingContextWarnings: ['No tests loaded yet.'],
+        confidence: 'low',
+      },
+    });
+
+    expect(content).toContain('## Repository Evidence Reviewed');
+    for (const hiddenText of [
+      '## Context Sufficiency Gate',
+      'Status: needs_recall',
+      'Remaining blocker surfaces',
+      '## Current-State Diagnosis to Verify',
+      'Diagnosis Checks Before Editing Code',
+      '## Target Design Direction',
+      '## Safety and Change Control',
+      '## Repair Policy',
+      'Repair Plan',
+      'Implementation Policy for the Next Code Run',
+      '## Definition of Done',
+      '## Final Response Format',
+      'Final Response Format for the Implementation Run',
+    ]) {
+      expect(content).not.toContain(hiddenText);
+    }
   });
 
   it('exposes a stable runtime fingerprint for route delegation tests', () => {

@@ -55,7 +55,7 @@ const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'write_plan_artifact',
     description:
-      'Finalize the implementation plan. Provide the complete plan markdown you authored from the evidence you actually read. It MUST contain every required section heading. Set status="ready" only when the context-sufficiency gate is satisfied; otherwise status="needs_review" with the exact blocker. Stop after this call.',
+      'Finalize the implementation plan. Provide human-reviewable plan markdown authored from the evidence you actually read. It MUST contain every required public section heading. Keep operational runbook details internal: do not include context-sufficiency diagnostics, diagnosis checks before editing, repair plans, implementation policy, final response format instructions, Definition of Done, or similar agent-only instructions. Set status="ready" only after you have autonomously recalled enough repository evidence; otherwise status="needs_review" only for an exact unreadable file, unsafe ambiguity, or exhausted bounded recall blocker. Stop after this call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -85,8 +85,8 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     'Workflow you must follow:',
     '1. Resolve intent. Only call ask_clarifying_questions when the request is genuinely ambiguous — vague qualitative goals, no concrete target, or several materially different designs with no safe default — using 2-6 MCQs (each with a rationale and >=2 labeled options) BEFORE planning. If the target and acceptance criteria are reasonably clear, do NOT ask: state your assumptions explicitly and proceed to author the plan.',
     '2. Gather real evidence with read_file (use startLine/endLine to read precise ranges), search_text, dependency_trace, repo_map, and git tools. Do not rely on filenames alone — read the code.',
-    '3. Respect the context-sufficiency gate. If it is not satisfied, recall more files/imports/tests/configs before finalizing.',
-    '4. Author the plan yourself, grounded in what you actually read: narrow the intent, protect scope with explicit non-goals, lay out 2-3 candidate approaches with pros/cons and a clear recommendation, prevent duplicate/speculative architecture, name the specific files with per-file changes and reasons (cite line ranges where helpful), and order small milestones.',
+    '3. Use context-sufficiency diagnostics only as private recall guidance. If evidence is missing, keep exploring with repository tools — read files/imports/tests/configs/routes/call sites until the plan is grounded or a concrete unreadable/safety blocker remains.',
+    '4. Author the public plan yourself, grounded in what you actually read: narrow the intent, protect scope with explicit non-goals, lay out 2-3 candidate approaches with pros/cons and a clear recommendation, name the specific files with per-file changes and reasons, order small milestones, and list validation commands. Keep agent-only operational policy in your private reasoning, not in the plan markdown.',
     '5. Call write_plan_artifact exactly once with the complete markdown. Then stop.',
     '',
     'The plan markdown MUST include these section headings verbatim:',
@@ -95,13 +95,14 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     'Hard rules:',
     '- Prefer the smallest coherent change; never invent services, dependencies, databases, queues, or broad rewrites without repository evidence.',
     '- Every major change must tie back to the user objective.',
-    '- Be honest: if assumptions are wrong or evidence is missing, set the plan status to needs_review with the exact blocker rather than guessing.',
+    '- Be honest: if assumptions are wrong, a named file cannot be read, or a safety boundary blocks progress after bounded autonomous recall, set the plan status to needs_review with the exact blocker rather than guessing.',
+    '- Never include a plan section titled "Context Sufficiency Gate", "Context Sufficiency", "needs_recall", "Remaining blocker surfaces", "Diagnosis Checks Before Editing Code", "Repair Plan", "Repair Policy", "Implementation Policy for the Next Code Run", "Target Design Direction", "Definition of Done", "Final Response Format", or similar internal runbook diagnostics. Do not tell the user one more evidence bundle is needed; recall the missing files yourself first.',
     '',
     // Motivation vs Logic: Plan mode emits two surfaces — the plan markdown (rich, sectioned) and
     // the chat summary (must be tight). Same prompt, two distinct outputs.
     'Communication style — the chat summary (NOT the plan markdown) must stay tight:',
     '- The `summary` field on write_plan_artifact is at most 2 short sentences (~200 chars). One paragraph, no markdown headings.',
-    '- Never produce sectioned chat output like "Summary of intent and actions", "Evidence inspected", "DoD status vs checklist", "Next steps / Options for you". Sectioned content belongs ONLY inside the plan markdown.',
+    '- Never produce sectioned chat output like "Summary of intent and actions", "Evidence inspected", "DoD status vs checklist", "Next steps / Options for you". Keep chat summary concise and keep agent-only runbook content private.',
     '- Never offer the user a menu of options ("retry / repair / apply manually"). If you genuinely need a decision, call ask_clarifying_questions; otherwise commit to a recommendation in the plan.',
     instructionFiles.length ? `\nProject instruction files in effect: ${instructionFiles.join(', ')}. Honor their conventions.` : '',
   ]
@@ -117,14 +118,14 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
 export function buildPlanFinalizationDirective(sufficiency: ContextSufficiencyReport): string {
   const lines = [
     'You have not produced a plan yet, and you answered in prose instead of calling a tool. That is not allowed.',
-    'Keep investigating with read_file / search_text / dependency_trace if you still need evidence — do not give up on finding context.',
+    'Keep investigating with read_file / search_text / dependency_trace if you still need evidence — do not give up on finding context and do not summarize missing context as a plan section.',
   ];
   if (sufficiency.status === 'needs_recall' && (sufficiency.recommendedRecall.length || sufficiency.requiredEvidence.length)) {
-    lines.push('', 'The context gate still wants more evidence:', formatContextSufficiencyMarkdown(sufficiency));
+    lines.push('', 'Private recall guidance; use it to read/search more repository evidence, but do NOT copy it into the plan markdown:', formatContextSufficiencyMarkdown(sufficiency));
   }
   lines.push(
     '',
-    'Then you MUST call the write_plan_artifact tool (NOT a chat message) with the complete plan markdown containing every required "## <section>" heading, grounded in what you read. If you are genuinely blocked on intent, call ask_clarifying_questions instead. Do not end your turn without calling one of these two tools.',
+    'Then you MUST call the write_plan_artifact tool (NOT a chat message) with the complete human-reviewable plan markdown containing every required "## <section>" heading, grounded in what you read and without any agent-only runbook sections. If you are genuinely blocked on intent, call ask_clarifying_questions instead. Do not end your turn without calling one of these two tools.',
   );
   return lines.join('\n');
 }
@@ -159,10 +160,10 @@ export async function buildPlanSeedMessage(
     '',
     ambiguity?.ambiguous ? [buildAmbiguityClarificationGate(ambiguity), ''].join('\n') : '',
     clarificationAnswers ? ['The user already answered your clarifying questions — do NOT ask again:', clarificationAnswers, ''].join('\n') : '',
-    'Context sufficiency gate (recall more evidence if this is not satisfied before finalizing):',
+    'Private context recall guidance (do not copy this into the plan markdown; recall more evidence if it is not satisfied before finalizing):',
     formatContextSufficiencyMarkdown(sufficiency),
     '',
-    'Definition of Done the executing agent will be held to (your plan must enable it):',
+    'Internal execution policy for the coding agent (do not copy this into the plan markdown):',
     formatWorkflowDodMarkdown(),
     '',
     'Validation commands detected in this repository:',

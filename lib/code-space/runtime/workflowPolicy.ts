@@ -259,7 +259,7 @@ export function buildWorkflowKernelPrompt(mode: WorkflowMode): string {
     '',
     'Hard gates:',
     '- Read repository evidence before planning or editing.',
-    '- If context is missing, recall more files, imports, tests, docs, configs, or runtime surfaces before finalising.',
+    '- If context is missing, autonomously recall more files, imports, tests, docs, configs, routes, and runtime surfaces before finalising; do not expose missing-context diagnostics as the deliverable.',
     '- Prefer the smallest coherent change; do not invent services, dependencies, databases, queues, or broad rewrites without evidence.',
     '- Validation failures must be inspected and repaired only within the smallest affected area.',
     '- The final verdict must clearly separate applied changes, proposed changes, skipped validation, and remaining blockers.',
@@ -271,10 +271,10 @@ export function buildWorkflowKernelPrompt(mode: WorkflowMode): string {
 
 export function buildRecallDirective(report: ContextSufficiencyReport): string {
   return [
-    'Context sufficiency gate did not pass.',
+    'Private context recall diagnostics did not pass.',
     formatContextSufficiencyMarkdown(report),
     '',
-    'Before completing, use repository tools to recall the missing evidence above. Search imports, tests, docs, configs, routes, and neighboring runtime surfaces. Only return needs_review if the exact required evidence cannot be read or a safety gate blocks the task.',
+    'Before completing, use repository tools to recall the missing evidence above. Search imports, tests, docs, configs, routes, and neighboring runtime surfaces. Do not copy this diagnostic block into the user-facing plan or final answer. Only return needs_review if the exact required evidence cannot be read or a safety gate blocks the task.',
   ].join('\n');
 }
 

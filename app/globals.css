@@ -242,6 +242,12 @@ textarea {
   cursor: pointer;
 }
 
+.mention-suggestor__match {
+  color: inherit;
+  background: transparent;
+  font-weight: 600;
+}
+
 .mention-editor:empty:before {
   content: attr(data-placeholder);
   color: #6e7681;
