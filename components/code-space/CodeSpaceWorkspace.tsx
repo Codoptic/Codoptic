@@ -299,6 +299,8 @@ export function CodeSpaceWorkspace() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [agentMode, setAgentMode] = useState<CodeSpaceAgentMode>(DEFAULT_CODE_SPACE_AGENT_MODE);
+  const [promptDraft, setPromptDraft] = useState('');
+  const [promptDraftVersion, setPromptDraftVersion] = useState(0);
   const [fileContents, setFileContents] = useState<Record<string, FilePayload>>({});
   const [treeChildren, setTreeChildren] = useState<Record<string, CodeSpaceTreeNode[]>>({});
 
@@ -759,6 +761,45 @@ export function CodeSpaceWorkspace() {
       // Git status is opportunistic; non-git folders still work as editable projects.
     }
   }, []);
+
+  const handleEditPrompt = useCallback(async (messageId: string) => {
+    const session = activeSession;
+    if (!session || agentRunning) return;
+    const messageIndex = session.messages.findIndex((entry) => entry.id === messageId && entry.role === 'user');
+    if (messageIndex < 0) return;
+
+    const message = session.messages[messageIndex];
+    if (!message) return;
+
+    const runId = message.metadata?.runId;
+    if (runId) {
+      await fetch(`/api/code-space/checkpoints/by-run/${encodeURIComponent(runId)}/restore`, { method: 'POST' }).catch(() => null);
+    }
+
+    const rewindAt = Date.now();
+    const nextSession: CodeSpaceAgentSession = {
+      ...session,
+      messages: session.messages.slice(0, messageIndex),
+      toolCalls: [],
+      plan: [],
+      clarifyingQuestions: [],
+      todos: [],
+      verificationResults: [],
+      filesChanged: [],
+      agentChangesets: [],
+      planMarkdown: undefined,
+      status: 'idle',
+      runtimePhase: undefined,
+      runtimeStatus: undefined,
+      updatedAt: rewindAt,
+    };
+    updateSession(nextSession);
+    setPendingDiffs([]);
+    setAgentChangesets([]);
+    setPromptDraft(message.content);
+    setPromptDraftVersion((version) => version + 1);
+    if (activeProject) void refreshGitStatus(activeProject);
+  }, [activeProject, activeSession, agentRunning, refreshGitStatus, updateSession]);
 
   const loadFilePayload = useCallback(async (project: CodeSpaceProject, filePath: string): Promise<FilePayload> => {
     if (!project.rootPath) {
@@ -1967,7 +2008,15 @@ export function CodeSpaceWorkspace() {
                 }
               }
             } else if (event.type === 'structured_event') {
-              if (event.event.type === 'plan.updated') {
+              if (event.event.type === 'run.created') {
+                patchSession(sessionWithPrompt.id, (current) => ({
+                  ...current,
+                  messages: current.messages.map((message) =>
+                    message.id === userMessage.id ? { ...message, metadata: { ...(message.metadata ?? {}), runId: event.event.runId } } : message,
+                  ),
+                  updatedAt: Date.now(),
+                }));
+              } else if (event.event.type === 'plan.updated') {
                 const payload = event.event.payload as { phase?: string; state?: { status?: CodeSpaceAgentSession['runtimeStatus'] } };
                 patchSession(sessionWithPrompt.id, (current) => ({
                   ...current,
@@ -2921,6 +2970,7 @@ export function CodeSpaceWorkspace() {
             onRenameSession={renameSession}
             onDeleteSession={(session) => removeSessionRecord(session)}
             onSubmitPrompt={handleRunAgent}
+            onEditPrompt={(messageId) => void handleEditPrompt(messageId)}
             onCancelRun={handleCancelRun}
             onAcceptDiff={(diffId) => void acceptPendingDiff(diffId)}
             onRejectDiff={rejectPendingDiff}
@@ -2931,6 +2981,8 @@ export function CodeSpaceWorkspace() {
             openFiles={tabs.map((tab) => tab.path).filter(Boolean)}
             currentEditorFilePath={activeTab?.path}
             filePaths={flatFilePaths}
+            draftPrompt={promptDraft}
+            draftPromptVersion={promptDraftVersion}
           />
           </aside>
       )}

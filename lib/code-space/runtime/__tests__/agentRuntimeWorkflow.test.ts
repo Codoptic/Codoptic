@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantTurn } from '@/lib/agent/providers';
 import { chatTurnWithTools } from '@/lib/agent/providers';
 import { AgentRuntime, runtimeSourceFingerprintForTests } from '../agentRuntime';
-import { PlanningEngine, REQUIRED_PLAN_SECTIONS } from '../planningEngine';
+import { PlanningEngine, REQUIRED_PLAN_SECTIONS, sanitizePlanMarkdown } from '../planningEngine';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 
 vi.mock('@/lib/agent/providers', () => ({
@@ -76,7 +76,10 @@ describe('AgentRuntime workflow contracts', () => {
         sessionId: 'session-plan-nokey',
         projectRoot: tmpDir,
         projectName: 'demo',
-        messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
+        messages: [
+          { role: 'user', content: 'Plan a runtime refactor for app.ts' },
+          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+        ],
         mode: 'plan',
         model: 'test',
         providerId: 'openai',
@@ -113,7 +116,10 @@ describe('AgentRuntime workflow contracts', () => {
         sessionId: 'session-plan-llm',
         projectRoot: tmpDir,
         projectName: 'demo',
-        messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
+        messages: [
+          { role: 'user', content: 'Plan a runtime refactor for app.ts' },
+          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+        ],
         mode: 'plan',
         model: 'test',
         providerId: 'openai',
@@ -130,19 +136,15 @@ describe('AgentRuntime workflow contracts', () => {
 
     const planEvent = events.find((event) => event.type === 'plan_markdown_created');
     expect(planEvent?.filePath).toBe('.agent/plans/session-plan-llm.md');
-    expect(planEvent?.content).toBe(PLAN_MARKDOWN);
+    expect(planEvent?.content).toBe(`${PLAN_MARKDOWN}\n`);
     expect(planEvent?.content).toContain('## Summary');
     // Read-only invariant: planning never proposes or applies file changes.
     expect(events.some((event) => event.type === 'diff_proposed' || event.type === 'file_applied')).toBe(false);
   });
 
-  it('plan mode pauses and asks clarifying questions when the model requests them', async () => {
+  it('plan mode pauses for approach clarification before calling the model', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-clarify-'));
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
-
-    mockedTurn
-      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'ask_clarifying_questions', input: { questions: [{ question: 'Should the refactor preserve the public API?', choices: ['Yes', 'No'] }] } }] }))
-      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
 
     const events: AgentSSEEvent[] = [];
     await new AgentRuntime().run(
@@ -166,11 +168,45 @@ describe('AgentRuntime workflow contracts', () => {
     );
 
     const clarify = events.find((event) => event.type === 'clarifying_questions_created');
-    expect(clarify && clarify.type === 'clarifying_questions_created' ? clarify.questions.length : 0).toBe(1);
+    expect(clarify && clarify.type === 'clarifying_questions_created' ? clarify.questions[0]?.question : '').toMatch(/implementation approach/i);
+    expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
+    expect(mockedTurn).not.toHaveBeenCalled();
+  });
+
+  it('forces plan clarification before accepting a model-authored plan', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-force-clarify-'));
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf8');
+    await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    mockedTurn.mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN, summary: 'Refactor app.run', status: 'ready', inspectedFiles: ['app.ts'] } }] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-plan-force-clarify',
+        projectRoot: tmpDir,
+        projectName: 'demo',
+        messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
+        mode: 'plan',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['app.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    const clarify = events.find((event) => event.type === 'clarifying_questions_created');
+    expect(clarify?.type).toBe('clarifying_questions_created');
     expect(events.some((event) => event.type === 'plan_markdown_created')).toBe(false);
   });
 
-  it('always produces a previewable plan artifact even if the model never calls write_plan_artifact', async () => {
+  it('always produces a previewable plan artifact after clarification even if the model never calls write_plan_artifact', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-fallback-'));
     await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf8');
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
@@ -184,7 +220,10 @@ describe('AgentRuntime workflow contracts', () => {
         sessionId: 'session-plan-fallback',
         projectRoot: tmpDir,
         projectName: 'medbot',
-        messages: [{ role: 'user', content: 'Plan a refactor for app.ts' }],
+        messages: [
+          { role: 'user', content: 'Plan a refactor for app.ts' },
+          { role: 'user', content: 'Plan clarification answers: approach=Minimal owner change; acceptance=Existing automated tests must pass.' },
+        ],
         mode: 'plan',
         model: 'test',
         providerId: 'openai',
@@ -231,6 +270,7 @@ describe('AgentRuntime workflow contracts', () => {
     for (const hiddenText of [
       '## Context Sufficiency Gate',
       'Status: needs_recall',
+      'Status: ready',
       'Remaining blocker surfaces',
       '## Current-State Diagnosis to Verify',
       'Diagnosis Checks Before Editing Code',
@@ -242,9 +282,35 @@ describe('AgentRuntime workflow contracts', () => {
       '## Definition of Done',
       '## Final Response Format',
       'Final Response Format for the Implementation Run',
+      '## Candidate Approaches and Recommendation',
+      'Approach 1',
+      'Approach A',
     ]) {
       expect(content).not.toContain(hiddenText);
     }
+  });
+
+  it('sanitizes hidden status and approach menu sections from model-authored plans', () => {
+    const content = sanitizePlanMarkdown([
+      '# Plan',
+      '',
+      '## Summary',
+      '- Request: demo',
+      '- Status: ready',
+      '',
+      '## Candidate Approaches and Recommendation',
+      '- Approach 1: do the small thing',
+      '- Approach 2: do the big thing',
+      '',
+      '## Implementation Milestones',
+      '- Keep this milestone.',
+    ].join('\n'));
+
+    expect(content).toContain('## Summary');
+    expect(content).toContain('## Implementation Milestones');
+    expect(content).not.toContain('Status: ready');
+    expect(content).not.toContain('Candidate Approaches');
+    expect(content).not.toContain('Approach 1');
   });
 
   it('exposes a stable runtime fingerprint for route delegation tests', () => {

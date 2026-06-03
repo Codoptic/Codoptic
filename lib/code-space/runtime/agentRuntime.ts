@@ -282,12 +282,12 @@ export class AgentRuntime {
 
     const clarificationAnswers = [...request.messages]
       .reverse()
-      .find((message) => message.role === 'user' && message.content.startsWith('Plan clarification answers:'))?.content;
+      .find((message) => message.role === 'user' && message.content.includes('Plan clarification answers:'))?.content;
 
-    // Pre-flight ambiguity hard gate (Superpowers brainstorming): underspecified requests must
-    // produce clarifying questions before any plan is authored.
+    // Pre-flight plan clarification hard gate: the public plan must reflect one user-confirmed
+    // implementation approach, so every plan run needs MCQ answers before an artifact is authored.
     const ambiguity = assessPromptAmbiguity({ prompt, context, hasClarificationAnswers: Boolean(clarificationAnswers) });
-    const mustClarify = ambiguity.ambiguous && !clarificationAnswers;
+    const mustClarify = !clarificationAnswers;
 
     const ctx: CodeAgentContext = {
       root,
@@ -310,6 +310,17 @@ export class AgentRuntime {
       signal,
     };
 
+    if (mustClarify) {
+      const questions = buildFallbackClarifyingQuestions(runId);
+      await emitRuntime('plan.updated', { phase: 'awaiting_clarification' });
+      emit({ type: 'clarifying_questions_created', questions });
+      const answer = `I need a few details before finalizing the plan for ${request.projectName}. Answer the clarifying questions and I will ground the plan in your intent.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_clarification', filesChanged: [] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
     const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
     const loopOptions: CodeAgentLoopOptions = { session, budget, signal, tools: PLAN_MODE_TOOL_SPECS };
@@ -331,8 +342,8 @@ export class AgentRuntime {
 
     await loop.run(ctx, loopOptions);
 
-    // Ambiguity hard gate: if the request was underspecified and the model neither asked nor authored
-    // yet, force a clarification turn before anything else.
+    // Plan clarification hard gate: if the user has not picked the implementation approach yet,
+    // force a clarification turn before anything else.
     if (mustClarify && !ctx.planClarification && !ctx.planArtifactRequest && !loopOptions.budget.turnsExhausted()) {
       await loop.continueWith(buildAmbiguityClarificationGate(ambiguity), ctx, loopOptions);
     }
@@ -347,8 +358,8 @@ export class AgentRuntime {
       await loop.continueWith(buildPlanFinalizationDirective(sufficiency), ctx, loopOptions);
     }
 
-    // Deterministic safety net: an ambiguous request must always yield clarifying questions, even if
-    // the model authored a plan instead of asking. This enforces the brainstorming gate reliably.
+    // Deterministic safety net: a plan request must always yield clarifying questions before a plan
+    // artifact when no approach has been confirmed, even if the model authored a plan instead.
     if (mustClarify && !ctx.planClarification) {
       ctx.planClarification = { questions: buildFallbackClarifyingQuestions(runId) };
       ctx.planArtifactRequest = undefined;

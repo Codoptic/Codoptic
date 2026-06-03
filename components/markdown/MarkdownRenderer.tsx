@@ -140,6 +140,7 @@ export interface MarkdownRendererProps {
   theme?: 'dark' | 'light';
   className?: string;
   contentClassName?: string;
+  componentsOverride?: Partial<Components>;
   currentFilePath?: string;
   rootPath?: string;
   onOpenFile?: (filePath: string, options?: { preview?: boolean }) => void;
@@ -150,6 +151,7 @@ export function MarkdownRenderer({
   theme = 'dark',
   className = '',
   contentClassName = '',
+  componentsOverride,
   currentFilePath = '',
   rootPath = '',
   onOpenFile,
@@ -236,10 +238,14 @@ export function MarkdownRenderer({
     };
   }, [currentFilePath, onOpenFile, rootPath, theme]);
 
+  const mergedComponents = useMemo<Components>(() => {
+    return { ...components, ...componentsOverride };
+  }, [components, componentsOverride]);
+
   return (
     <article className={`${className} text-sm leading-7 text-ink-100`}>
       <div className={contentClassName}>
-        <ReactMarkdown components={components} rehypePlugins={[rehypeSanitize]} remarkPlugins={[remarkGfm]}>
+        <ReactMarkdown components={mergedComponents} rehypePlugins={[rehypeSanitize]} remarkPlugins={[remarkGfm]}>
           {markdown}
         </ReactMarkdown>
       </div>

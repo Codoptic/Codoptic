@@ -55,7 +55,7 @@ const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'write_plan_artifact',
     description:
-      'Finalize the implementation plan. Provide human-reviewable plan markdown authored from the evidence you actually read. It MUST contain every required public section heading. Keep operational runbook details internal: do not include context-sufficiency diagnostics, diagnosis checks before editing, repair plans, implementation policy, final response format instructions, Definition of Done, or similar agent-only instructions. Set status="ready" only after you have autonomously recalled enough repository evidence; otherwise status="needs_review" only for an exact unreadable file, unsafe ambiguity, or exhausted bounded recall blocker. Stop after this call.',
+      'Finalize the implementation plan only after the user has answered plan-clarification MCQs that choose the implementation approach. Provide human-reviewable plan markdown authored from the evidence you actually read. It MUST contain every required public section heading. Keep operational runbook details internal: do not include tool statuses, context-sufficiency diagnostics, diagnosis checks before editing, repair plans, implementation policy, final response format instructions, Definition of Done, or similar agent-only instructions. Do not list multiple candidate approaches in the plan; the plan must reflect the single confirmed approach. Set status="ready" only after you have autonomously recalled enough repository evidence and the user has confirmed the approach; otherwise status="needs_review" only for an exact unreadable file, unsafe ambiguity, or exhausted bounded recall blocker. Stop after this call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -83,10 +83,10 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     'Behave like a senior engineer scoping a change: resolve intent, read the exact files and line ranges that matter, and only then author the plan. Do NOT write code and do NOT edit source files — your only mutation is the plan artifact.',
     '',
     'Workflow you must follow:',
-    '1. Resolve intent. Only call ask_clarifying_questions when the request is genuinely ambiguous — vague qualitative goals, no concrete target, or several materially different designs with no safe default — using 2-6 MCQs (each with a rationale and >=2 labeled options) BEFORE planning. If the target and acceptance criteria are reasonably clear, do NOT ask: state your assumptions explicitly and proceed to author the plan.',
+    '1. Resolve intent. Before authoring any plan, call ask_clarifying_questions unless the user has already answered plan-clarification MCQs in this session. The MCQs must select the implementation approach and any scope/acceptance details that would otherwise create multiple valid plans.',
     '2. Gather real evidence with read_file (use startLine/endLine to read precise ranges), search_text, dependency_trace, repo_map, and git tools. Do not rely on filenames alone — read the code.',
     '3. Use context-sufficiency diagnostics only as private recall guidance. If evidence is missing, keep exploring with repository tools — read files/imports/tests/configs/routes/call sites until the plan is grounded or a concrete unreadable/safety blocker remains.',
-    '4. Author the public plan yourself, grounded in what you actually read: narrow the intent, protect scope with explicit non-goals, lay out 2-3 candidate approaches with pros/cons and a clear recommendation, name the specific files with per-file changes and reasons, order small milestones, and list validation commands. Keep agent-only operational policy in your private reasoning, not in the plan markdown.',
+    '4. Author the public plan yourself, grounded in what you actually read and the user-confirmed MCQ answers: narrow the intent, protect scope with explicit non-goals, describe only the chosen approach, name the specific files with per-file changes and reasons, order small milestones, and list validation commands. Keep agent-only operational policy in your private reasoning, not in the plan markdown.',
     '5. Call write_plan_artifact exactly once with the complete markdown. Then stop.',
     '',
     'The plan markdown MUST include these section headings verbatim:',
@@ -96,7 +96,7 @@ export function buildPlanSystemPrompt(projectName: string, instructionFiles: str
     '- Prefer the smallest coherent change; never invent services, dependencies, databases, queues, or broad rewrites without repository evidence.',
     '- Every major change must tie back to the user objective.',
     '- Be honest: if assumptions are wrong, a named file cannot be read, or a safety boundary blocks progress after bounded autonomous recall, set the plan status to needs_review with the exact blocker rather than guessing.',
-    '- Never include a plan section titled "Context Sufficiency Gate", "Context Sufficiency", "needs_recall", "Remaining blocker surfaces", "Diagnosis Checks Before Editing Code", "Repair Plan", "Repair Policy", "Implementation Policy for the Next Code Run", "Target Design Direction", "Definition of Done", "Final Response Format", or similar internal runbook diagnostics. Do not tell the user one more evidence bundle is needed; recall the missing files yourself first.',
+    '- Never include a plan section titled "Context Sufficiency Gate", "Context Sufficiency", "needs_recall", "Remaining blocker surfaces", "Status", "Candidate Approaches", "Approach 1", "Approach 2", "Diagnosis Checks Before Editing Code", "Repair Plan", "Repair Policy", "Implementation Policy for the Next Code Run", "Target Design Direction", "Definition of Done", "Final Response Format", or similar internal/runbook/choice-menu diagnostics. Do not tell the user one more evidence bundle is needed; recall the missing files yourself first.',
     '',
     // Motivation vs Logic: Plan mode emits two surfaces — the plan markdown (rich, sectioned) and
     // the chat summary (must be tight). Same prompt, two distinct outputs.
@@ -125,7 +125,7 @@ export function buildPlanFinalizationDirective(sufficiency: ContextSufficiencyRe
   }
   lines.push(
     '',
-    'Then you MUST call the write_plan_artifact tool (NOT a chat message) with the complete human-reviewable plan markdown containing every required "## <section>" heading, grounded in what you read and without any agent-only runbook sections. If you are genuinely blocked on intent, call ask_clarifying_questions instead. Do not end your turn without calling one of these two tools.',
+    'Then you MUST call ask_clarifying_questions if the user has not already confirmed the implementation approach via MCQs. Only after those answers exist may you call write_plan_artifact with complete human-reviewable plan markdown containing every required "## <section>" heading, grounded in what you read, reflecting one confirmed approach, and without tool statuses, approach menus, or agent-only runbook sections. Do not end your turn without calling one of these two tools.',
   );
   return lines.join('\n');
 }

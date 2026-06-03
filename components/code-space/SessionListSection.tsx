@@ -16,7 +16,7 @@ interface SessionListSectionProps {
 }
 
 function buildSessionSubtitle(session: CodeSpaceAgentSession): string {
-  const lastMessage = [...session.messages].reverse().find((message) => message.content.trim());
+  const lastMessage = [...session.messages].reverse().find((message) => message.role !== 'tool' && message.content.trim());
   if (lastMessage) {
     return lastMessage.content.replace(/\s+/g, ' ').slice(0, 72);
   }

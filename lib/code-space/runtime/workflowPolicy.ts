@@ -35,6 +35,12 @@ const WORKFLOW_CORE_PHASES = [
   'validate, repair, and produce a verdict',
 ] as const;
 
+const IMPLEMENTATION_APPROACH_OPTIONS = [
+  { label: 'Minimal owner change', description: 'Edit the smallest existing owner surface and preserve current architecture.' },
+  { label: 'Coordinated related changes', description: 'Update the owner plus directly related call sites, tests, or config together.' },
+  { label: 'New focused abstraction', description: 'Add a small helper or abstraction only where existing code cannot support the request cleanly.' },
+] as const;
+
 function hasReason(file: ContextGraphFile, reason: string): boolean {
   return file.reasons.some((item) => item === reason);
 }
@@ -195,10 +201,10 @@ export function assessPromptAmbiguity(input: {
 
 export function buildAmbiguityClarificationGate(report: PromptAmbiguityReport): string {
   return [
-    'AMBIGUITY HARD GATE: this request is underspecified and multiple valid designs exist.',
+    'PLAN CLARIFICATION HARD GATE: the implementation approach must be confirmed with the user before any final plan artifact is authored.',
     ...report.reasons.map((reason) => `- ${reason}`),
     '',
-    'Before doing anything else you MUST call ask_clarifying_questions with 2-4 well-scoped multiple-choice questions. Each question needs a `rationale` and at least 2 labeled `options` that resolve scope, target surface, and acceptance criteria. Do NOT author the plan until the user answers.',
+    'Before doing anything else you MUST call ask_clarifying_questions with 2-4 well-scoped multiple-choice questions. Include one question that selects the implementation approach, using options like Minimal owner change, Coordinated related changes, or New focused abstraction. Each question needs a `rationale` and at least 2 labeled `options` that resolve scope, target surface, and acceptance criteria. Do NOT author the plan until the user answers.',
   ].join('\n');
 }
 
@@ -207,11 +213,6 @@ export function buildAmbiguityClarificationGate(report: PromptAmbiguityReport): 
  * ambiguous request. Guarantees the user always gets to disambiguate before a plan is produced.
  */
 export function buildFallbackClarifyingQuestions(runId: string): CodeSpaceClarifyingQuestion[] {
-  const scopeOptions = [
-    { label: 'A focused change to one existing module', description: 'Smallest coherent edit, lowest regression risk.' },
-    { label: 'A coordinated change across several related modules', description: 'Larger surface, more validation.' },
-    { label: 'A new capability or abstraction', description: 'Only if existing code cannot be reused.' },
-  ];
   const acceptanceOptions = [
     { label: 'Existing automated tests must pass', description: 'Use the detected test command.' },
     { label: 'Add new focused tests for this behaviour', description: 'Author tests near the changed code.' },
@@ -219,11 +220,11 @@ export function buildFallbackClarifyingQuestions(runId: string): CodeSpaceClarif
   ];
   return [
     {
-      id: `clarify:${runId}:scope`,
-      question: 'What is the primary scope of this change?',
-      rationale: 'Scope determines how many files change and what we explicitly leave out of this task.',
-      options: scopeOptions,
-      choices: scopeOptions.map((option) => option.label),
+      id: `clarify:${runId}:approach`,
+      question: 'Which implementation approach should the plan use?',
+      rationale: 'The final plan must describe one confirmed approach instead of listing competing options.',
+      options: [...IMPLEMENTATION_APPROACH_OPTIONS],
+      choices: IMPLEMENTATION_APPROACH_OPTIONS.map((option) => option.label),
     },
     {
       id: `clarify:${runId}:acceptance`,

@@ -101,6 +101,9 @@ export interface CodeSpaceMessage {
   role: 'user' | 'assistant' | 'system' | 'tool' | 'reasoning';
   content: string;
   createdAt: number;
+  metadata?: {
+    runId?: string;
+  };
 }
 
 export interface CodeSpaceClarifyingQuestion {

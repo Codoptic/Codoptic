@@ -51,6 +51,14 @@ function createSession(): CodeSpaceAgentSession {
   };
 }
 
+function openSection(container: HTMLDivElement, title: string): void {
+  const button = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes(title));
+  if (!button) return;
+  act(() => {
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 function renderPanel(
   onOpenPlanFile = vi.fn(),
   overrides: Partial<React.ComponentProps<typeof AgentPanel>> = {},
@@ -82,6 +90,7 @@ function renderPanel(
         onRenameSession={vi.fn()}
         onDeleteSession={vi.fn()}
         onSubmitPrompt={vi.fn()}
+        onEditPrompt={vi.fn()}
         onCancelRun={vi.fn()}
         onAcceptDiff={vi.fn()}
         onRejectDiff={vi.fn()}
@@ -146,6 +155,7 @@ describe('AgentPanel', () => {
           onRenameSession={vi.fn()}
           onDeleteSession={vi.fn()}
           onSubmitPrompt={vi.fn()}
+          onEditPrompt={vi.fn()}
           onCancelRun={vi.fn()}
           onAcceptDiff={vi.fn()}
           onRejectDiff={vi.fn()}
@@ -156,6 +166,20 @@ describe('AgentPanel', () => {
 
     const buildButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Build'));
     expect(buildButton).toBeUndefined();
+  });
+
+  it('renders icon-only planner shortcuts with hover labels', () => {
+    const { container } = renderPanel();
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const generateDiagramButton = buttons.find((button) => button.getAttribute('aria-label') === 'Generate Diagram');
+    const appPlannerButton = buttons.find((button) => button.getAttribute('aria-label') === 'App Planner');
+
+    expect(generateDiagramButton).toBeDefined();
+    expect(generateDiagramButton?.textContent?.trim()).toBe('');
+    expect(generateDiagramButton?.getAttribute('title')).toBe('Generate Diagram');
+    expect(appPlannerButton).toBeDefined();
+    expect(appPlannerButton?.textContent?.trim()).toBe('');
+    expect(appPlannerButton?.getAttribute('title')).toBe('App Planner');
   });
 
 
@@ -216,5 +240,120 @@ describe('AgentPanel', () => {
     expect(container.textContent).toContain('Code changes');
     expect(container.textContent).toContain('components/example.tsx');
     expect(container.textContent).toContain('Applied change');
+  });
+
+  it('shows a cursor-style activity summary for file and search tool calls', () => {
+    const session = createSession();
+    session.toolCalls = [
+      {
+        id: 'tool-1',
+        name: 'read_file',
+        status: 'success',
+        summary: 'Completed in 9ms',
+        input: { path: 'components/code-space/BottomPanel.tsx', startLine: 1, endLine: 80 },
+        output: 'ok',
+        createdAt: Date.now() - 2_000,
+        updatedAt: Date.now() - 1_900,
+      },
+      {
+        id: 'tool-2',
+        name: 'search_text',
+        status: 'success',
+        summary: 'Completed in 12ms',
+        input: { query: 'Explored x files, y searches', glob: '*.tsx' },
+        output: 'ok',
+        createdAt: Date.now() - 1_000,
+        updatedAt: Date.now() - 900,
+      },
+    ];
+
+    const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
+    openSection(container, 'Explored 1 file, 1 search');
+
+    expect(container.textContent).toContain('Explored 1 file, 1 search');
+    expect(container.textContent).toContain('Read BottomPanel.tsx L1-80');
+    expect(container.textContent).toContain('Searched Explored x files, y searches');
+  });
+
+  it('keeps raw tool JSON out of the session subtitle', () => {
+    const session = createSession();
+    session.messages = [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        content: 'Thinking through the plan.',
+        createdAt: Date.now() - 2_000,
+      },
+      {
+        id: 'msg-2',
+        role: 'tool',
+        content: 'Started read_file: { "path": "components/code-space/BottomPanel.tsx" }',
+        createdAt: Date.now() - 1_000,
+      },
+    ];
+
+    const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
+    openSection(container, 'Session');
+
+    expect(container.textContent).toContain('Thinking through the plan.');
+    expect(container.textContent).not.toContain('Started read_file: {');
+  });
+
+  it('renders mention links in chat messages as chips', () => {
+    const session = createSession();
+    session.messages = [
+      {
+        id: 'msg-1',
+        role: 'user',
+        content: 'Fully refactor the agentic workflow in [app/](system/app) so the project makes decisions.',
+        createdAt: Date.now(),
+      },
+    ];
+
+    const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
+    const chip = container.querySelector('[data-mention-chip="true"]');
+
+    expect(chip).toBeTruthy();
+    expect(chip?.textContent).toBe('app/');
+    expect(chip?.getAttribute('title')).toBe('system/app');
+    expect(chip?.getAttribute('data-mention-path')).toBe('system/app');
+  });
+
+  it('shows copy and edit actions below user prompts', async () => {
+    const session = createSession();
+    session.messages = [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'Refactor this prompt',
+        createdAt: Date.now(),
+      },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'Working on it.',
+        createdAt: Date.now(),
+      },
+    ];
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    const onEditPrompt = vi.fn();
+    const { container } = renderPanel(vi.fn(), { session, sessions: [session], onEditPrompt });
+
+    const copyButton = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('aria-label') === 'Copy prompt');
+    const editButton = Array.from(container.querySelectorAll('button')).find((button) => button.getAttribute('aria-label') === 'Edit prompt and rewind context');
+
+    await act(async () => {
+      copyButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    act(() => {
+      editButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(writeText).toHaveBeenCalledWith('Refactor this prompt');
+    expect(onEditPrompt).toHaveBeenCalledWith('user-1');
   });
 });

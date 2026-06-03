@@ -3,6 +3,7 @@ import type { ContextGraphResult } from '../contextGraphEngine';
 import {
   assessContextSufficiency,
   buildRecallDirective,
+  buildFallbackClarifyingQuestions,
   buildWorkflowKernelPrompt,
   formatWorkflowDodMarkdown,
 } from '../workflowPolicy';
@@ -74,5 +75,12 @@ describe('v3.2 workflow policy', () => {
     expect(buildWorkflowKernelPrompt('plan')).toContain('v3.2 workflow kernel');
     expect(formatWorkflowDodMarkdown()).toContain('Repository rules');
     expect(buildRecallDirective({ status: 'needs_recall', confidence: 'medium', score: 42, blockers: [], warnings: ['missing tests'], requiredEvidence: ['tests'], recommendedRecall: ['example.test.ts'] })).toContain('example.test.ts');
+  });
+
+  it('asks the user to choose one implementation approach before planning', () => {
+    const questions = buildFallbackClarifyingQuestions('run-1');
+    expect(questions[0]?.question).toMatch(/implementation approach/i);
+    expect(questions[0]?.choices).toContain('Minimal owner change');
+    expect(questions[0]?.choices).toContain('Coordinated related changes');
   });
 });

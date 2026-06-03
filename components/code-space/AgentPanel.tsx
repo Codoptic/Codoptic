@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bot, Loader2, Share2, Zap } from 'lucide-react';
+import { Bot, Check, Copy, Edit3, ExternalLink, Layers3, Loader2, Share2, Sparkles, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -16,10 +16,12 @@ import { FileMentionInput } from './FileMentionInput';
 import { PlanClarificationPanel } from './PlanClarificationPanel';
 import { PlanLink } from './PlanLink';
 import { countDiffLines, type CodeSpacePendingDiff } from '@/components/code-space/diffHunks';
+import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import type { FileMentionIndex } from '@/lib/code-space/mentions/index';
 import { buildMentionIndex } from '@/lib/code-space/mentions/index';
 import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionIndex';
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
+import { MentionChip } from './mentions/MentionChip';
 
 interface AgentPanelProps {
   session: CodeSpaceAgentSession | null;
@@ -48,6 +50,7 @@ interface AgentPanelProps {
   onRenameSession: (session: CodeSpaceAgentSession) => void;
   onDeleteSession: (session: CodeSpaceAgentSession) => void;
   onSubmitPrompt: (prompt: string, attachments?: SelectedMention[], options?: CodeSpacePromptOptions) => void;
+  onEditPrompt: (messageId: string) => void;
   onCancelRun: () => void;
   onAcceptDiff: (diffId: string) => void;
   onRejectDiff: (diffId: string) => void;
@@ -55,6 +58,8 @@ interface AgentPanelProps {
   onOpenPlanFile?: (filePath: string) => void;
   onOpenKnowledgeGraph?: () => void;
   onBuildFromPlan?: (filePath: string) => void;
+  draftPrompt?: string;
+  draftPromptVersion?: number;
   mentionIndex?: FileMentionIndex;
   indexStatus?: MentionIndexStatus;
   indexError?: string;
@@ -88,6 +93,51 @@ function renderMessageText(message: CodeSpaceMessage) {
   if (appliedIndex >= 0) return content.slice(appliedIndex).trim();
 
   return 'I reviewed the project context. No code changes were applied in this run.';
+}
+
+function flattenNodeText(children: React.ReactNode): string {
+  if (typeof children === 'string' || typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(flattenNodeText).join('');
+  if (children && typeof children === 'object' && 'props' in children) {
+    return flattenNodeText((children as { props: { children?: React.ReactNode } }).props.children);
+  }
+  return '';
+}
+
+function mentionFromLink(children: React.ReactNode, href: string): SelectedMention | null {
+  const label = flattenNodeText(children).trim();
+  const normalizedHref = href.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!normalizedHref || normalizedHref.startsWith('#')) return null;
+  if (/^[a-z][a-z0-9+.-]*:/.test(normalizedHref) || normalizedHref.startsWith('//')) return null;
+  if (!label) return null;
+  const type = label.endsWith('/') || href.trim().endsWith('/') ? 'folder' : 'file';
+  const basename = type === 'folder' ? label.replace(/\/+$/, '') : label;
+  return {
+    id: `mention:chat:${normalizedHref}`,
+    type,
+    basename: type === 'folder' ? basename.split('/').pop() ?? basename : basename,
+    displayName: type === 'folder' ? (label.endsWith('/') ? label : `${label}/`) : label,
+    relativePath: normalizedHref,
+  };
+}
+
+function renderMessageLink(children: React.ReactNode, href = '') {
+  const mention = mentionFromLink(children, href);
+  if (mention) return <MentionChip mention={mention} />;
+
+  const isExternal = /^[a-z][a-z0-9+.-]*:/.test(href) || href.startsWith('//');
+  return (
+    <a
+      className="inline-flex items-center gap-1 text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
+      href={href}
+      rel={isExternal ? 'noreferrer' : undefined}
+      target={isExternal ? '_blank' : undefined}
+      title={flattenNodeText(children)}
+    >
+      {children}
+      {isExternal && <ExternalLink size={12} className="opacity-70" />}
+    </a>
+  );
 }
 
 function renderDiff(diff: string) {
@@ -126,6 +176,118 @@ function modeContract(mode: CodeSpaceAgentMode) {
   return 'Reviewable patches with validation gates';
 }
 
+function truncateInlineText(value: string, maxLength = 72): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function basename(filePath: string): string {
+  return filePath.split('/').filter(Boolean).pop() ?? filePath;
+}
+
+function formatLineRange(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const record = input as Record<string, unknown>;
+  const start = typeof record.startLine === 'number' ? Math.max(1, Math.floor(record.startLine)) : null;
+  const end = typeof record.endLine === 'number' ? Math.max(1, Math.floor(record.endLine)) : null;
+  if (start == null && end == null) return '';
+  if (start != null && end != null && start !== end) return ` L${start}-${end}`;
+  return ` L${start ?? end ?? 1}`;
+}
+
+function describeToolCall(name: string, input: unknown): { label: string; kind: 'file' | 'search' | 'task'; detail?: string } {
+  if (input && typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    if (name === 'read_file') {
+      const path = typeof record.path === 'string' ? record.path : 'file';
+      return { label: `Read ${basename(path)}${formatLineRange(input)}`, kind: 'file' };
+    }
+    if (name === 'search_text') {
+      const query = typeof record.query === 'string' ? record.query : '';
+      return { label: `Searched ${truncateInlineText(query, 48) || 'the repo'}`, kind: 'search' };
+    }
+    if (name === 'list_files') {
+      const path = typeof record.path === 'string' && record.path.trim() ? record.path.trim() : '.';
+      return { label: `Listed ${path}`, kind: 'task' };
+    }
+    if (name === 'dependency_trace') {
+      const paths = Array.isArray(record.paths) ? record.paths.filter((path): path is string => typeof path === 'string') : [];
+      const firstPath = paths[0];
+      return {
+        label: firstPath ? `Traced dependencies for ${basename(firstPath)}` : 'Traced dependencies',
+        kind: 'task',
+      };
+    }
+    if (name === 'repo_map') {
+      return { label: 'Mapped repository', kind: 'task' };
+    }
+    if (name === 'git_status') {
+      return { label: 'Checked git status', kind: 'task' };
+    }
+    if (name === 'git_diff') {
+      const path = typeof record.path === 'string' && record.path.trim() ? record.path.trim() : '';
+      return { label: path ? `Read git diff for ${basename(path)}` : 'Read git diff', kind: 'task' };
+    }
+    if (name === 'read_artifact') {
+      const artifactId = typeof record.artifactId === 'string' ? record.artifactId : '';
+      return { label: artifactId ? `Read artifact ${artifactId}` : 'Read artifact', kind: 'task' };
+    }
+    if (name === 'grep_artifact') {
+      const pattern = typeof record.pattern === 'string' ? record.pattern : '';
+      return { label: pattern ? `Searched artifact for ${truncateInlineText(pattern, 40)}` : 'Searched artifact', kind: 'search' };
+    }
+    if (name === 'run_command') {
+      const command = typeof record.command === 'string' ? record.command : '';
+      const args = Array.isArray(record.args) ? record.args.filter((arg): arg is string => typeof arg === 'string') : [];
+      return {
+        label: command ? `Ran ${truncateInlineText([command, ...args].join(' '), 56)}` : 'Ran command',
+        kind: 'task',
+      };
+    }
+    if (name === 'edit_file') {
+      const edits = Array.isArray(record.edits) ? record.edits.length : 0;
+      return { label: edits > 0 ? `Prepared ${edits} edit${edits === 1 ? '' : 's'}` : 'Prepared edits', kind: 'task' };
+    }
+  }
+
+  return { label: `${name.replace(/_/g, ' ')}`, kind: 'task' };
+}
+
+function buildToolActivity(session: CodeSpaceAgentSession | null): {
+  summary: string;
+  entries: Array<{ id: string; label: string; detail?: string; timestamp: number; kind: 'file' | 'search' | 'task' }>;
+} {
+  const toolCalls = session?.toolCalls ?? [];
+  const readFiles = new Set<string>();
+  let searchCount = 0;
+  const entries = toolCalls
+    .map((call) => {
+      const description = describeToolCall(call.name, call.input);
+      if (call.name === 'read_file' && call.input && typeof call.input === 'object') {
+        const record = call.input as Record<string, unknown>;
+        const path = typeof record.path === 'string' ? record.path.trim() : '';
+        if (path) readFiles.add(path);
+      }
+      if (call.name === 'search_text') searchCount += 1;
+      return {
+        id: call.id,
+        label: description.label,
+        detail: call.status === 'error' ? call.error ?? call.summary : call.status === 'success' ? call.summary : undefined,
+        timestamp: call.updatedAt ?? call.createdAt,
+        kind: description.kind,
+      };
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const filesLabel = `${readFiles.size} file${readFiles.size === 1 ? '' : 's'}`;
+  const searchesLabel = `${searchCount} search${searchCount === 1 ? '' : 'es'}`;
+  return {
+    summary: `Explored ${filesLabel}, ${searchesLabel}`,
+    entries,
+  };
+}
+
 export function AgentPanel({
   session,
   sessions,
@@ -146,6 +308,7 @@ export function AgentPanel({
   onRenameSession,
   onDeleteSession,
   onSubmitPrompt,
+  onEditPrompt,
   onCancelRun,
   onAcceptDiff,
   onRejectDiff,
@@ -153,6 +316,8 @@ export function AgentPanel({
   onOpenPlanFile,
   onOpenKnowledgeGraph,
   onBuildFromPlan,
+  draftPrompt,
+  draftPromptVersion = 0,
   mentionIndex,
   indexStatus = 'ready',
   indexError,
@@ -163,6 +328,7 @@ export function AgentPanel({
 }: AgentPanelProps) {
   const [prompt, setPrompt] = useState('');
   const [promptMentions, setPromptMentions] = useState<SelectedMention[]>([]);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
   const prevSessionIdRef = useRef<string | null>(null);
@@ -186,6 +352,7 @@ export function AgentPanel({
     return (session?.verificationResults ?? []).filter((result) => result.status === 'failed' || result.output.trim());
   }, [session?.verificationResults]);
   const visiblePlanBuildStatus = session?.planMarkdown?.buildStatus ?? 'available';
+  const toolActivity = useMemo(() => buildToolActivity(session), [session]);
 
   // Motivation vs Logic: Cursor-style review keeps applied patches visible alongside pending ones, so the sidebar
   // shows the full change history instead of dropping a container as soon as a patch is accepted.
@@ -217,6 +384,12 @@ export function AgentPanel({
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [session?.messages, isRunning, session?.planMarkdown?.filePath]);
+
+  useEffect(() => {
+    if (draftPrompt == null) return;
+    setPrompt(draftPrompt);
+    setPromptMentions([]);
+  }, [draftPrompt, draftPromptVersion]);
 
   // Estimate token usage from new messages and record to the usage tracker
   useEffect(() => {
@@ -275,6 +448,17 @@ export function AgentPanel({
     });
   };
 
+  const handleCopyPrompt = async (message: CodeSpaceMessage) => {
+    const text = renderMessageText(message);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => setCopiedMessageId((current) => (current === message.id ? null : current)), 1400);
+    } catch {
+      setCopiedMessageId(null);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col border-l border-[#30363d] bg-[#0d1117] text-xs font-mono text-[#e6edf3]">
       <div className="flex flex-wrap items-center gap-2 border-b border-[#30363d] px-3 py-2">
@@ -311,6 +495,34 @@ export function AgentPanel({
           onRenameSession={onRenameSession}
           onDeleteSession={onDeleteSession}
         />
+        {toolActivity.entries.length > 0 ? (
+          <CollapsibleSection
+            title={toolActivity.summary}
+            defaultOpen={false}
+            compact
+            rightSlot={<span className="text-[9px] text-[#6d6d6d]">{toolActivity.entries.length}</span>}
+          >
+            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-1.5">
+              {toolActivity.entries.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-start gap-2 rounded px-1.5 py-1 text-[11px] leading-5 text-[#c9d1d9] hover:bg-[#161b22]"
+                >
+                  <span
+                    className={`mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full ${
+                      entry.kind === 'file' ? 'bg-[#58a6ff]' : entry.kind === 'search' ? 'bg-[#f0883e]' : 'bg-[#8b949e]'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate">{entry.label}</div>
+                    {entry.detail ? <div className="mt-0.5 truncate text-[10px] text-[#6e7681]">{entry.detail}</div> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        ) : null}
         <PlanClarificationPanel questions={session?.clarifyingQuestions ?? []} disabled={isRunning} onSubmitAnswers={onSubmitPrompt} />
         <div className="rounded border border-[#30363d] bg-[#11182766] px-2 py-1.5 text-[10px] text-[#8b949e]">
           <div className="flex items-center justify-between gap-2">
@@ -347,7 +559,37 @@ export function AgentPanel({
                   <div className="mb-1 flex items-center gap-1 text-[9px] uppercase tracking-widest text-[#6e7681]">
                     {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : message.role === 'reasoning' ? 'Thinking' : message.role}
                   </div>
-                  <div className="whitespace-pre-wrap break-words text-[11px] leading-5">{renderMessageText(message)}</div>
+                  <MarkdownRenderer
+                    markdown={renderMessageText(message)}
+                    className="text-inherit"
+                    contentClassName="text-[11px] leading-5"
+                    componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
+                  />
+                  {message.role === 'user' ? (
+                    <div className="mt-1.5 flex items-center gap-1 border-t border-[#1f6feb33] pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyPrompt(message)}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#1f6feb22] hover:text-[#c9d1d9]"
+                        title="Copy prompt"
+                        aria-label="Copy prompt"
+                      >
+                        {copiedMessageId === message.id ? <Check size={11} /> : <Copy size={11} />}
+                        {copiedMessageId === message.id ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onEditPrompt(message.id)}
+                        disabled={isRunning}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#1f6feb22] hover:text-[#c9d1d9] disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Edit prompt and rewind context"
+                        aria-label="Edit prompt and rewind context"
+                      >
+                        <Edit3 size={11} />
+                        Edit
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
               <PlanLink
@@ -445,8 +687,25 @@ export function AgentPanel({
         </div>
         <div className="mt-1 flex items-center justify-between gap-2 px-0.5">
           <div className="flex items-center gap-3 text-[10px] whitespace-nowrap">
-            <button type="button" onClick={onGenerateDiagram} disabled={!canGenerateDiagram || isRunning} title={canGenerateDiagram ? 'Open the current project in Multi Layer mode' : 'Open a project first'} className="text-[#58a6ff] underline underline-offset-2 hover:text-[#79b8ff] disabled:cursor-not-allowed disabled:text-[#6e7681] disabled:no-underline">Generate Diagram</button>
-            <button type="button" onClick={onOpenAppPlanner} className="text-[#58a6ff] underline underline-offset-2 hover:text-[#79b8ff]">App Planner</button>
+            <button
+              type="button"
+              onClick={onGenerateDiagram}
+              disabled={!canGenerateDiagram || isRunning}
+              title="Generate Diagram"
+              aria-label="Generate Diagram"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#161b22] hover:text-[#79b8ff] disabled:cursor-not-allowed disabled:text-[#6e7681] disabled:hover:bg-transparent"
+            >
+              <Layers3 size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={onOpenAppPlanner}
+              title="App Planner"
+              aria-label="App Planner"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#161b22] hover:text-[#79b8ff]"
+            >
+              <Sparkles size={15} />
+            </button>
           </div>
           <TokenUsageSpinbar />
           <div className="flex items-center gap-2 whitespace-nowrap">

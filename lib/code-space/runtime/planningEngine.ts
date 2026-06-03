@@ -18,12 +18,31 @@ const REQUIRED_PLAN_SECTIONS = [
   'Summary',
   'Intent, Scope, and Non-Goals',
   'Repository Evidence Reviewed',
-  'Candidate Approaches and Recommendation',
   'Implementation Milestones',
   'File-Level Change Plan',
   'Validation Plan',
 ];
 const MAX_PLAN_FILES = 14;
+const HIDDEN_PLAN_SECTION_HEADINGS = [
+  'Context Sufficiency Gate',
+  'Context Sufficiency',
+  'Status',
+  'Candidate Approaches',
+  'Candidate Approaches and Recommendation',
+  'Approach 1',
+  'Approach 2',
+  'Approach 3',
+  'Current-State Diagnosis to Verify',
+  'Diagnosis Checks Before Editing Code',
+  'Target Design Direction',
+  'Safety and Change Control',
+  'Repair Policy',
+  'Repair Plan',
+  'Implementation Policy for the Next Code Run',
+  'Definition of Done',
+  'Final Response Format',
+  'Final Response Format for the Implementation Run',
+] as const;
 
 function formatList(items: string[]): string {
   if (!items.length) return '';
@@ -132,23 +151,6 @@ function milestoneLines(files: ContextGraphFile[], validationCommands: TerminalC
   ];
 }
 
-/**
- * Evidence-grounded candidate approaches for the deterministic fallback plan. Real plans authored by
- * the model will be richer; this guarantees the required section exists with at least two distinct,
- * scope-aware options and an explicit recommendation even when the model fails to finalize.
- */
-function candidateApproachLines(files: ContextGraphFile[], action: string): string[] {
-  const owner = files[0]?.path ?? 'the smallest owner module identified during recall';
-  const secondary = files[1]?.path;
-  return [
-    `- **Approach A — Minimal in-place change (recommended).** Implement "${action}" directly in \`${owner}\`, reusing existing abstractions and preserving public APIs. Pros: smallest, most reviewable diff; lowest regression risk. Cons: limited if the responsibility is actually shared.`,
-    secondary
-      ? `- **Approach B — Coordinated change across owners.** Extend \`${owner}\` and \`${secondary}\` together when the behaviour spans both. Pros: keeps related call sites coherent. Cons: larger surface, more validation.`
-      : '- **Approach B — Extract a small shared helper.** Introduce one focused, well-named helper if the logic would otherwise be duplicated. Pros: single source of truth. Cons: adds an abstraction; only worth it with real duplication evidence.',
-    '- **Recommendation:** Approach A unless repository evidence proves the responsibility is shared, in which case prefer Approach B.',
-  ];
-}
-
 export class PlanningEngine {
   buildTodos(mode: 'ask' | 'plan' | 'code', context: ContextGraphResult): string[] {
     if (mode === 'ask') return ['Gather repository evidence for the question', 'Trace relevant references and tests', 'Answer directly from evidence'];
@@ -220,9 +222,6 @@ export class PlanningEngine {
       '## Repository Evidence Reviewed',
       ...evidenceLines(selectedFiles),
       '',
-      '## Candidate Approaches and Recommendation',
-      ...candidateApproachLines(selectedFiles, action),
-      '',
       '## Implementation Milestones',
       ...milestoneLines(selectedFiles, validationCommands),
       '',
@@ -244,14 +243,43 @@ export class PlanningEngine {
   /** Persist plan markdown to the canonical .agent/plans/<sessionId>.md path. */
   async writePlanContent(root: string, sessionId: string, content: string): Promise<{ filePath: string; content: string }> {
     const filePath = `.agent/plans/${sessionId.replace(/[^a-zA-Z0-9_.-]+/g, '-')}.md`;
+    const sanitizedContent = sanitizePlanMarkdown(content);
     await fs.mkdir(path.dirname(path.join(root, filePath)), { recursive: true });
-    await fs.writeFile(path.join(root, filePath), content, 'utf8');
-    return { filePath, content };
+    await fs.writeFile(path.join(root, filePath), sanitizedContent, 'utf8');
+    return { filePath, content: sanitizedContent };
   }
 }
 
 export function planContainsRequiredSections(content: string): boolean {
   return REQUIRED_PLAN_SECTIONS.every((section) => content.includes(formatPlanArtifactSectionHeading(section)) || content.includes(`## ${section}`));
+}
+
+export function sanitizePlanMarkdown(content: string): string {
+  const hiddenHeadingPattern = new RegExp(
+    `^#{1,6}\\s+(?:${HIDDEN_PLAN_SECTION_HEADINGS.map((heading) => escapeRegExp(heading)).join('|')})\\b`,
+    'i',
+  );
+  const lines = content.split(/\r?\n/);
+  const kept: string[] = [];
+  let skippingHiddenSection = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^#{1,6}\s+/.test(trimmed)) {
+      skippingHiddenSection = hiddenHeadingPattern.test(trimmed);
+      if (skippingHiddenSection) continue;
+    }
+    if (skippingHiddenSection) continue;
+    if (/^[-*]?\s*Status\s*:\s*(ready|needs_recall|needs_review|verified|failed|cancelled)\b/i.test(trimmed)) continue;
+    if (/^[-*]?\s*(Approach\s+\d+|Approach\s+[A-Z])\b/i.test(trimmed)) continue;
+    kept.push(line);
+  }
+
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export { REQUIRED_PLAN_SECTIONS, PLAN_ARTIFACT_SECTION_TITLES };
