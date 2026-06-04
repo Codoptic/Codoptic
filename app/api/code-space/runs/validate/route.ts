@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import { AgentRuntime, ResumeValidationRequestSchema } from '@/lib/code-space/runtime/agentRuntime';
 import { encodeSseEvent } from '@/lib/code-space/runtime/events';
 import { guardPath } from '@/lib/security/pathGuard';
@@ -21,16 +22,39 @@ export async function POST(req: NextRequest) {
   const agentRuntime = new AgentRuntime();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let terminalEventSeen = false;
+      const send = (event: AgentSSEEvent) => {
+        if (event.type === 'agent_done' || event.type === 'agent_error') {
+          terminalEventSeen = true;
+        } else if (event.type === 'structured_event' && event.event.type === 'run.completed') {
+          terminalEventSeen = true;
+        }
+        controller.enqueue(encoder.encode(encodeSseEvent(event)));
+      };
       try {
         await agentRuntime.resumeValidation(
           { ...body.data, projectRoot: guarded.resolved },
-          (event) => controller.enqueue(encoder.encode(encodeSseEvent(event))),
+          send,
           req.signal,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        controller.enqueue(encoder.encode(encodeSseEvent({ type: 'agent_error', message, recoverable: true })));
+        if (!terminalEventSeen) {
+          terminalEventSeen = true;
+          controller.enqueue(encoder.encode(encodeSseEvent({ type: 'agent_error', message, recoverable: true })));
+        }
       } finally {
+        if (!terminalEventSeen) {
+          controller.enqueue(
+            encoder.encode(
+              encodeSseEvent({
+                type: 'agent_error',
+                message: 'The validation stream ended without a terminal completion event.',
+                recoverable: true,
+              }),
+            ),
+          );
+        }
         controller.close();
       }
     },

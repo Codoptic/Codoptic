@@ -134,6 +134,8 @@ function nowId(prefix: string): string {
   return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const BUILD_RUN_WATCHDOG_MS = 10 * 60 * 1000;
+
 function buildPendingDiffFromEvent(event: {
   diffId: string;
   filePath: string;
@@ -403,6 +405,7 @@ export function CodeSpaceWorkspace() {
   const [knowledgeGraphModalOpen, setKnowledgeGraphModalOpen] = useState(false);
   const agentAbortRef = useRef<AbortController | null>(null);
   const runningSessionIdRef = useRef<string | null>(null);
+  const activeRunTokenRef = useRef<string | null>(null);
   const applyingDiffIdsRef = useRef<Set<string>>(new Set());
   const executionPolicyRef = useRef<CodeSpaceExecutionPolicy>(executionPolicy);
   const diffDecorationIdsRef = useRef<string[]>([]);
@@ -1317,6 +1320,25 @@ export function CodeSpaceWorkspace() {
     return () => window.removeEventListener('code-space:open-plan-file', onOpenPlanFile as EventListener);
   }, [openPlanFile]);
 
+  useEffect(() => {
+    // Keep tree mutations in sync even when they come from the explorer's portal-mounted menu.
+    const onRefreshTree = (event: Event) => {
+      const customEvent = event as CustomEvent<{ projectId?: string; rootPath?: string; folderPath?: string }>;
+      const { projectId, rootPath, folderPath = '' } = customEvent.detail ?? {};
+      const project =
+        (projectId ? projects.find((item) => item.id === projectId) : null) ??
+        (rootPath ? projects.find((item) => item.rootPath === rootPath) : null) ??
+        activeProject;
+      if (!project?.rootPath) return;
+      void loadTree(project, folderPath);
+      void loadTree(project, '');
+      void refreshGitStatus(project);
+    };
+
+    window.addEventListener('code-space:refresh-tree', onRefreshTree as EventListener);
+    return () => window.removeEventListener('code-space:refresh-tree', onRefreshTree as EventListener);
+  }, [activeProject, loadTree, projects, refreshGitStatus]);
+
   const saveActiveFile = useCallback(async () => {
     if (!activeProject?.rootPath || !activeTab) return;
     const payload = fileContents[activeTab.id];
@@ -1690,6 +1712,7 @@ export function CodeSpaceWorkspace() {
     if (!project || !project.rootPath) return;
     const requestedMode = options.modeOverride ?? agentMode;
     const buildPlanPath = options.buildPlanPath ?? extractBuildPlanPath(userPrompt);
+    const runToken = nowId('run');
 
 
     const session = ensureSession();
@@ -1718,6 +1741,7 @@ export function CodeSpaceWorkspace() {
     updateSession(sessionWithPrompt);
     setActiveSessionId(sessionWithPrompt.id);
     runningSessionIdRef.current = sessionWithPrompt.id;
+    activeRunTokenRef.current = runToken;
 
     const abortCtrl = new AbortController();
     agentAbortRef.current = abortCtrl;
@@ -1728,8 +1752,27 @@ export function CodeSpaceWorkspace() {
     // Root Cause vs Logic: the plan card used to keep its Build affordance forever because build completion was never
     // persisted on the session; track the build lifecycle here so the right sidebar can hide the action when done.
     let buildValidationFailed = false;
+    let buildTerminalEventSeen = false;
+    let buildFailureRecorded = false;
+    let buildWatchdogId: number | null = null;
+    const isCurrentRun = () => activeRunTokenRef.current === runToken;
+    const clearBuildWatchdog = () => {
+      if (buildWatchdogId == null) return;
+      window.clearTimeout(buildWatchdogId);
+      buildWatchdogId = null;
+    };
+    const releaseRunOwnership = () => {
+      if (!isCurrentRun()) return false;
+      activeRunTokenRef.current = null;
+      runningSessionIdRef.current = null;
+      if (agentAbortRef.current === abortCtrl) {
+        agentAbortRef.current = null;
+      }
+      setAgentRunning(false);
+      return true;
+    };
     const setPlanBuildStatus = (buildStatus: 'available' | 'running' | 'completed' | 'failed') => {
-      if (!buildPlanPath) return;
+      if (!buildPlanPath || !isCurrentRun()) return;
       patchSession(sessionWithPrompt.id, (current) => {
         if (!current.planMarkdown || current.planMarkdown.filePath !== buildPlanPath) return current;
         return {
@@ -1742,6 +1785,39 @@ export function CodeSpaceWorkspace() {
         };
       });
     };
+    const failRun = (message: string, options: { buildFailed?: boolean } = {}) => {
+      if (!isCurrentRun() || buildFailureRecorded) return;
+      buildFailureRecorded = true;
+      if (message) {
+        appendSessionMessage(sessionWithPrompt.id, {
+          id: nowId('msg'),
+          role: 'system',
+          content: `⚠ ${message}`,
+          createdAt: Date.now(),
+        });
+      }
+      patchSession(sessionWithPrompt.id, (current) => ({
+        ...current,
+        status: 'blocked',
+        updatedAt: Date.now(),
+      }));
+      if (buildPlanPath && options.buildFailed !== false) {
+        setPlanBuildStatus('failed');
+      }
+    };
+    const settleRun = () => {
+      clearBuildWatchdog();
+      void releaseRunOwnership();
+    };
+    if (buildPlanPath) {
+      buildWatchdogId = window.setTimeout(() => {
+        if (!isCurrentRun() || buildTerminalEventSeen) return;
+        buildTerminalEventSeen = true;
+        abortCtrl.abort();
+        failRun('Build timed out before it produced a terminal event.');
+        settleRun();
+      }, BUILD_RUN_WATCHDOG_MS);
+    }
 
     const openTabs = tabs.map((tab) => tab.path).filter((path): path is string => Boolean(path));
     const usesCustomModel =
@@ -1836,8 +1912,7 @@ export function CodeSpaceWorkspace() {
       });
 
       if (!response.body) {
-        setAgentRunning(false);
-        return;
+        throw new Error('The agent stream did not return a response body.');
       }
 
       const reader = response.body.getReader();
@@ -1852,6 +1927,7 @@ export function CodeSpaceWorkspace() {
         buffer = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
+          if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
             if (event.type === 'diff_proposed') {
@@ -2036,6 +2112,8 @@ export function CodeSpaceWorkspace() {
                 }));
               } else if (event.event.type === 'run.completed') {
                 const payload = event.event.payload as { status?: string; phase?: string };
+                buildTerminalEventSeen = true;
+                clearBuildWatchdog();
                 patchSession(sessionWithPrompt.id, (current) => ({
                   ...current,
                   runtimePhase: payload.phase ?? current.runtimePhase,
@@ -2113,6 +2191,8 @@ export function CodeSpaceWorkspace() {
                 }));
               }
             } else if (event.type === 'agent_done') {
+              buildTerminalEventSeen = true;
+              clearBuildWatchdog();
               const summary = event.summary.trim();
               if (summary) {
                 if (!liveAssistantMessageId) {
@@ -2138,18 +2218,14 @@ export function CodeSpaceWorkspace() {
                 setPlanBuildStatus('completed');
               }
             } else if (event.type === 'agent_error') {
-              appendSessionMessage(sessionWithPrompt.id, {
-                id: nowId('msg'),
-                role: 'system',
-                content: `⚠ ${event.message}`,
-                createdAt: Date.now(),
-              });
-              patchSession(sessionWithPrompt.id, (current) => ({
-                ...current,
-                status: 'blocked',
-                updatedAt: Date.now(),
-              }));
-              setPlanBuildStatus('available');
+              buildTerminalEventSeen = true;
+              clearBuildWatchdog();
+              failRun(event.message);
+              if (buildPlanPath) {
+                setPlanBuildStatus('failed');
+              } else {
+                setPlanBuildStatus('available');
+              }
             }
           } catch {
             // Ignore malformed SSE chunks.
@@ -2158,23 +2234,22 @@ export function CodeSpaceWorkspace() {
       }
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
-        appendSessionMessage(sessionWithPrompt.id, {
-          id: nowId('msg'),
-          role: 'system',
-          content: `⚠ ${err.message}`,
-          createdAt: Date.now(),
-        });
-        patchSession(sessionWithPrompt.id, (current) => ({
-          ...current,
-          status: 'blocked',
-          updatedAt: Date.now(),
-        }));
-        setPlanBuildStatus('available');
+        failRun(err.message);
+        if (!buildPlanPath) {
+          setPlanBuildStatus('available');
+        }
+      } else if (err instanceof Error && err.name === 'AbortError' && isCurrentRun()) {
+        failRun(buildPlanPath ? 'Build was aborted before completion.' : 'The run was aborted.');
+        if (!buildPlanPath) {
+          setPlanBuildStatus('available');
+        }
       }
     } finally {
-      setAgentRunning(false);
-      agentAbortRef.current = null;
-      runningSessionIdRef.current = null;
+      clearBuildWatchdog();
+      if (!buildTerminalEventSeen && !buildFailureRecorded && isCurrentRun()) {
+        failRun('The agent stream ended without a terminal completion event.');
+      }
+      void releaseRunOwnership();
     }
   }, [
     activeProject,
@@ -2210,6 +2285,7 @@ export function CodeSpaceWorkspace() {
       setDiffConfirmation(null);
       return;
     }
+    const runToken = nowId('run');
     const usesCustomModel = provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
     const model = usesCustomModel
       ? (provider.customModel ?? provider.model)
@@ -2224,9 +2300,31 @@ export function CodeSpaceWorkspace() {
     const abortCtrl = new AbortController();
     agentAbortRef.current = abortCtrl;
     runningSessionIdRef.current = gate.sessionId;
+    activeRunTokenRef.current = runToken;
     patchSession(gate.sessionId, (current) => ({ ...current, status: decision === 'cancel' ? 'reviewing' : 'checking', updatedAt: Date.now() }));
 
     let liveAssistantMessageId: string | null = null;
+    let terminalEventSeen = false;
+    let failureRecorded = false;
+    const isCurrentRun = () => activeRunTokenRef.current === runToken;
+    const releaseRunOwnership = () => {
+      if (!isCurrentRun()) return false;
+      activeRunTokenRef.current = null;
+      runningSessionIdRef.current = null;
+      if (agentAbortRef.current === abortCtrl) {
+        agentAbortRef.current = null;
+      }
+      setAgentRunning(false);
+      return true;
+    };
+    const failRun = (message: string) => {
+      if (!isCurrentRun() || failureRecorded) return;
+      failureRecorded = true;
+      if (message) {
+        appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'system', content: `⚠ ${message}`, createdAt: Date.now() });
+      }
+      patchSession(gate.sessionId, (current) => ({ ...current, status: 'blocked', updatedAt: Date.now() }));
+    };
     try {
       const response = await fetch('/api/code-space/runs/validate', {
         method: 'POST',
@@ -2244,8 +2342,7 @@ export function CodeSpaceWorkspace() {
         signal: abortCtrl.signal,
       });
       if (!response.body) {
-        setAgentRunning(false);
-        return;
+        throw new Error('The validation stream did not return a response body.');
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -2258,6 +2355,7 @@ export function CodeSpaceWorkspace() {
         buffer = lines.pop() ?? '';
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
+          if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
             if (event.type === 'validation_result') {
@@ -2289,6 +2387,7 @@ export function CodeSpaceWorkspace() {
                 patchSession(gate.sessionId, (current) => ({ ...current, runtimePhase: payload.phase ?? current.runtimePhase, updatedAt: Date.now() }));
               } else if (event.event.type === 'run.completed') {
                 const payload = event.event.payload as { status?: string; phase?: string };
+                terminalEventSeen = true;
                 patchSession(gate.sessionId, (current) => ({
                   ...current,
                   runtimePhase: payload.phase ?? current.runtimePhase,
@@ -2315,6 +2414,7 @@ export function CodeSpaceWorkspace() {
                 updateSessionMessage(gate.sessionId, liveAssistantMessageId, (message) => ({ ...message, content: `${message.content}${event.delta}` }));
               }
             } else if (event.type === 'agent_done') {
+              terminalEventSeen = true;
               const summary = event.summary.trim();
               if (summary) {
                 if (!liveAssistantMessageId) {
@@ -2326,8 +2426,90 @@ export function CodeSpaceWorkspace() {
               patchSession(gate.sessionId, (current) => ({ ...current, status: 'finalized', updatedAt: Date.now() }));
               if (activeProject) void refreshGitStatus(activeProject);
             } else if (event.type === 'agent_error') {
-              appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'system', content: `⚠ ${event.message}`, createdAt: Date.now() });
-              patchSession(gate.sessionId, (current) => ({ ...current, status: 'blocked', updatedAt: Date.now() }));
+              terminalEventSeen = true;
+              failRun(event.message);
+            }
+          } catch {
+            // Ignore malformed SSE chunks.
+          }
+        }
+      }
+      if (buffer.trim()) {
+        for (const line of buffer.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          if (!isCurrentRun()) continue;
+          try {
+            const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            if (event.type === 'validation_result') {
+              patchSession(gate.sessionId, (current) => ({
+                ...current,
+                verificationResults: [
+                  ...current.verificationResults.filter((result) => result.id !== event.id),
+                  { id: event.id, command: event.command, status: event.status, output: event.output },
+                ],
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'file_applied') {
+              const appliedAt = Date.now();
+              setAgentChangesets((cur) => [
+                ...cur.filter((item) => item.filePath !== event.filePath),
+                { filePath: event.filePath, beforeContent: event.beforeContent, afterContent: event.afterContent, deleted: event.deleted, acceptedAt: appliedAt },
+              ]);
+              patchSession(gate.sessionId, (current) => ({
+                ...current,
+                filesChanged: Array.from(new Set([...current.filesChanged, event.filePath])),
+                updatedAt: Date.now(),
+              }));
+              if (activeProject) void refreshGitStatus(activeProject);
+            } else if (event.type === 'supervisor_verdict') {
+              patchSession(gate.sessionId, (current) => ({ ...current, status: event.status === 'verified' ? 'verified' : 'needs_review', updatedAt: Date.now() }));
+            } else if (event.type === 'structured_event') {
+              if (event.event.type === 'plan.updated') {
+                const payload = event.event.payload as { phase?: string };
+                patchSession(gate.sessionId, (current) => ({ ...current, runtimePhase: payload.phase ?? current.runtimePhase, updatedAt: Date.now() }));
+              } else if (event.event.type === 'run.completed') {
+                const payload = event.event.payload as { status?: string; phase?: string };
+                terminalEventSeen = true;
+                patchSession(gate.sessionId, (current) => ({
+                  ...current,
+                  runtimePhase: payload.phase ?? current.runtimePhase,
+                  runtimeStatus:
+                    payload.status === 'verified' || payload.status === 'needs_review' || payload.status === 'failed' || payload.status === 'cancelled'
+                      ? payload.status
+                      : current.runtimeStatus,
+                  status: payload.status === 'verified' ? 'verified' : payload.status === 'needs_review' ? 'needs_review' : current.status,
+                  updatedAt: Date.now(),
+                }));
+              } else if (event.event.type === 'file.reverted') {
+                const payload = event.event.payload as { path?: string };
+                if (payload.path) {
+                  const reverted = payload.path;
+                  setAgentChangesets((cur) => cur.filter((item) => item.filePath !== reverted));
+                }
+                if (activeProject) void refreshGitStatus(activeProject);
+              }
+            } else if (event.type === 'text_delta') {
+              if (!liveAssistantMessageId) {
+                liveAssistantMessageId = nowId('msg');
+                appendSessionMessage(gate.sessionId, { id: liveAssistantMessageId, role: 'assistant', content: event.delta, createdAt: Date.now() });
+              } else {
+                updateSessionMessage(gate.sessionId, liveAssistantMessageId, (message) => ({ ...message, content: `${message.content}${event.delta}` }));
+              }
+            } else if (event.type === 'agent_done') {
+              terminalEventSeen = true;
+              const summary = event.summary.trim();
+              if (summary) {
+                if (!liveAssistantMessageId) {
+                  appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'assistant', content: summary, createdAt: Date.now() });
+                } else {
+                  updateSessionMessage(gate.sessionId, liveAssistantMessageId, (message) => ({ ...message, content: summary }));
+                }
+              }
+              patchSession(gate.sessionId, (current) => ({ ...current, status: 'finalized', updatedAt: Date.now() }));
+              if (activeProject) void refreshGitStatus(activeProject);
+            } else if (event.type === 'agent_error') {
+              terminalEventSeen = true;
+              failRun(event.message);
             }
           } catch {
             // Ignore malformed SSE chunks.
@@ -2336,12 +2518,15 @@ export function CodeSpaceWorkspace() {
       }
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
-        appendSessionMessage(gate.sessionId, { id: nowId('msg'), role: 'system', content: `⚠ ${err.message}`, createdAt: Date.now() });
+        failRun(err.message);
+      } else if (err instanceof Error && err.name === 'AbortError' && isCurrentRun()) {
+        failRun('The validation stream was aborted before completion.');
       }
     } finally {
-      setAgentRunning(false);
-      agentAbortRef.current = null;
-      runningSessionIdRef.current = null;
+      if (!terminalEventSeen && !failureRecorded && isCurrentRun()) {
+        failRun('The validation stream ended without a terminal completion event.');
+      }
+      void releaseRunOwnership();
     }
   }, [
     activeProject,
@@ -2528,6 +2713,7 @@ export function CodeSpaceWorkspace() {
               type="button"
               aria-current={isActive ? 'true' : undefined}
               aria-expanded={node.type === 'dir' ? isOpen : undefined}
+              data-code-space-project-id={project.id}
               onClick={() => {
                 if (node.type === 'dir') {
                   setExpanded((current) => ({ ...current, [nodeKey]: !current[nodeKey] }));

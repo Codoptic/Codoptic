@@ -19,6 +19,7 @@ describe('Code Space execution policy', () => {
     expect(getCodeSpaceExecutionPolicyMeta('manual').accentClassName).toBe('text-[#3fb950]');
     expect(getCodeSpaceExecutionPolicyMeta('auto').label).toBe('Auto');
     expect(getCodeSpaceExecutionPolicyMeta('manual').label).toBe('Confirm');
+    expect(getCodeSpaceExecutionPolicyMeta('manual').description).toContain('Review-first mode');
   });
 
   it('recognizes auto mode and auto-applied diffs', () => {

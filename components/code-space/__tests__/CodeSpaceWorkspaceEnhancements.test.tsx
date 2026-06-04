@@ -11,6 +11,7 @@ describe('postFileAction', () => {
       ok: true,
       json: async () => ({ createdAt: Date.now() }),
     } as Response);
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
     const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
@@ -42,6 +43,18 @@ describe('postFileAction', () => {
         }),
       }),
     );
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const refreshEvent = dispatchSpy.mock.calls[0]?.[0] as CustomEvent<{
+      projectId: string;
+      rootPath: string;
+      folderPath: string;
+    }>;
+    expect(refreshEvent.type).toBe('code-space:refresh-tree');
+    expect(refreshEvent.detail).toEqual({
+      projectId: 'project-1',
+      rootPath: '/workspace/medbot',
+      folderPath: 'backend/memory',
+    });
     expect(alertSpy).not.toHaveBeenCalled();
   });
 });

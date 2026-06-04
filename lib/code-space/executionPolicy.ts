@@ -25,7 +25,7 @@ export const CODE_SPACE_EXECUTION_POLICY_META: Record<CodeSpaceExecutionPolicy, 
   manual: {
     policy: 'manual',
     label: 'Confirm',
-    description: 'Keep generated diffs pending for editor review before accepting them.',
+    description: 'Review-first mode: keep generated diffs pending for editor review before accepting them, and never leave a run spinning after the stream ends.',
     accentClassName: 'text-[#3fb950]',
     buttonClassName: 'border-[#23863666] bg-[#0f2a1a] text-[#7ee787] hover:bg-[#12331f]',
     menuItemClassName: 'text-[#7ee787] hover:bg-[#12331f]',

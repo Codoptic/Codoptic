@@ -22,6 +22,14 @@ interface ExplorerMenuState {
   target: ExplorerTarget;
 }
 
+interface ExplorerRefreshDetail {
+  projectId: string;
+  rootPath: string;
+  folderPath: string;
+}
+
+const EXPLORER_REFRESH_EVENT = 'code-space:refresh-tree';
+
 const NON_PATH_TITLES = new Set([
   'Explorer',
   'Search',
@@ -87,18 +95,14 @@ function isMacLike(): boolean {
   return /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
 }
 
-async function getActiveProject(): Promise<CodeSpaceProject | null> {
-  const preferences = readCodeSpacePreferences();
-  const projects = await readCodeSpaceProjects();
-  return (
-    projects.find((project) => project.id === preferences.activeProjectId) ??
-    projects.find((project) => Boolean(project.rootPath)) ??
-    null
-  );
-}
-
 async function resolveTargetFromButton(button: HTMLButtonElement): Promise<ExplorerTarget | null> {
-  const project = await getActiveProject();
+  const projectId = button.closest('[data-code-space-project-id]')?.getAttribute('data-code-space-project-id') ?? '';
+  const projects = await readCodeSpaceProjects();
+  const project =
+    projects.find((item) => item.id === projectId) ??
+    projects.find((item) => item.id === readCodeSpacePreferences().activeProjectId) ??
+    projects.find((item) => Boolean(item.rootPath)) ??
+    null;
   if (!project?.rootPath) return null;
   const path = normalizeRelativePath(button.getAttribute('title') ?? '');
   if (!path) return null;
@@ -113,28 +117,13 @@ async function resolveTargetFromButton(button: HTMLButtonElement): Promise<Explo
   };
 }
 
-function findButtonByPath(path: string): HTMLButtonElement | null {
-  const normalized = normalizeRelativePath(path);
-  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.code-space-workbench button[title]'));
-  return buttons.find((button) => normalizeRelativePath(button.getAttribute('title') ?? '') === normalized) ?? null;
-}
-
-function refreshExplorerPath(folderPath: string): void {
-  const refreshButton = document.querySelector<HTMLButtonElement>('.code-space-workbench button[title="Refresh tree"]');
-  refreshButton?.click();
-
-  const normalizedFolder = normalizeRelativePath(folderPath);
-  if (!normalizedFolder) return;
-
-  window.setTimeout(() => {
-    const folderButton = findButtonByPath(normalizedFolder);
-    if (!folderButton || folderButton.getAttribute('aria-expanded') !== 'true') return;
-    folderButton.click();
-    window.setTimeout(() => {
-      const reopenedFolderButton = findButtonByPath(normalizedFolder);
-      reopenedFolderButton?.click();
-    }, 80);
-  }, 80);
+function dispatchExplorerRefresh(target: ExplorerTarget, folderPath: string): void {
+  const detail: ExplorerRefreshDetail = {
+    projectId: target.projectId,
+    rootPath: target.rootPath,
+    folderPath: normalizeRelativePath(folderPath),
+  };
+  window.dispatchEvent(new CustomEvent(EXPLORER_REFRESH_EVENT, { detail }));
 }
 
 // Motivation vs Logic: `onError` lets callers surface failures through the in-app modal stack
@@ -157,7 +146,7 @@ export async function postFileAction(
     options?.onError?.(message);
     return false;
   }
-  refreshExplorerPath(refreshPath);
+  dispatchExplorerRefresh(target, refreshPath);
   return true;
 }
 

@@ -168,6 +168,17 @@ describe('AgentPanel', () => {
     expect(buildButton).toBeUndefined();
   });
 
+  it('keeps the build action visible after a failed build so the user can retry', () => {
+    const session = createSession();
+    session.planMarkdown = { ...session.planMarkdown!, buildStatus: 'failed' };
+    const { container } = renderPanel(vi.fn(), { session });
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const buildButton = buttons.find((button) => button.textContent?.includes('Build'));
+
+    expect(buildButton).toBeDefined();
+    expect(buildButton?.textContent).toContain('Build');
+  });
+
   it('renders icon-only planner shortcuts with hover labels', () => {
     const { container } = renderPanel();
     const buttons = Array.from(container.querySelectorAll('button'));
