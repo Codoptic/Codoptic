@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FitAddon } from '@xterm/addon-fit';
-import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import type { FitAddon } from '@xterm/addon-fit';
+import type { Terminal } from '@xterm/xterm';
 
 interface CodeSpaceTerminalProps {
   projectRoot?: string;
@@ -50,6 +50,10 @@ export function CodeSpaceTerminal({ projectRoot, active }: CodeSpaceTerminalProp
     if (!projectRoot || !containerRef.current) return;
     await teardown();
 
+    const [{ FitAddon }, { Terminal }] = await Promise.all([
+      import('@xterm/addon-fit'),
+      import('@xterm/xterm'),
+    ]);
     const fitAddon = new FitAddon();
     const term = new Terminal({
       cursorBlink: true,

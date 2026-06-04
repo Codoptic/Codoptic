@@ -94,7 +94,8 @@ import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import { nameSessionAsync } from '@/lib/code-space/sessionNaming';
 import { useMentionIndex } from '@/lib/code-space/mentions/useMentionIndex';
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
-import { appendInstructionToPrompt, extractBuildPlanPath, type CodeSpacePromptOptions } from '@/lib/code-space/planBuild';
+import { extractBuildPlanPath, type CodeSpacePromptOptions } from '@/lib/code-space/planBuild';
+import { buildAgentRuntimeHistory } from './agentRuntimeHistory';
 
 interface FilePayload {
   path: string;
@@ -192,6 +193,17 @@ function getApiKey(providerId: string): string {
     // Ignore storage parse errors and fall back to empty string.
   }
   return '';
+}
+
+async function readAgentErrorResponse(response: Response): Promise<string> {
+  try {
+    const payload = (await response.clone().json()) as { error?: unknown };
+    if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
+  } catch {
+    // Fall through to text parsing.
+  }
+  const text = await response.text().catch(() => '');
+  return text.trim() || `Agent request failed with HTTP ${response.status}.`;
 }
 
 function projectNameFromPath(rootPath: string): string {
@@ -1837,11 +1849,7 @@ export function CodeSpaceWorkspace() {
     // Root Cause vs Logic: instructions were leaking into the chat feed, so stored user messages stay concise and
     // we only merge the customization text while preparing the agent payload. The optional `agentPrompt` override
     // lets us deliver plan guidance without exposing it in the UI.
-    const latestHistory = sessionWithPrompt.messages.map((message) => {
-      if (message.role !== 'user') return message;
-      const contentForAgent = message.id === userMessage.id ? agentPromptContent : message.content;
-      return { ...message, content: appendInstructionToPrompt(contentForAgent, codeSpaceInstruction) };
-    });
+    const latestHistory = buildAgentRuntimeHistory(sessionWithPrompt.messages, userMessage.id, agentPromptContent, codeSpaceInstruction);
     let liveAssistantMessageId: string | null = null;
     let liveReasoningMessageId: string | null = null;
     const liveToolMessageIds = new Map<string, string>();
@@ -1910,6 +1918,10 @@ export function CodeSpaceWorkspace() {
         }),
         signal: abortCtrl.signal,
       });
+
+      if (!response.ok) {
+        throw new Error(await readAgentErrorResponse(response));
+      }
 
       if (!response.body) {
         throw new Error('The agent stream did not return a response body.');
@@ -2018,6 +2030,311 @@ export function CodeSpaceWorkspace() {
             } else if (event.type === 'diff_confirmation_required') {
               // Pre-validation diff gate: surface the full change set and pause until the user
               // confirms (run validation) or cancels (revert). Resolved via /api/code-space/runs/validate.
+              setDiffConfirmation({
+                sessionId: sessionWithPrompt.id,
+                runId: event.runId,
+                files: event.files,
+                unifiedDiff: event.unifiedDiff,
+                isGit: event.isGit,
+                summary: event.summary,
+              });
+            } else if (event.type === 'knowledge_graph_ready') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                knowledgeGraph: {
+                  projectId: event.projectId,
+                  nodeCount: event.nodeCount,
+                  edgeCount: event.edgeCount,
+                  viewUrl: event.viewUrl,
+                  reportPath: event.reportPath,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'terminal_chunk') {
+              setTerminalStream((prev) => prev + event.chunk);
+            } else if (event.type === 'plan_created') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                plan: event.items,
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'todo_created') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                todos: current.todos.some((todo) => todo.id === event.todo.id)
+                  ? current.todos
+                  : [...current.todos, event.todo],
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'todo_updated') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                todos: current.todos.map((todo) => (todo.id === event.todoId ? { ...todo, done: event.done } : todo)),
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'validation_result') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                verificationResults: [
+                  ...current.verificationResults.filter((result) => result.id !== event.id),
+                  {
+                    id: event.id,
+                    command: event.command,
+                    status: event.status,
+                    output: event.output,
+                  },
+                ],
+                updatedAt: Date.now(),
+              }));
+              if (buildPlanPath) {
+                if (event.status === 'failed') {
+                  buildValidationFailed = true;
+                  setPlanBuildStatus('failed');
+                } else if (event.status === 'passed' || event.status === 'skipped') {
+                  setPlanBuildStatus('completed');
+                }
+              }
+            } else if (event.type === 'structured_event') {
+              if (event.event.type === 'run.created') {
+                patchSession(sessionWithPrompt.id, (current) => ({
+                  ...current,
+                  messages: current.messages.map((message) =>
+                    message.id === userMessage.id ? { ...message, metadata: { ...(message.metadata ?? {}), runId: event.event.runId } } : message,
+                  ),
+                  updatedAt: Date.now(),
+                }));
+              } else if (event.event.type === 'plan.updated') {
+                const payload = event.event.payload as { phase?: string; state?: { status?: CodeSpaceAgentSession['runtimeStatus'] } };
+                patchSession(sessionWithPrompt.id, (current) => ({
+                  ...current,
+                  runtimePhase: payload.phase ?? current.runtimePhase,
+                  runtimeStatus: payload.state?.status ?? current.runtimeStatus,
+                  status:
+                    payload.phase === 'awaiting_patch_review'
+                      ? 'waiting_review'
+                      : payload.phase === 'validating'
+                        ? 'checking'
+                        : payload.phase === 'needs_review'
+                          ? 'needs_review'
+                          : payload.phase === 'verified'
+                            ? 'verified'
+                            : current.status,
+                  updatedAt: Date.now(),
+                }));
+              } else if (event.event.type === 'run.completed') {
+                const payload = event.event.payload as { status?: string; phase?: string };
+                buildTerminalEventSeen = true;
+                clearBuildWatchdog();
+                patchSession(sessionWithPrompt.id, (current) => ({
+                  ...current,
+                  runtimePhase: payload.phase ?? current.runtimePhase,
+                  runtimeStatus:
+                    payload.status === 'verified' || payload.status === 'needs_review' || payload.status === 'failed' || payload.status === 'cancelled'
+                      ? payload.status
+                      : current.runtimeStatus,
+                  status: payload.status === 'verified' ? 'verified' : payload.status === 'needs_review' ? 'needs_review' : current.status,
+                  updatedAt: Date.now(),
+                }));
+              }
+            } else if (event.type === 'tool_start') {
+              const toolMessageId = nowId('msg');
+              liveToolMessageIds.set(event.toolCallId, toolMessageId);
+              appendSessionMessage(sessionWithPrompt.id, {
+                id: toolMessageId,
+                role: 'tool',
+                content: `Started ${event.tool}: ${stringifyPreview(event.input)}`,
+                createdAt: Date.now(),
+              });
+              upsertSessionToolCall(sessionWithPrompt.id, {
+                id: event.toolCallId,
+                name: event.tool,
+                status: 'running',
+                summary: 'Running…',
+                input: event.input,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              });
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                toolCallCount: current.toolCallCount + 1,
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'tool_result') {
+              const existingMessageId = liveToolMessageIds.get(event.toolCallId);
+              const toolContent = event.error
+                ? `Error in ${event.tool}: ${event.error}`
+                : `Finished ${event.tool}: ${stringifyPreview(event.output)}`;
+              if (existingMessageId) {
+                updateSessionMessage(sessionWithPrompt.id, existingMessageId, (message) => ({
+                  ...message,
+                  content: `${message.content}\n${toolContent}`,
+                }));
+              } else {
+                appendSessionMessage(sessionWithPrompt.id, {
+                  id: nowId('msg'),
+                  role: 'tool',
+                  content: toolContent,
+                  createdAt: Date.now(),
+                });
+              }
+              upsertSessionToolCall(sessionWithPrompt.id, {
+                id: event.toolCallId,
+                name: event.tool,
+                status: event.error ? 'error' : 'success',
+                summary: event.error ? event.error : `Completed in ${event.durationMs}ms`,
+                output: event.error ? { error: event.error } : event.output,
+                error: event.error,
+                durationMs: event.durationMs,
+              });
+            } else if (event.type === 'text_delta') {
+              if (!liveAssistantMessageId) {
+                liveAssistantMessageId = nowId('msg');
+                appendSessionMessage(sessionWithPrompt.id, {
+                  id: liveAssistantMessageId,
+                  role: 'assistant',
+                  content: event.delta,
+                  createdAt: Date.now(),
+                });
+              } else {
+                updateSessionMessage(sessionWithPrompt.id, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  content: `${message.content}${event.delta}`,
+                }));
+              }
+            } else if (event.type === 'agent_done') {
+              buildTerminalEventSeen = true;
+              clearBuildWatchdog();
+              const summary = event.summary.trim();
+              if (summary) {
+                if (!liveAssistantMessageId) {
+                  appendSessionMessage(sessionWithPrompt.id, {
+                    id: nowId('msg'),
+                    role: 'assistant',
+                    content: summary,
+                    createdAt: Date.now(),
+                  });
+                } else {
+                  updateSessionMessage(sessionWithPrompt.id, liveAssistantMessageId, (message) => ({
+                    ...message,
+                    content: summary,
+                  }));
+                }
+              }
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                status: 'finalized',
+                updatedAt: Date.now(),
+              }));
+              if (buildPlanPath && !buildValidationFailed) {
+                setPlanBuildStatus('completed');
+              }
+            } else if (event.type === 'agent_error') {
+              buildTerminalEventSeen = true;
+              clearBuildWatchdog();
+              failRun(event.message);
+              if (buildPlanPath) {
+                setPlanBuildStatus('failed');
+              } else {
+                setPlanBuildStatus('available');
+              }
+            }
+          } catch {
+            // Ignore malformed SSE chunks.
+          }
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) {
+        for (const line of buffer.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          if (!isCurrentRun()) continue;
+          try {
+            const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            if (event.type === 'diff_proposed') {
+              const diff = buildPendingDiffFromEvent({
+                diffId: event.diffId,
+                filePath: event.filePath,
+                oldContent: event.oldContent,
+                newContent: event.newContent,
+                deleted: event.deleted,
+                explanation: event.explanation,
+                unifiedDiff: event.unifiedDiff,
+              });
+              if (shouldAutoApplyCodeSpaceDiffs(executionPolicyRef.current, event.autoApplied)) {
+                void applyPendingDiff(diff, { removeOnFailure: true });
+              } else {
+                // Upsert by stable diffId: a re-proposal for the same file carries the cumulative
+                // original→latest diff, so replace the prior card instead of stacking stale baselines.
+                setPendingDiffs((prev) => [...prev.filter((item) => item.diffId !== diff.diffId), diff]);
+              }
+            } else if (event.type === 'file_applied') {
+              const appliedAt = Date.now();
+              setAgentChangesets((current) => [
+                ...current.filter((item) => item.filePath !== event.filePath),
+                {
+                  filePath: event.filePath,
+                  beforeContent: event.beforeContent,
+                  afterContent: event.afterContent,
+                  deleted: event.deleted,
+                  acceptedAt: appliedAt,
+                },
+              ]);
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                filesChanged: Array.from(new Set([...current.filesChanged, event.filePath])),
+                agentChangesets: [
+                  ...current.agentChangesets.filter((item) => item.filePath !== event.filePath),
+                  {
+                    filePath: event.filePath,
+                    beforeContent: event.beforeContent,
+                    afterContent: event.afterContent,
+                    deleted: event.deleted,
+                    acceptedAt: appliedAt,
+                  },
+                ],
+                updatedAt: Date.now(),
+              }));
+              if (activeProject) void refreshGitStatus(activeProject);
+            } else if (event.type === 'agent_reasoning_delta') {
+              if (!liveReasoningMessageId) {
+                liveReasoningMessageId = nowId('msg');
+                appendSessionMessage(sessionWithPrompt.id, {
+                  id: liveReasoningMessageId,
+                  role: 'reasoning',
+                  content: event.delta,
+                  createdAt: Date.now(),
+                });
+              } else {
+                updateSessionMessage(sessionWithPrompt.id, liveReasoningMessageId, (message) => ({
+                  ...message,
+                  content: `${message.content}${event.delta}`,
+                }));
+              }
+            } else if (event.type === 'tool_budget_warning') {
+              appendSessionMessage(sessionWithPrompt.id, {
+                id: nowId('msg'),
+                role: 'system',
+                content: `⚠ Approaching tool budget (${event.used}/${event.max}). The agent will try to converge.`,
+                createdAt: Date.now(),
+              });
+            } else if (event.type === 'plan_markdown_created') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                planMarkdown: {
+                  filePath: event.filePath,
+                  content: event.content,
+                  createdAt: Date.now(),
+                },
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'clarifying_questions_created') {
+              patchSession(sessionWithPrompt.id, (current) => ({
+                ...current,
+                clarifyingQuestions: event.questions,
+                updatedAt: Date.now(),
+              }));
+            } else if (event.type === 'diff_confirmation_required') {
               setDiffConfirmation({
                 sessionId: sessionWithPrompt.id,
                 runId: event.runId,
@@ -2341,6 +2658,10 @@ export function CodeSpaceWorkspace() {
         }),
         signal: abortCtrl.signal,
       });
+      if (!response.ok) {
+        throw new Error(await readAgentErrorResponse(response));
+      }
+
       if (!response.body) {
         throw new Error('The validation stream did not return a response body.');
       }
@@ -2434,6 +2755,7 @@ export function CodeSpaceWorkspace() {
           }
         }
       }
+      buffer += decoder.decode();
       if (buffer.trim()) {
         for (const line of buffer.split('\n')) {
           if (!line.startsWith('data: ')) continue;
