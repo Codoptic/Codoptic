@@ -8,9 +8,9 @@
 // disambiguation (e.g. when two `controlPanel.tsx` files exist).
 
 import React, { type CSSProperties } from 'react';
-import { File, Folder } from 'lucide-react';
 import type { MentionMatchRange, MentionSuggestion } from '@/lib/code-space/mentions/types';
 import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionIndex';
+import { mentionChipIconKind } from './MentionChip';
 
 export interface MentionSuggestorProps {
   suggestions: MentionSuggestion[];
@@ -97,8 +97,13 @@ export function MentionSuggestor({
         </li>
       )}
       {suggestions.map((suggestion, index) => {
-        const isFolder = suggestion.type === 'folder';
-        const Icon = isFolder ? Folder : File;
+        const iconKind = mentionChipIconKind({
+          id: suggestion.id,
+          type: suggestion.type,
+          basename: suggestion.basename,
+          displayName: suggestion.displayName,
+          relativePath: suggestion.relativePath,
+        });
         const isActive = index === activeIndex;
         return (
           <li
@@ -108,6 +113,7 @@ export function MentionSuggestor({
             aria-selected={isActive}
             data-suggestion-index={index}
             data-mention-type={suggestion.type}
+            data-mention-icon-kind={iconKind}
             data-mention-path={suggestion.relativePath}
             title={suggestion.tooltip}
             onMouseDown={(event) => {
@@ -119,16 +125,15 @@ export function MentionSuggestor({
               isActive ? 'bg-[#1f6feb33] text-[#e6edf3]' : 'text-[#c9d1d9] hover:bg-[#1f1f1f]'
             }`}
           >
-            <Icon
-              size={12}
-              className={`mt-[2px] shrink-0 ${isFolder ? 'text-[#d2a8ff]' : 'text-[#58a6ff]'}`}
+            <span
+              className={`mention-chip__icon mention-chip__icon--${iconKind} mt-[2px] shrink-0`}
               aria-hidden="true"
             />
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="flex items-center gap-1.5 truncate font-medium text-[#e6edf3]">
                 <span className="truncate">
                   {highlightBasename(suggestion.basename, suggestion.matchRanges)}
-                  {isFolder ? <span className="text-[#8b949e]">/</span> : null}
+                  {suggestion.type === 'folder' ? <span className="text-[#8b949e]">/</span> : null}
                 </span>
                 {suggestion.badges.includes('open') && (
                   <span className="rounded bg-[#1f6feb33] px-1 text-[9px] uppercase text-[#58a6ff]">open</span>

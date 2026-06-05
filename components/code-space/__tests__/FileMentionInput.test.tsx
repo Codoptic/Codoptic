@@ -216,6 +216,8 @@ describe('FileMentionInput (contenteditable)', () => {
     expect(chip!.getAttribute('data-mention-name')).toBe('controlPanel.tsx');
     expect(chip!.getAttribute('data-mention-display-name')).toBe('controlPanel.tsx');
     expect(chip!.getAttribute('data-mention-type')).toBe('file');
+    expect(chip!.getAttribute('data-mention-icon-kind')).toBe('extension');
+    expect(chip!.querySelector('.mention-chip__icon--extension')).toBeTruthy();
     expect(chip!.getAttribute('title')).toBe('app/components/control/controlPanel.tsx');
     expect(chip!.getAttribute('aria-label')).toBe('File app/components/control/controlPanel.tsx');
     // Critical regression: the DOM stays compact, but the serialized prompt text preserves the full path.
@@ -300,9 +302,26 @@ describe('FileMentionInput (contenteditable)', () => {
     expect(chip).toBeTruthy();
     expect(chip!.textContent).toBe('backend/');
     expect(chip!.getAttribute('data-mention-type')).toBe('folder');
+    expect(chip!.getAttribute('data-mention-icon-kind')).toBe('folder');
+    expect(chip!.querySelector('.mention-chip__icon--folder')).toBeTruthy();
     expect(chip!.getAttribute('data-mention-path')).toBe('backend');
     expect(chip!.getAttribute('data-mention-display-name')).toBe('backend/');
     expect(chip!.getAttribute('aria-label')).toBe('Folder backend');
+  });
+
+  it('renders type-aware icons in the suggestion list', () => {
+    renderInput({
+      filePaths: ['README.md', 'main.py', 'device.yaml', 'alert.tsx', 'system/guide.md'],
+    });
+    typeIntoEditor('@');
+    const kindsByPath = new Map(
+      optionEls().map((el) => [el.getAttribute('data-mention-path') ?? '', el.getAttribute('data-mention-icon-kind') ?? '']),
+    );
+    expect(kindsByPath.get('README.md')).toBe('document');
+    expect(kindsByPath.get('main.py')).toBe('stack');
+    expect(kindsByPath.get('device.yaml')).toBe('file');
+    expect(kindsByPath.get('alert.tsx')).toBe('extension');
+    expect(kindsByPath.get('system')).toBe('folder');
   });
 
   it('copies a selected chip as markdown text with the full project path', () => {
