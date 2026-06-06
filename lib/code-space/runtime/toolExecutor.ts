@@ -11,7 +11,7 @@ import {
   type EditBlock,
   type EditBlockDiagnostic,
 } from '@/lib/code-space/agent/editBlocks';
-import { writeAgentArtifact, readArtifactRange, grepArtifact, type AgentArtifact } from '@/lib/code-space/agent/artifacts';
+import { writeAgentArtifact, readArtifactRange, grepArtifact, type AgentArtifact, type AgentArtifactKind } from '@/lib/code-space/agent/artifacts';
 import type { AgentEventType } from './events';
 import { applyPatchFiles, PatchApplyError } from './patchApply';
 import { planContainsRequiredSections, REQUIRED_PLAN_SECTIONS } from './planningEngine';
@@ -129,6 +129,60 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
     name: 'git_diff',
     description: 'Show the current uncommitted workspace diff, optionally scoped to a path.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+  },
+  {
+    name: 'research_web',
+    description: 'Fetch and summarize current web pages or GitHub repository metadata for up-to-date docs, best practices, and OSS research. Use only when current external context is useful.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        queries: { type: 'array', items: { type: 'string' } },
+        urls: { type: 'array', items: { type: 'string' } },
+        githubRepo: { type: 'string' },
+        useBrowser: { type: 'boolean' },
+        maxResults: { type: 'number' },
+        maxChars: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'harness_context',
+    description: 'Audit AGENTS.md/context files, pack repo context with Repomix if installed, or fetch library docs with Context7 if installed. Use before large unfamiliar changes or API-heavy work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string' },
+        library: { type: 'string' },
+        query: { type: 'string' },
+        maxChars: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'scan_code_quality',
+    description: 'Run optional quality scanners via Semgrep, ast-grep, jscpd/cpd, and Gitleaks when installed. Missing tools return install hints.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string' },
+        pattern: { type: 'string' },
+        lang: { type: 'string' },
+        maxChars: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'run_validation_matrix',
+    description: 'Detect and run stack-specific validation commands across Node, Python, Go, and Rust. Use after edits, or dryRun=true to inspect what would run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string' },
+        changedPaths: { type: 'array', items: { type: 'string' } },
+        dryRun: { type: 'boolean' },
+        timeoutMs: { type: 'number' },
+      },
+    },
   },
   {
     name: 'read_artifact',
@@ -387,6 +441,14 @@ export class ToolExecutor {
           return await this.git(['status', '--short', '--branch'], ctx);
         case 'git_diff':
           return await this.git(['diff', ...(str(call.input.path) ? ['--', str(call.input.path)] : [])], ctx);
+        case 'research_web':
+          return await this.researchWeb(call, ctx);
+        case 'harness_context':
+          return await this.harnessContext(call, ctx);
+        case 'scan_code_quality':
+          return await this.scanCodeQuality(call, ctx);
+        case 'run_validation_matrix':
+          return await this.runValidationMatrix(call, ctx);
         case 'read_artifact':
           return await this.readArtifact(call, ctx);
         case 'grep_artifact':
@@ -552,6 +614,82 @@ export class ToolExecutor {
     const command: TerminalCommand = { kind: 'explore', command: 'git', args, cwd: ctx.root, reason: 'Read git state for the agent.', timeoutMs: 30_000 };
     const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
     return { content: clip(result.output || '(no output)'), isError: result.status === 'failed' };
+  }
+
+  private toolScript(...segments: string[]): string {
+    return path.join(process.cwd(), 'tools', ...segments);
+  }
+
+  private async runToolScript(
+    ctx: CodeAgentContext,
+    registryToolName: string,
+    command: TerminalCommand,
+    artifactKind: AgentArtifactKind,
+  ): Promise<ToolExecutionResult> {
+    const decision = this.decide(registryToolName, ctx.autonomy);
+    if (decision.permission !== 'auto') {
+      await ctx.emitRuntime('tool.approval.required', { tool: registryToolName, command: [command.command, ...command.args].join(' '), reason: decision.reason });
+      return { content: `${registryToolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true };
+    }
+    const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
+    const artifact = await writeAgentArtifact({
+      projectRoot: ctx.root,
+      runId: ctx.runId,
+      kind: artifactKind,
+      content: result.output,
+      summary: `${registryToolName}: ${result.status}`,
+    });
+    ctx.artifacts.set(artifact.artifactId, artifact);
+    const preview = result.output.length > MAX_TOOL_OUTPUT
+      ? `${result.output.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; read full output via read_artifact id=${artifact.artifactId}]`
+      : result.output;
+    return {
+      content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`,
+      isError: result.status === 'failed',
+    };
+  }
+
+  private async researchWeb(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const queries = Array.isArray(call.input.queries) ? call.input.queries.filter((query): query is string => typeof query === 'string' && query.trim().length > 0).slice(0, 4) : [];
+    const urls = Array.isArray(call.input.urls) ? call.input.urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).slice(0, 4) : [];
+    const githubRepo = str(call.input.githubRepo);
+    if (!queries.length && !urls.length && !githubRepo) return { content: 'research_web requires at least one query, URL, or githubRepo.', isError: true };
+    const args = [this.toolScript('researcher', 'research.py')];
+    for (const query of queries) args.push('--query', query);
+    for (const url of urls) args.push('--url', url);
+    if (githubRepo) args.push('--github-repo', githubRepo);
+    if (call.input.useBrowser === true) args.push('--browser');
+    if (typeof call.input.maxResults === 'number') args.push('--max-results', String(Math.max(1, Math.min(8, Math.floor(call.input.maxResults)))));
+    if (typeof call.input.maxChars === 'number') args.push('--max-chars', String(Math.max(1000, Math.min(20_000, Math.floor(call.input.maxChars)))));
+    return this.runToolScript(ctx, 'research_web', { kind: 'explore', command: 'python3', args, cwd: ctx.root, reason: 'Gather current external research for the agent.', timeoutMs: 90_000 }, 'docs_page');
+  }
+
+  private async harnessContext(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const mode = ['audit', 'pack', 'docs'].includes(str(call.input.mode)) ? str(call.input.mode) : 'audit';
+    const args = [this.toolScript('context-harness', 'harness.py'), '--root', ctx.root, '--mode', mode];
+    if (str(call.input.library)) args.push('--library', str(call.input.library));
+    if (str(call.input.query)) args.push('--query', str(call.input.query));
+    if (typeof call.input.maxChars === 'number') args.push('--max-chars', String(Math.max(1000, Math.min(30_000, Math.floor(call.input.maxChars)))));
+    return this.runToolScript(ctx, 'harness_context', { kind: 'explore', command: 'python3', args, cwd: ctx.root, reason: 'Gather repository or documentation context for the agent.', timeoutMs: 120_000 }, 'docs_page');
+  }
+
+  private async scanCodeQuality(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const mode = ['all', 'semgrep', 'ast-grep', 'duplication', 'secrets'].includes(str(call.input.mode)) ? str(call.input.mode) : 'all';
+    const args = [this.toolScript('quality-scan', 'scan.py'), '--root', ctx.root, '--mode', mode];
+    if (str(call.input.pattern)) args.push('--pattern', str(call.input.pattern));
+    if (str(call.input.lang)) args.push('--lang', str(call.input.lang));
+    if (typeof call.input.maxChars === 'number') args.push('--max-chars', String(Math.max(1000, Math.min(30_000, Math.floor(call.input.maxChars)))));
+    return this.runToolScript(ctx, 'scan_code_quality', { kind: 'lint', command: 'python3', args, cwd: ctx.root, reason: 'Run optional quality scanners for the agent.', timeoutMs: 180_000 }, 'terminal_log');
+  }
+
+  private async runValidationMatrix(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const scope = ['all', 'node', 'python', 'go', 'rust'].includes(str(call.input.scope)) ? str(call.input.scope) : 'all';
+    const args = [this.toolScript('validation-matrix', 'validate.py'), '--root', ctx.root, '--scope', scope];
+    const changedPaths = Array.isArray(call.input.changedPaths) ? call.input.changedPaths.filter((item): item is string => typeof item === 'string') : [];
+    for (const changedPath of changedPaths.slice(0, 20)) args.push('--changed-path', changedPath);
+    if (call.input.dryRun === true) args.push('--dry-run');
+    if (typeof call.input.timeoutMs === 'number') args.push('--timeout', String(Math.max(10, Math.min(600, Math.floor(call.input.timeoutMs / 1000 || call.input.timeoutMs)))));
+    return this.runToolScript(ctx, 'run_validation_matrix', { kind: 'test', command: 'python3', args, cwd: ctx.root, reason: 'Run detected validation commands.', timeoutMs: 240_000 }, 'terminal_log');
   }
 
   private async readArtifact(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -889,9 +1027,9 @@ function matchesGlob(file: string, glob: string): boolean {
   // Minimal glob: supports **, *, and literal segments. Anchored to full path.
   const escaped = glob
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, ' ')
+    .replace(/\*\*/g, '__DOUBLE_STAR__')
     .replace(/\*/g, '[^/]*')
-    .replace(/ /g, '.*');
+    .replace(/__DOUBLE_STAR__/g, '.*');
   try {
     return new RegExp(`^${escaped}$`).test(file) || new RegExp(escaped).test(file);
   } catch {

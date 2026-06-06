@@ -11,6 +11,15 @@ describe('createDefaultToolRegistry', () => {
     expect(registry.get('run_command')?.permission).toBe('approval_required');
   });
 
+  it('registers external agent tooling with appropriate risk levels', () => {
+    const registry = createDefaultToolRegistry();
+
+    expect(registry.get('research_web')?.riskLevel).toBe('safe');
+    expect(registry.get('harness_context')?.permission).toBe('auto');
+    expect(registry.get('scan_code_quality')?.logPolicy).toBe('redacted');
+    expect(registry.get('run_validation_matrix')?.riskLevel).toBe('medium');
+  });
+
   it('describes comprehensive shell exploration through run_command', () => {
     const runCommand = createDefaultToolRegistry().get('run_command');
 

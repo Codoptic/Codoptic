@@ -250,9 +250,10 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     'Workflow you must follow:',
     '1. Understand the task. Read relevant files with read_file and search the repo with search_text before editing.',
     '2. Make focused edits with edit_file using exact SEARCH/REPLACE blocks. If edit_file returns a diagnostic, re-read the failing region, use a smaller SEARCH, and try a corrected edit.',
-    '3. After editing, run project validation commands with run_command where available.',
-    '4. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
-    '5. When the work is done, call attempt_completion with success=true and a concise summary of what changed.',
+    '3. Use external helpers only when they materially improve the result: research_web with queries/URLs for current docs and OSS examples, harness_context before large unfamiliar changes, and scan_code_quality for refactors, reviews, duplication, secret, or bug-hunting work.',
+    '4. After editing, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
+    '5. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
+    '6. When the work is done, call attempt_completion with success=true and a concise summary of what changed.',
     '',
     'Hard rules:',
     '- Do not fabricate results or write markdown notes as a substitute for real code changes.',
@@ -309,7 +310,7 @@ export async function buildCodeSeedMessage(
   const fileIndex = repositoryFiles.slice(0, budget.maxIndexEntries).join('\n');
   const validation = validationCommands.length
     ? validationCommands.map((command) => `- ${[command.command, ...command.args].join(' ')} (${command.reason})`).join('\n')
-    : '- No validation command auto-detected. After editing, choose an appropriate check with run_command.';
+    : '- No validation command auto-detected. After editing, call run_validation_matrix and then choose any targeted check with run_command if needed.';
   const sufficiencyBlock = sufficiency
     ? ['Context sufficiency gate:', formatContextSufficiencyMarkdown(sufficiency)].join('\n')
     : 'Context sufficiency gate: not provided; treat the initial evidence as incomplete until verified.';

@@ -125,7 +125,8 @@ describe('AgentRuntime workflow contracts', () => {
     expect(validationIndex).toBeGreaterThan(diffIndex);
     expect(doneIndex).toBeGreaterThan(validationIndex);
     expect(events.some((event) => event.type === 'structured_event' && event.event.type === 'plan.updated' && (event.event.payload as { phase?: string }).phase === 'diff_review_emitted')).toBe(true);
-    expect(events.some((event) => event.type === 'supervisor_verdict' && event.status === 'verified')).toBe(true);
+    const verdicts = events.filter((event) => event.type === 'supervisor_verdict');
+    expect(verdicts).toContainEqual({ type: 'supervisor_verdict', status: 'verified', blockers: [] });
     expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toContain('answer = 2');
   });
 

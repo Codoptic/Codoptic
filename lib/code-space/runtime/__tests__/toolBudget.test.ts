@@ -6,6 +6,10 @@ describe('ToolBudget', () => {
     expect(isReadOnlyTool('read_file')).toBe(true);
     expect(isReadOnlyTool('search_text')).toBe(true);
     expect(isReadOnlyTool('git_diff')).toBe(true);
+    expect(isReadOnlyTool('research_web')).toBe(true);
+    expect(isReadOnlyTool('harness_context')).toBe(true);
+    expect(isReadOnlyTool('scan_code_quality')).toBe(true);
+    expect(isReadOnlyTool('run_validation_matrix')).toBe(false);
     expect(isReadOnlyTool('edit_file')).toBe(false);
     expect(isReadOnlyTool('run_command')).toBe(false);
   });

@@ -153,6 +153,74 @@ export function createDefaultToolRegistry(): ToolRegistry {
   );
   registry.register(
     baseTool({
+      name: 'research_web',
+      description: 'Fetch and summarize current web pages or GitHub repository metadata for up-to-date documentation, best practices, and OSS project research. Network use is explicit and opt-in.',
+      inputSchema: objectSchema({
+        queries: { type: 'array', items: { type: 'string' } },
+        urls: { type: 'array', items: { type: 'string' } },
+        githubRepo: { type: 'string' },
+        useBrowser: { type: 'boolean' },
+        maxResults: { type: 'number' },
+        maxChars: { type: 'number' },
+      }),
+      riskLevel: 'safe',
+      permission: 'auto',
+      timeoutMs: 90_000,
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'harness_context',
+      description: 'Audit agent instruction files, pack repository context with Repomix when installed, or fetch versioned library docs with Context7 when installed.',
+      inputSchema: objectSchema({
+        mode: { type: 'string', enum: ['audit', 'pack', 'docs'] },
+        library: { type: 'string' },
+        query: { type: 'string' },
+        maxChars: { type: 'number' },
+      }),
+      riskLevel: 'safe',
+      permission: 'auto',
+      timeoutMs: 120_000,
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'scan_code_quality',
+      description: 'Run optional quality scanners for bugs, structural patterns, duplication, and secrets through Semgrep, ast-grep, jscpd/cpd, and Gitleaks when installed.',
+      inputSchema: objectSchema({
+        mode: { type: 'string', enum: ['all', 'semgrep', 'ast-grep', 'duplication', 'secrets'] },
+        pattern: { type: 'string' },
+        lang: { type: 'string' },
+        maxChars: { type: 'number' },
+      }),
+      riskLevel: 'safe',
+      permission: 'auto',
+      timeoutMs: 180_000,
+      logPolicy: 'redacted',
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'run_validation_matrix',
+      description: 'Detect and run stack-specific validation commands across Node, Python, Go, and Rust after implementation work.',
+      inputSchema: objectSchema({
+        scope: { type: 'string', enum: ['all', 'node', 'python', 'go', 'rust'] },
+        changedPaths: { type: 'array', items: { type: 'string' } },
+        dryRun: { type: 'boolean' },
+        timeoutMs: { type: 'number' },
+      }),
+      riskLevel: 'medium',
+      permission: 'approval_required',
+      timeoutMs: 240_000,
+      logPolicy: 'redacted',
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
       name: 'propose_edit_blocks',
       description: 'Propose exact SEARCH/REPLACE edit blocks. The server exact-matches, rejects ambiguous blocks, syntax-validates, and returns a reviewable diff without writing to disk.',
       inputSchema: objectSchema(

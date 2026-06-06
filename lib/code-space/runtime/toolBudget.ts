@@ -13,6 +13,9 @@ const READ_ONLY_TOOLS = new Set([
   'dependency_trace',
   'git_status',
   'git_diff',
+  'research_web',
+  'harness_context',
+  'scan_code_quality',
   'read_artifact',
   'grep_artifact',
   // Plan-mode terminal tools: they never mutate source files (the artifact is written by the runtime).

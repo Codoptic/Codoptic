@@ -267,3 +267,45 @@ describe('ToolExecutor.edit_file', () => {
     expect(ctx.editFailures.has('a.ts')).toBe(false);
   });
 });
+
+describe('ToolExecutor external agent tools', () => {
+  it('dispatches harness_context and stores the output as an artifact', async () => {
+    await writeFile(path.join(tmpDir, 'AGENTS.md'), '# Rules\n', 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(call('harness_context', { mode: 'audit' }), ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('context-harness');
+    expect(result.content).toContain('artifactId:');
+    expect(ctx.artifacts.size).toBe(1);
+  });
+
+  it('returns graceful missing-binary guidance from scan_code_quality', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(call('scan_code_quality', { mode: 'ast-grep' }), ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('ast-grep requires --pattern');
+    expect(ctx.artifacts.size).toBe(1);
+  });
+
+  it('runs validation matrix dry-run through the runtime tool', async () => {
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc --noEmit' } }), 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(call('run_validation_matrix', { dryRun: true, scope: 'node' }), ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('validation-matrix');
+    expect(result.content).toContain('"npm"');
+    expect(result.content).toContain('"typecheck"');
+  });
+});

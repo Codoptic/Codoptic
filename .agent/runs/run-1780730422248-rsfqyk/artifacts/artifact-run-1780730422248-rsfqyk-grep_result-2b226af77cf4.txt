@@ -1,0 +1,265 @@
+24 match(es):
+
+tools/graphify/build_graph.py:
+59:             if ext not in CODE_EXTS and ext not in DOC_EXTS:
+60:                 continue
+61:             abspath = os.path.join(dirpath, name)
+62:             try:
+63:                 if os.path.getsize(abspath) > MAX_FILE_BYTES:
+64:                     continue
+65:             except OSError:
+66:                 continue
+67:             rel = os.path.relpath(abspath, root).replace(os.sep, "/")
+
+tools/graphify/build_graph.py:
+184: def cluster(nodes, edges):
+185:     """Stage 4 — cluster via connected components over the (undirected) import graph."""
+186:     adjacency = defaultdict(set)
+187:     ids = {node["id"] for node in nodes}
+188:     for edge in edges:
+189:         if edge["from"] in ids and edge["to"] in ids:
+190:             adjacency[edge["from"]].add(edge["to"])
+191:             adjacency[edge["to"]].add(edge["from"])
+192:     community = {}
+
+tools/graphify/build_graph.py:
+190:             adjacency[edge["from"]].add(edge["to"])
+191:             adjacency[edge["to"]].add(edge["from"])
+192:     community = {}
+193:     current = 0
+194:     for node in nodes:
+195:         nid = node["id"]
+196:         if nid in community:
+197:             continue
+198:         queue = deque([nid])
+
+tools/graphify/build_graph.py:
+203:                 if neighbor not in community:
+204:                     community[neighbor] = current
+205:                     queue.append(neighbor)
+206:         current += 1
+207:     for node in nodes:
+208:         node["community"] = community.get(node["id"], 0)
+209:     return community, current
+210: 
+211: 
+
+tools/graphify/build_graph.py:
+212: def analyze(nodes, edges):
+213:     """Stage 5 — degree centrality + god-node detection."""
+214:     incoming = defaultdict(int)
+215:     outgoing = defaultdict(int)
+216:     for edge in edges:
+217:         outgoing[edge["from"]] += 1
+218:         incoming[edge["to"]] += 1
+219:     for node in nodes:
+220:         nid = node["id"]
+
+tools/graphify/build_graph.py:
+215:     outgoing = defaultdict(int)
+216:     for edge in edges:
+217:         outgoing[edge["from"]] += 1
+218:         incoming[edge["to"]] += 1
+219:     for node in nodes:
+220:         nid = node["id"]
+221:         node["incoming"] = incoming[nid]
+222:         node["outgoing"] = outgoing[nid]
+223:         node["degree"] = incoming[nid] + outgoing[nid]
+
+tools/graphify/build_graph.py:
+223:         node["degree"] = incoming[nid] + outgoing[nid]
+224:     ranked = sorted(nodes, key=lambda n: (-n["degree"], n["id"]))
+225:     god_count = max(1, min(15, len(nodes) // 12)) if nodes else 0
+226:     god_nodes = [n["id"] for n in ranked[:god_count] if n["degree"] > 0]
+227:     for node in nodes:
+228:         node["isGod"] = node["id"] in god_nodes
+229:     return god_nodes
+230: 
+231: 
+
+tools/graphify/build_graph.py:
+234:         "# Knowledge Graph Report",
+235:         "",
+236:         f"- Root: `{root}`",
+237:         f"- Files (nodes): {len(nodes)}",
+238:         f"- Import edges: {len(edges)}",
+239:         f"- Communities: {communities_count}",
+240:         "",
+241:         "## Central modules (god nodes)",
+242:     ]
+
+tools/graphify/build_graph.py:
+239:         f"- Communities: {communities_count}",
+240:         "",
+241:         "## Central modules (god nodes)",
+242:     ]
+243:     if god_nodes:
+244:         by_id = {n["id"]: n for n in nodes}
+245:         for nid in god_nodes:
+246:             node = by_id[nid]
+247:             lines.append(f"- `{nid}` — degree {node['degree']} ({node['incoming']} in / {node['outgoing']} out)")
+
+tools/graphify/build_graph.py:
+241:         "## Central modules (god nodes)",
+242:     ]
+243:     if god_nodes:
+244:         by_id = {n["id"]: n for n in nodes}
+245:         for nid in god_nodes:
+246:             node = by_id[nid]
+247:             lines.append(f"- `{nid}` — degree {node['degree']} ({node['incoming']} in / {node['outgoing']} out)")
+248:     else:
+249:         lines.append("- (none — no internal import edges detected)")
+
+tools/graphify/build_graph.py:
+258:         "#9661bc", "#f6903d", "#008685", "#f08bb4",
+259:     ]
+260:     vis_nodes = []
+261:     for node in graph["nodes"]:
+262:         color = palette[node["community"] % len(palette)]
+263:         size = 10 + min(40, node["degree"] * 4)
+264:         vis_nodes.append({
+265:             "id": node["id"],
+266:             "label": node["path"].split("/")[-1],
+
+tools/graphify/build_graph.py:
+259:     ]
+260:     vis_nodes = []
+261:     for node in graph["nodes"]:
+262:         color = palette[node["community"] % len(palette)]
+263:         size = 10 + min(40, node["degree"] * 4)
+264:         vis_nodes.append({
+265:             "id": node["id"],
+266:             "label": node["path"].split("/")[-1],
+267:             "title": f"{node['path']} — degree {node['degree']} (community {node['community']})",
+
+tools/graphify/build_graph.py:
+264:         vis_nodes.append({
+265:             "id": node["id"],
+266:             "label": node["path"].split("/")[-1],
+267:             "title": f"{node['path']} — degree {node['degree']} (community {node['community']})",
+268:             "value": size,
+269:             "color": {"background": color, "border": "#1f2937" if not node["isGod"] else "#ef4444"},
+270:             "borderWidth": 4 if node["isGod"] else 1,
+271:         })
+272:     vis_edges = [{"from": e["from"], "to": e["to"], "arrows": "to"} for e in graph["edges"]]
+
+tools/graphify/build_graph.py:
+265:             "id": node["id"],
+266:             "label": node["path"].split("/")[-1],
+267:             "title": f"{node['path']} — degree {node['degree']} (community {node['community']})",
+268:             "value": size,
+269:             "color": {"background": color, "border": "#1f2937" if not node["isGod"] else "#ef4444"},
+270:             "borderWidth": 4 if node["isGod"] else 1,
+271:         })
+272:     vis_edges = [{"from": e["from"], "to": e["to"], "arrows": "to"} for e in graph["edges"]]
+273:     data = json.dumps({"nodes": vis_nodes, "edges": vis_edges})
+
+tools/graphify/build_graph.py:
+266:             "label": node["path"].split("/")[-1],
+267:             "title": f"{node['path']} — degree {node['degree']} (community {node['community']})",
+268:             "value": size,
+269:             "color": {"background": color, "border": "#1f2937" if not node["isGod"] else "#ef4444"},
+270:             "borderWidth": 4 if node["isGod"] else 1,
+271:         })
+272:     vis_edges = [{"from": e["from"], "to": e["to"], "arrows": "to"} for e in graph["edges"]]
+273:     data = json.dumps({"nodes": vis_nodes, "edges": vis_edges})
+274:     metrics = graph["metrics"]
+
+tools/graphify/build_graph.py:
+276: <html><head><meta charset="utf-8"/>
+277: <title>Codoptic Knowledge Graph</title>
+278: <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+279: <style>
+280:   html,body{margin:0;height:100%;background:#0f1115;color:#e6edf3;font-family:ui-sans-serif,system-ui,sans-serif}
+281:   #bar{padding:8px 12px;font-size:12px;border-bottom:1px solid #222;background:#11151c}
+282:   #graph{width:100%;height:calc(100% - 38px)}
+283:   b{color:#9ecbff}
+284: </style></head>
+
+tools/graphify/build_graph.py:
+277: <title>Codoptic Knowledge Graph</title>
+278: <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+279: <style>
+280:   html,body{margin:0;height:100%;background:#0f1115;color:#e6edf3;font-family:ui-sans-serif,system-ui,sans-serif}
+281:   #bar{padding:8px 12px;font-size:12px;border-bottom:1px solid #222;background:#11151c}
+282:   #graph{width:100%;height:calc(100% - 38px)}
+283:   b{color:#9ecbff}
+284: </style></head>
+285: <body>
+
+tools/graphify/build_graph.py:
+279: <style>
+280:   html,body{margin:0;height:100%;background:#0f1115;color:#e6edf3;font-family:ui-sans-serif,system-ui,sans-serif}
+281:   #bar{padding:8px 12px;font-size:12px;border-bottom:1px solid #222;background:#11151c}
+282:   #graph{width:100%;height:calc(100% - 38px)}
+283:   b{color:#9ecbff}
+284: </style></head>
+285: <body>
+286:   <div id="bar">Knowledge Graph — <b>__FILES__</b> files · <b>__EDGES__</b> imports · <b>__COMMUNITIES__</b> communities · red border = central module</div>
+287:   <div id="graph"></div>
+
+tools/graphify/build_graph.py:
+282:   #graph{width:100%;height:calc(100% - 38px)}
+283:   b{color:#9ecbff}
+284: </style></head>
+285: <body>
+286:   <div id="bar">Knowledge Graph — <b>__FILES__</b> files · <b>__EDGES__</b> imports · <b>__COMMUNITIES__</b> communities · red border = central module</div>
+287:   <div id="graph"></div>
+288:   <script>
+289:     var graph = __DATA__;
+290:     var container = document.getElementById('graph');
+
+tools/graphify/build_graph.py:
+287:   <div id="graph"></div>
+288:   <script>
+289:     var graph = __DATA__;
+290:     var container = document.getElementById('graph');
+291:     var data = { nodes: new vis.DataSet(graph.nodes), edges: new vis.DataSet(graph.edges) };
+292:     var options = {
+293:       nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
+294:       edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
+295:       physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+
+tools/graphify/build_graph.py:
+289:     var graph = __DATA__;
+290:     var container = document.getElementById('graph');
+291:     var data = { nodes: new vis.DataSet(graph.nodes), edges: new vis.DataSet(graph.edges) };
+292:     var options = {
+293:       nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
+294:       edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
+295:       physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+296:       interaction: { hover: true, tooltipDelay: 120 }
+297:     };
+
+tools/graphify/build_graph.py:
+290:     var container = document.getElementById('graph');
+291:     var data = { nodes: new vis.DataSet(graph.nodes), edges: new vis.DataSet(graph.edges) };
+292:     var options = {
+293:       nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
+294:       edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
+295:       physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+296:       interaction: { hover: true, tooltipDelay: 120 }
+297:     };
+298:     new vis.Network(container, data, options);
+
+tools/graphify/build_graph.py:
+291:     var data = { nodes: new vis.DataSet(graph.nodes), edges: new vis.DataSet(graph.edges) };
+292:     var options = {
+293:       nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
+294:       edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
+295:       physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+296:       interaction: { hover: true, tooltipDelay: 120 }
+297:     };
+298:     new vis.Network(container, data, options);
+299:   </script>
+
+tools/graphify/build_graph.py:
+292:     var options = {
+293:       nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
+294:       edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
+295:       physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+296:       interaction: { hover: true, tooltipDelay: 120 }
+297:     };
+298:     new vis.Network(container, data, options);
+299:   </script>
+300: </body></html>""" \

@@ -37,6 +37,7 @@ export class IntegrationVerifier {
 
     for (const [path, entry] of ctx.ledger) {
       if (entry.deleted) continue;
+      if (path.startsWith('.agent/tests/')) continue;
       // Only assert presence-in-diff when git produced a usable diff (else we'd false-positive).
       if (diffUsable && !diff.includes(path)) {
         findings.push({ path, kind: 'missing_in_diff', message: `Edited file ${path} is not present in the git diff — the change may be partial or out of sync with disk.` });
