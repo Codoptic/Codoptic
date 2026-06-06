@@ -28,7 +28,7 @@ export function progressiveOrder(commands: TerminalCommand[]): TerminalCommand[]
 export class ValidationRunner {
   constructor(private readonly terminal = new TerminalRunner()) {}
 
-  async detectValidationCommands(rootPath: string): Promise<TerminalCommand[]> {
+  async detectValidationCommands(rootPath: string, changedPaths: string[] = []): Promise<TerminalCommand[]> {
     const commands: TerminalCommand[] = [];
     const packageJsonPath = await findFirst(rootPath, ['package.json', 'frontend/package.json', 'client/package.json', 'app/package.json', 'web/package.json']);
     if (packageJsonPath) {
@@ -40,6 +40,17 @@ export class ValidationRunner {
       const scripts = pkg.scripts ?? {};
       if (scripts.typecheck) commands.push({ kind: 'typecheck', command: packageManager, args: ['run', 'typecheck'], cwd, reason: 'TypeScript/no-emit validation is available.', timeoutMs: 120_000 });
       if (scripts.lint) commands.push({ kind: 'lint', command: packageManager, args: ['run', 'lint'], cwd, reason: 'Lint validation is available.', timeoutMs: 120_000 });
+      const focusedTestTargets = focusTestTargets(changedPaths);
+      if (scripts.test && focusedTestTargets.length) {
+        commands.push({
+          kind: 'test',
+          command: packageManager,
+          args: ['run', 'test', '--', ...focusedTestTargets],
+          cwd,
+          reason: 'Focused test validation for changed test/source paths is available.',
+          timeoutMs: 180_000,
+        });
+      }
       if (scripts.test) commands.push({ kind: 'test', command: packageManager, args: ['run', 'test'], cwd, reason: 'Automated tests are available.', timeoutMs: 180_000 });
       if (scripts.build) commands.push({ kind: 'build', command: packageManager, args: ['run', 'build'], cwd, reason: 'Production build validation is available.', timeoutMs: 180_000 });
     }
@@ -117,4 +128,12 @@ async function detectPackageManager(rootPath: string, packageManager?: string): 
   if (await pathExists(rootPath, 'yarn.lock')) return 'yarn';
   if (await pathExists(rootPath, 'bun.lockb')) return 'bun';
   return 'npm';
+}
+
+function focusTestTargets(changedPaths: string[]): string[] {
+  const targets = changedPaths
+    .map((item) => item.replace(/\\/g, '/'))
+    .filter((item) => /\.(test|spec)\.(tsx?|jsx?)$/.test(item) || /(^|\/)(__tests__|tests?)\//.test(item))
+    .slice(0, 8);
+  return Array.from(new Set(targets));
 }

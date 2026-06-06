@@ -110,6 +110,29 @@ describe('CodeAgentLoop', () => {
     await expect(readdir(path.join(tmpDir, '.agent'))).rejects.toThrow();
   });
 
+  it('rejects successful completion in a mutating run when no edit was applied or proposed', async () => {
+    mockedTurn
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't1', name: 'attempt_completion', input: { success: true, summary: 'Done.' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: false, summary: 'No matching target file was found.' } }],
+      }));
+
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const loop = new CodeAgentLoop();
+    loop.seed('system', 'Change missing.ts');
+
+    const result = await loop.run(ctx, { session: { id: 'openai', model: 'test', apiKey: '' }, budget: new ToolBudget(10, 40) });
+
+    expect(result.completed).toBe(true);
+    expect(result.success).toBe(false);
+    expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('Cannot complete successfully')))).toBe(true);
+  });
+
   it('stops at the hard turn cap without completing', async () => {
     mockedTurn.mockResolvedValue(turn({ toolCalls: [{ id: 'loop', name: 'read_file', input: { path: 'missing.ts' } }] }));
 

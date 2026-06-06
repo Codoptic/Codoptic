@@ -325,6 +325,8 @@ function applyBrowseBoost(entry: MentionEntry, ctx: ScoringContext): number {
     if (entry.depth === 1) bonus += 500;
     else if (entry.depth === 2) bonus += 200;
     else bonus += 50;
+    if (ctx.openFiles.has(entry.relativePath)) bonus += 700;
+    if (ctx.currentEditorFilePath === entry.relativePath) bonus += 850;
   }
   if (ctx.mode === 'directoryBrowse' && ctx.scopeDir !== undefined) {
     const scopeDepth = ctx.scopeDir === '' ? 0 : ctx.scopeDir.split('/').length;
@@ -413,12 +415,40 @@ function toSuggestion(
 
 // --- candidate pools ----------------------------------------------------------------------
 
-function poolForRootBrowse(index: FileMentionIndex): MentionEntry[] {
+function appendEntriesByPath(
+  pool: MentionEntry[],
+  index: FileMentionIndex,
+  paths: ReadonlyArray<string | undefined>,
+): MentionEntry[] {
+  const seen = new Set(pool.map((entry) => entry.id));
+  for (const rawPath of paths) {
+    const normalized = normalizeMentionPath(rawPath ?? '');
+    if (normalized === null || normalized === '') continue;
+    const entry = index.byPath.get(normalized);
+    if (!entry || seen.has(entry.id)) continue;
+    pool.push(entry);
+    seen.add(entry.id);
+  }
+  return pool;
+}
+
+function poolForRootBrowse(
+  index: FileMentionIndex,
+  openFiles: ReadonlyArray<string>,
+  currentEditorFilePath?: string,
+): MentionEntry[] {
   const roots = index.rootEntries();
-  if (roots.length >= 20) return roots;
-  // Backfill with depth-2 entries so projects with thin root layouts still show useful options.
-  const depth2 = index.entries.filter((entry) => entry.depth === 2);
-  return [...roots, ...depth2];
+  const pool = [...roots];
+  if (roots.length < 20) {
+    // Backfill with depth-2 entries so projects with thin root layouts still show useful options.
+    const depth2 = index.entries.filter((entry) => entry.depth === 2);
+    for (const entry of depth2) {
+      if (!pool.some((candidate) => candidate.id === entry.id)) pool.push(entry);
+    }
+  }
+  // Always surface the currently open editor tabs in the empty-`@` default pool, even when they
+  // live deeper than the root/depth-2 backfill.
+  return appendEntriesByPath(pool, index, [...openFiles, currentEditorFilePath]);
 }
 
 function poolForDirectoryBrowse(index: FileMentionIndex, scopeDir: string): MentionEntry[] {
@@ -484,7 +514,7 @@ export function queryMentionSuggestions(
   let pool: MentionEntry[];
   switch (parsed.mode) {
     case 'rootBrowse':
-      pool = poolForRootBrowse(index);
+      pool = poolForRootBrowse(index, context.openFiles ?? [], context.currentEditorFilePath);
       break;
     case 'directoryBrowse':
       pool = poolForDirectoryBrowse(index, parsed.scopeDir ?? '');

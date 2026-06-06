@@ -171,6 +171,8 @@ export class CodeAgentLoop {
   ): Promise<CodeAgentLoopResult | null> {
     const toolResults: ChatMessage['toolResults'] = [];
     let completion: CodeAgentLoopResult | null = null;
+    const tools = opts.tools ?? CODE_MODE_TOOL_SPECS;
+    const canMutateSource = tools.some((tool) => ['edit_file', 'apply_patch', 'propose_patch', 'propose_edit_blocks'].includes(tool.name));
 
     for (const call of turn.toolCalls) {
       if (call.name === 'attempt_completion') {
@@ -201,6 +203,15 @@ export class CodeAgentLoop {
 
         const success = call.input?.success !== false;
         const summary = typeof call.input?.summary === 'string' ? call.input.summary : '';
+        if (success && canMutateSource && ctx.ledger.size === 0 && ctx.proposedFiles.size === 0) {
+          toolResults.push({
+            toolCallId: call.id,
+            isError: true,
+            content:
+              'Cannot complete successfully: this is a mutating implementation run but no source edits were applied or proposed. Read the target files, make the required edit_file call, or call attempt_completion with success=false and the exact blocker.',
+          });
+          continue;
+        }
         completion = { completed: true, success, summary: summary || (success ? 'Task completed.' : 'Task could not be completed.'), stopReason: 'completed' };
         toolResults.push({ toolCallId: call.id, content: 'Completion recorded.' });
         continue;

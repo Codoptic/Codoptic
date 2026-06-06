@@ -560,11 +560,10 @@ export class AgentRuntime {
       return;
     }
 
-    // Pre-validation diff confirmation gate. Surface the FULL aggregated diff of every applied
-    // change and PAUSE before any validation runs. The run stream ends here; the user (or the eval
-    // harness) reviews the diff and resumes validation via POST /api/code-space/runs/validate.
-    // Motivation vs Logic: validation/repair mutate and run commands — gating it behind an explicit
-    // human confirmation is the industry-standard safety checkpoint the product was missing.
+    // Surface the FULL aggregated diff of every applied change before validation starts. In the
+    // default auto-safe Code path this is an informational review event, not a terminal pause: the
+    // runtime continues into validation/repair and only completes after supervisor reconciliation.
+    // Review-gated autonomy still persists the pending record and pauses for /runs/validate.
     const diffReport = await buildAggregatedDiff(
       root,
       Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
@@ -574,38 +573,17 @@ export class AgentRuntime {
         deleted: entry.deleted,
       })),
     );
-    await savePendingValidation({
-      runId,
-      sessionId: request.sessionId,
-      projectRoot: root,
-      projectName: request.projectName,
-      prompt,
-      instructionPaths: loadedInstructions.map((item) => item.path),
-      isGit: diffReport.isGit,
-      unifiedDiff: diffReport.unifiedDiff,
-      createdAt: Date.now(),
-      files: Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
-        path: filePath,
-        beforeContent: entry.beforeContent,
-        afterContent: entry.afterContent,
-        deleted: entry.deleted,
-        existedBefore: entry.existedBefore,
-      })),
-    });
-
     const filesChanged = Array.from(ctx.ledger.keys());
-    await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
+    await emitRuntime('plan.updated', { phase: 'diff_review_emitted' });
     const tightenedGateSummary = tightenAgentSummary(loopResult.summary);
-    const gateSummary = [
-      `Applied ${filesChanged.length} change(s) to ${request.projectName}. Review the full diff below and confirm to run validation.`,
+    const reviewSummary = [
+      `Applied ${filesChanged.length} change(s) to ${request.projectName}. Review event emitted; validation is running now.`,
       diffReport.isGit ? '(diff source: git)' : '(diff source: in-memory change ledger — no git repo detected)',
       '',
       tightenedGateSummary,
       '',
       'Files changed:',
       ...filesChanged.map((file) => `- ${file}`),
-      '',
-      'Validation will not run until you confirm. Confirm to proceed, or cancel to revert these changes.',
     ]
       .filter((line) => line !== undefined)
       .join('\n');
@@ -617,11 +595,52 @@ export class AgentRuntime {
       files: diffReport.files,
       unifiedDiff: diffReport.unifiedDiff,
       isGit: diffReport.isGit,
-      summary: gateSummary,
+      summary: reviewSummary,
     });
-    await streamAnswer(gateSummary, emit, emitRuntime);
-    await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged });
-    emit({ type: 'agent_done', summary: gateSummary, filesChanged });
+
+    if (request.autonomy === 'approval_required') {
+      await savePendingValidation({
+        runId,
+        sessionId: request.sessionId,
+        projectRoot: root,
+        projectName: request.projectName,
+        prompt,
+        instructionPaths: loadedInstructions.map((item) => item.path),
+        isGit: diffReport.isGit,
+        unifiedDiff: diffReport.unifiedDiff,
+        createdAt: Date.now(),
+        files: Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
+          path: filePath,
+          beforeContent: entry.beforeContent,
+          afterContent: entry.afterContent,
+          deleted: entry.deleted,
+          existedBefore: entry.existedBefore,
+        })),
+      });
+      await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
+      const gateSummary = reviewSummary.replace('Review event emitted; validation is running now.', 'Review the full diff below and confirm to run validation.');
+      await streamAnswer(gateSummary, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged });
+      emit({ type: 'agent_done', summary: gateSummary, filesChanged });
+      return;
+    }
+
+    await this.runValidationPhase({
+      projectName: request.projectName,
+      root,
+      prompt,
+      runId,
+      todos,
+      validationCommands: await this.validation.detectValidationCommands(root, filesChanged),
+      ctx,
+      loop,
+      loopOptions,
+      subagentRunner,
+      loopSummary: tightenedGateSummary,
+      emit,
+      emitRuntime,
+      signal,
+    });
   }
 
   /**

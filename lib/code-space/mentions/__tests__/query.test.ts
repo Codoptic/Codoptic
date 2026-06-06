@@ -106,6 +106,15 @@ describe('queryMentionSuggestions', () => {
     expect(results.length).toBeLessThanOrEqual(10);
   });
 
+  it('@ includes currently open editor files in the default pool even when they are deep paths', () => {
+    const results = queryMentionSuggestions(index, {
+      rawToken: '',
+      openFiles: ['app/components/control/controlPanel.tsx'],
+    });
+    const got = paths(results);
+    expect(got).toContain('app/components/control/controlPanel.tsx');
+  });
+
   it('@backend lists immediate children of backend', () => {
     const results = queryMentionSuggestions(index, { rawToken: 'backend' });
     const got = paths(results);

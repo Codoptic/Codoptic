@@ -299,13 +299,17 @@ function buildReadWindow(content: string, centerLine: number, radius = 12): { st
   return { start, end, text: numbered };
 }
 
-function buildRepairProtocol(filePath: string): string {
-  return [
+function buildRepairProtocol(filePath: string, allowFullFileFallback = false): string {
+  const steps = [
     'Repair protocol:',
     '1. Use a smaller SEARCH that copies these lines exactly.',
     '2. Match existing indentation depth (Python: keep block-relative indent).',
     `3. Re-issue edit_file on ${filePath}. Do NOT call attempt_completion until this file's edit succeeds.`,
-  ].join('\n');
+  ];
+  if (allowFullFileFallback) {
+    steps.push('4. Repeated exact-match failures detected: you may replace the entire current file content as SEARCH and the complete corrected file as REPLACE.');
+  }
+  return steps.join('\n');
 }
 
 function inferFailureCenterLine(
@@ -327,6 +331,7 @@ function buildEditFailureResponse(
   diagnostics: EditBlockDiagnostic[],
   currentFiles: Record<string, string>,
   edits: EditBlock[],
+  repeatedFailureCount = 0,
 ): string {
   const detail = formatEditDiagnostics(diagnostics);
   const primary = diagnostics[0];
@@ -351,7 +356,7 @@ function buildEditFailureResponse(
     `Current state of ${normalized} around the failing region (lines ${window.start}-${window.end}):`,
     window.text,
     '',
-    buildRepairProtocol(normalized),
+    buildRepairProtocol(normalized, repeatedFailureCount >= 2 && (failureCode === 'SEARCH_NOT_FOUND' || failureCode === 'SEARCH_NOT_UNIQUE')),
   ].join('\n'));
 }
 
@@ -479,7 +484,21 @@ export class ToolExecutor {
       }
     }
     await ctx.emitRuntime('tool.completed', { tool: 'search_text', matches: matchCount });
-    return { content: clip(blocks.length ? `${matchCount} match(es):\n\n${blocks.join('\n\n')}` : `No matches for "${query}".`) };
+    const rendered = blocks.length ? `${matchCount} match(es):\n\n${blocks.join('\n\n')}` : `No matches for "${query}".`;
+    if (rendered.length > MAX_TOOL_OUTPUT) {
+      const artifact = await writeAgentArtifact({
+        projectRoot: ctx.root,
+        runId: ctx.runId,
+        kind: 'grep_result',
+        content: rendered,
+        summary: `search_text ${query}: ${matchCount} match(es)`,
+      });
+      ctx.artifacts.set(artifact.artifactId, artifact);
+      return {
+        content: `${rendered.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; read full search output via read_artifact id=${artifact.artifactId} or grep_artifact]`,
+      };
+    }
+    return { content: rendered };
   }
 
   private async repoMap(ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -595,8 +614,10 @@ export class ToolExecutor {
           at: Date.now(),
         }]);
       }
+      const primaryPath = normalizeContextPath(grouped.diagnostics[0]?.path ?? '');
+      const repeatedFailureCount = primaryPath ? (ctx.editFailures.get(primaryPath)?.length ?? 0) : 0;
       return {
-        content: buildEditFailureResponse('edit_file could not apply cleanly. Fix and retry:', grouped.diagnostics, currentFiles, edits),
+        content: buildEditFailureResponse('edit_file could not apply cleanly. Fix and retry:', grouped.diagnostics, currentFiles, edits, repeatedFailureCount),
         isError: true,
       };
     }

@@ -35,6 +35,15 @@ export class Supervisor {
       blockers.push(`Validation failed: ${failedValidation.map((run) => run.command).join(', ')}.`);
     }
 
+    const skippedValidation = input.validationRuns.filter((run) => run.status === 'skipped');
+    const onlyManualValidationSkipped =
+      skippedValidation.length === input.validationRuns.length &&
+      skippedValidation.length === 1 &&
+      /manual review/i.test(skippedValidation[0]?.command ?? '');
+    if (skippedValidation.length && !onlyManualValidationSkipped) {
+      blockers.push(`Validation skipped: ${skippedValidation.map((run) => run.command).join(', ')}.`);
+    }
+
     if (input.coherence.length) {
       const preview = input.coherence.slice(0, 5).map((finding) => `${finding.path} (${finding.kind})`).join(', ');
       blockers.push(`Integration review found ${input.coherence.length} issue(s): ${preview}.`);

@@ -119,6 +119,18 @@ interface FolderBrowserResponse {
   error?: string;
 }
 
+function statusForRuntimePhase(
+  phase: string | undefined,
+  fallback: CodeSpaceAgentSession['status'],
+): CodeSpaceAgentSession['status'] {
+  if (phase === 'awaiting_patch_review' || phase === 'awaiting_diff_confirmation') return 'waiting_review';
+  if (phase === 'diff_review_emitted') return 'reviewing';
+  if (phase === 'validating' || phase === 'repairing') return 'checking';
+  if (phase === 'needs_review') return 'needs_review';
+  if (phase === 'verified') return 'verified';
+  return fallback;
+}
+
 interface TreeResponse {
   entries: CodeSpaceTreeNode[];
 }
@@ -2110,16 +2122,7 @@ export function CodeSpaceWorkspace() {
                   ...current,
                   runtimePhase: payload.phase ?? current.runtimePhase,
                   runtimeStatus: payload.state?.status ?? current.runtimeStatus,
-                  status:
-                    payload.phase === 'awaiting_patch_review'
-                      ? 'waiting_review'
-                      : payload.phase === 'validating'
-                        ? 'checking'
-                        : payload.phase === 'needs_review'
-                          ? 'needs_review'
-                          : payload.phase === 'verified'
-                            ? 'verified'
-                            : current.status,
+                  status: statusForRuntimePhase(payload.phase, current.status),
                   updatedAt: Date.now(),
                 }));
               } else if (event.event.type === 'run.completed') {
@@ -2415,16 +2418,7 @@ export function CodeSpaceWorkspace() {
                   ...current,
                   runtimePhase: payload.phase ?? current.runtimePhase,
                   runtimeStatus: payload.state?.status ?? current.runtimeStatus,
-                  status:
-                    payload.phase === 'awaiting_patch_review'
-                      ? 'waiting_review'
-                      : payload.phase === 'validating'
-                        ? 'checking'
-                        : payload.phase === 'needs_review'
-                          ? 'needs_review'
-                          : payload.phase === 'verified'
-                            ? 'verified'
-                            : current.status,
+                  status: statusForRuntimePhase(payload.phase, current.status),
                   updatedAt: Date.now(),
                 }));
               } else if (event.event.type === 'run.completed') {

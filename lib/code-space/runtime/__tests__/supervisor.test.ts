@@ -9,6 +9,9 @@ function passing(command: string): ValidationRunResult {
 function failing(command: string): ValidationRunResult {
   return { kind: 'test', command, status: 'failed', output: 'boom', durationMs: 1 };
 }
+function skipped(command: string): ValidationRunResult {
+  return { kind: 'test', command, status: 'skipped', output: 'skipped', durationMs: 1 };
+}
 
 describe('Supervisor.reconcile', () => {
   const supervisor = new Supervisor();
@@ -34,6 +37,17 @@ describe('Supervisor.reconcile', () => {
     const verdict = supervisor.reconcile({ ledgerSize: 1, coherence: [], validationRuns: [failing('npm run lint')], unresolvedEditFailures: '' });
     expect(verdict.status).toBe('needs_review');
     expect(verdict.blockers.join(' ')).toMatch(/validation failed/i);
+  });
+
+  it('blocks on skipped runnable validation', () => {
+    const verdict = supervisor.reconcile({ ledgerSize: 1, coherence: [], validationRuns: [skipped('npm run test')], unresolvedEditFailures: '' });
+    expect(verdict.status).toBe('needs_review');
+    expect(verdict.blockers.join(' ')).toMatch(/validation skipped/i);
+  });
+
+  it('allows the explicit no-command manual review sentinel when other gates are clean', () => {
+    const verdict = supervisor.reconcile({ ledgerSize: 1, coherence: [], validationRuns: [skipped('manual review')], unresolvedEditFailures: '' });
+    expect(verdict.status).toBe('verified');
   });
 
   it('blocks on integration coherence findings', () => {

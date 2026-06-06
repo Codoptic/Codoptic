@@ -66,6 +66,69 @@ describe('AgentRuntime workflow contracts', () => {
     expect(final?.summary).not.toMatch(/Reviewed \d+ files|Visible workflow|Repository map|Validation available/i);
   });
 
+  it('code mode emits a review diff, then validates and completes after the supervisor verdict', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-code-auto-'));
+    await writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }),
+      'utf8',
+    );
+    await writeFile(path.join(tmpDir, 'src.ts'), 'export const answer = 1;\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'read_file', input: { path: 'src.ts' } }] }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{
+          id: 't2',
+          name: 'edit_file',
+          input: { edits: [{ path: 'src.ts', search: 'export const answer = 1;', replace: 'export const answer = 2;', reason: 'Update answer.' }] },
+        }],
+      }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, summary: 'Updated answer.' } }] }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{
+          id: 't4',
+          name: 'edit_file',
+          input: { edits: [{ path: '.agent/tests/smoke.js', search: '', replace: 'console.log("smoke");\n', reason: 'Add focused smoke script.' }] },
+        }],
+      }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't5', name: 'run_command', input: { command: 'node', args: ['.agent/tests/smoke.js'], reason: 'Run focused smoke script.' } }],
+      }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't6', name: 'attempt_completion', input: { success: true, summary: 'Smoke script passed.' } }] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-code-auto',
+        projectRoot: tmpDir,
+        projectName: 'demo',
+        messages: [{ role: 'user', content: 'Update answer in src.ts' }],
+        mode: 'code',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['src.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    const diffIndex = events.findIndex((event) => event.type === 'diff_confirmation_required');
+    const validationIndex = events.findIndex((event) => event.type === 'validation_result');
+    const doneIndex = events.findIndex((event) => event.type === 'agent_done');
+    expect(diffIndex).toBeGreaterThanOrEqual(0);
+    expect(validationIndex).toBeGreaterThan(diffIndex);
+    expect(doneIndex).toBeGreaterThan(validationIndex);
+    expect(events.some((event) => event.type === 'structured_event' && event.event.type === 'plan.updated' && (event.event.payload as { phase?: string }).phase === 'diff_review_emitted')).toBe(true);
+    expect(events.some((event) => event.type === 'supervisor_verdict' && event.status === 'verified')).toBe(true);
+    expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toContain('answer = 2');
+  });
+
   it('plan mode requires a provider key and reports needs_review when none is configured', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-nokey-'));
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');

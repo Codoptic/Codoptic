@@ -167,6 +167,15 @@ function getWorkingLabel(mode: CodeSpaceAgentMode) {
 
 function formatPhaseLabel(phase?: string) {
   if (!phase) return 'Idle';
+  const labels: Record<string, string> = {
+    diff_review_emitted: 'Review emitted',
+    awaiting_diff_confirmation: 'Awaiting validation confirmation',
+    validating: 'Validating',
+    repairing: 'Repairing',
+    verified: 'Verified',
+    needs_review: 'Needs review',
+  };
+  if (labels[phase]) return labels[phase];
   return phase.replace(/_/g, ' ');
 }
 
