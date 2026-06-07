@@ -25,9 +25,11 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Server,
   Sparkles,
   Trash2,
   Upload,
+  Globe,
   Wand2,
   X,
 } from 'lucide-react';
@@ -1355,15 +1357,24 @@ export function CodeSpaceWorkspace() {
       return;
     }
 
-    const serverKind = await openPromptDialog({
+  const serverKind = await openPromptDialog({
       title: 'Add MCP plugin',
-      description: 'Type "local" for a command-based MCP server or "url" for a remote server.',
+      description: 'Choose how the MCP server connects.',
       label: 'MCP server type',
-      placeholder: 'local or url',
-      defaultValue: 'local',
-      confirmLabel: 'Create mcp.json',
-      validate: (value) => (/^(local|url)$/i.test(value.trim()) ? null : 'Enter local or url.'),
-      selectOnOpen: true,
+      choices: [
+        {
+          value: 'local',
+          label: 'Local command',
+          description: 'Run the server from a local command on this machine.',
+          icon: <Server size={16} />,
+        },
+        {
+          value: 'url',
+          label: 'Remote URL',
+          description: 'Connect to an MCP server hosted behind a URL.',
+          icon: <Globe size={16} />,
+        },
+      ],
     });
     if (!serverKind) return;
 
@@ -3934,47 +3945,47 @@ export function CodeSpaceWorkspace() {
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 sm:items-center"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setProviderConfigOpen(false);
           }}
         >
-          <div className="w-full max-w-md rounded-xl border border-[#2a2a2a] bg-[#181818] p-5 shadow-2xl">
+          <div className="my-auto flex w-full max-w-md max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#181818] shadow-2xl">
             <div className="flex items-start justify-between gap-3">
-              <div>
+              <div className="p-5 pb-0">
                 <h2 className="text-lg font-semibold">Model Configs</h2>
                 <p className="mt-1 text-sm text-[#8b8b8b]">Choose or validate the AI provider you want this session to use.</p>
               </div>
-              <button type="button" onClick={() => setProviderConfigOpen(false)} className="rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]"><X size={16} /></button>
+              <button type="button" onClick={() => setProviderConfigOpen(false)} className="m-4 shrink-0 rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]"><X size={16} /></button>
             </div>
-            <div className="mt-4">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4">
               <ProviderConfig />
-            </div>
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => void handleAddPlugin()}
-                className="inline-flex items-center gap-2 rounded-md border border-[#2a2a2a] bg-[#252526] px-3 py-1.5 text-xs font-semibold text-[#d4d4d4] hover:bg-[#2a2d2e]"
-              >
-                <Plus size={14} />
-                Add Plugin
-              </button>
-            </div>
-            <div className="mt-4 rounded-xl border border-[#2a2a2a] bg-[#111111] p-3">
-              <label htmlFor="code-space-instruction" className="block text-[10px] uppercase tracking-widest text-[#8b8b8b]">
-                Instruction
-              </label>
-              <textarea
-                id="code-space-instruction"
-                value={codeSpaceInstruction}
-                onChange={(event) => setCodeSpaceInstruction(event.target.value)}
-                placeholder="Add your coding preferences, constraints, or style notes here."
-                rows={4}
-                className="mt-2 w-full rounded-md border border-[#2a2a2a] bg-[#181818] px-3 py-1 text-sm text-[#d4d4d4] outline-none transition-colors placeholder:text-[#5f5f5f] focus:border-accent/60 focus:bg-[#1c1c1c]"
-              />
-              <p className="mt-2 text-[11px] leading-4 text-[#8b8b8b]">
-                Your custom instructions for the agent to follow.
-              </p>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleAddPlugin()}
+                  className="inline-flex items-center gap-2 rounded-md border border-[#2a2a2a] bg-[#252526] px-3 py-1.5 text-xs font-semibold text-[#d4d4d4] hover:bg-[#2a2d2e]"
+                >
+                  <Plus size={14} />
+                  Add Plugin
+                </button>
+              </div>
+              <div className="mt-4 rounded-xl border border-[#2a2a2a] bg-[#111111] p-3">
+                <label htmlFor="code-space-instruction" className="block text-[10px] uppercase tracking-widest text-[#8b8b8b]">
+                  Instruction
+                </label>
+                <textarea
+                  id="code-space-instruction"
+                  value={codeSpaceInstruction}
+                  onChange={(event) => setCodeSpaceInstruction(event.target.value)}
+                  placeholder="Add your coding preferences, constraints, or style notes here."
+                  rows={4}
+                  className="mt-2 w-full rounded-md border border-[#2a2a2a] bg-[#181818] px-3 py-1 text-sm text-[#d4d4d4] outline-none transition-colors placeholder:text-[#5f5f5f] focus:border-accent/60 focus:bg-[#1c1c1c]"
+                />
+                <p className="mt-2 text-[11px] leading-4 text-[#8b8b8b]">
+                  Your custom instructions for the agent to follow.
+                </p>
+              </div>
             </div>
           </div>
         </div>

@@ -14,6 +14,12 @@ interface PromptOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   helperText?: string;
+  choices?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+    icon?: ReactNode;
+  }>;
   validate?: (value: string) => string | null;
   selectOnOpen?: boolean;
 }
@@ -155,6 +161,7 @@ export function useAppDialogs(): UseAppDialogs {
           confirmLabel={promptState?.confirmLabel}
           cancelLabel={promptState?.cancelLabel}
           helperText={promptState?.helperText}
+          choices={promptState?.choices}
           validate={promptState?.validate}
           selectOnOpen={promptState?.selectOnOpen}
           onConfirm={handlePromptConfirm}

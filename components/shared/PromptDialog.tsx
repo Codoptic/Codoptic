@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Pencil, X } from 'lucide-react';
+import { Globe, Pencil, Server, X } from 'lucide-react';
+import type { ReactNode } from 'react';
 
 interface Props {
   open: boolean;
@@ -17,6 +18,16 @@ interface Props {
   cancelLabel?: string;
   /** Helper text rendered below the input when the value is valid. */
   helperText?: string;
+  /**
+   * When provided, render selectable buttons instead of a text input.
+   * Each click resolves the prompt with the associated value.
+   */
+  choices?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+    icon?: ReactNode;
+  }>;
   /** When provided, called with the trimmed value. Return an error message to block submit. */
   validate?: (value: string) => string | null;
   /**
@@ -44,6 +55,7 @@ export function PromptDialog({
   confirmLabel = 'Save',
   cancelLabel = 'Cancel',
   helperText,
+  choices,
   validate,
   selectOnOpen = true,
   onConfirm,
@@ -58,10 +70,11 @@ export function PromptDialog({
 
   const trimmed = useMemo(() => value.trim(), [value]);
   const validationError = useMemo(() => {
+    if (choices?.length) return null;
     if (!validate) return null;
     return validate(trimmed);
-  }, [trimmed, validate]);
-  const canSubmit = trimmed.length > 0 && !validationError;
+  }, [choices?.length, trimmed, validate]);
+  const canSubmit = choices?.length ? false : trimmed.length > 0 && !validationError;
 
   useEffect(() => {
     if (!open) return;
@@ -81,6 +94,7 @@ export function PromptDialog({
 
   useEffect(() => {
     if (!open) return;
+    if (choices?.length) return;
     const id = window.requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
@@ -88,7 +102,7 @@ export function PromptDialog({
       if (selectOnOpen) input.select();
     });
     return () => window.cancelAnimationFrame(id);
-  }, [open, selectOnOpen]);
+  }, [choices?.length, open, selectOnOpen]);
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -121,30 +135,50 @@ export function PromptDialog({
           {description ? (
             <p className="mb-3 text-[12px] leading-relaxed text-slate-400">{description}</p>
           ) : null}
-          <label
-            className="block text-[12px] font-medium text-slate-200"
-            htmlFor="codoptic-prompt-dialog-input"
-          >
-            {label}
-          </label>
-          <input
-            ref={inputRef}
-            id="codoptic-prompt-dialog-input"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            placeholder={placeholder}
-            className={`mt-2 h-10 w-full rounded-lg border bg-slate-950 px-3 text-[13px] text-slate-100 outline-none transition-colors focus:border-accent/70 focus:ring-2 focus:ring-accent/20 ${
-              validationError ? 'border-red-500/60' : 'border-slate-700'
-            }`}
-            aria-invalid={Boolean(validationError)}
-          />
-          <p
-            className={`mt-2 text-[12px] leading-relaxed ${
-              validationError ? 'text-red-300' : 'text-slate-400'
-            }`}
-          >
-            {validationError ?? helperText ?? '\u00A0'}
-          </p>
+          <label className="block text-[12px] font-medium text-slate-200">{label}</label>
+          {choices?.length ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {choices.map((choice) => (
+                <button
+                  key={choice.value}
+                  className="flex min-h-24 flex-col justify-between rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-left text-slate-100 transition-colors hover:border-accent/60 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  onClick={() => onConfirm(choice.value)}
+                  type="button"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-accent">
+                      {choice.icon ?? (choice.value === 'local' ? <Server size={16} /> : <Globe size={16} />)}
+                    </span>
+                    <span className="text-[13px] font-medium">{choice.label}</span>
+                  </div>
+                  {choice.description ? (
+                    <span className="mt-3 text-[12px] leading-relaxed text-slate-400">{choice.description}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              <input
+                ref={inputRef}
+                id="codoptic-prompt-dialog-input"
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                placeholder={placeholder}
+                className={`mt-2 h-10 w-full rounded-lg border bg-slate-950 px-3 text-[13px] text-slate-100 outline-none transition-colors focus:border-accent/70 focus:ring-2 focus:ring-accent/20 ${
+                  validationError ? 'border-red-500/60' : 'border-slate-700'
+                }`}
+                aria-invalid={Boolean(validationError)}
+              />
+              <p
+                className={`mt-2 text-[12px] leading-relaxed ${
+                  validationError ? 'text-red-300' : 'text-slate-400'
+                }`}
+              >
+                {validationError ?? helperText ?? '\u00A0'}
+              </p>
+            </>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-700 bg-slate-850 px-4 py-3">
@@ -155,14 +189,16 @@ export function PromptDialog({
           >
             {cancelLabel}
           </button>
-          <button
-            className="inline-flex h-9 items-center rounded-md border border-accent/40 bg-accent/20 px-3 text-[12px] font-medium text-accent transition-colors hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => canSubmit && onConfirm(trimmed)}
-            disabled={!canSubmit}
-            type="button"
-          >
-            {confirmLabel}
-          </button>
+          {!choices?.length ? (
+            <button
+              className="inline-flex h-9 items-center rounded-md border border-accent/40 bg-accent/20 px-3 text-[12px] font-medium text-accent transition-colors hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => canSubmit && onConfirm(trimmed)}
+              disabled={!canSubmit}
+              type="button"
+            >
+              {confirmLabel}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>,
