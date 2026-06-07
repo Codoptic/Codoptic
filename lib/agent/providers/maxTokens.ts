@@ -12,6 +12,7 @@ const TOOL_LOOP_DEFAULTS: Record<ProviderId, number> = {
   mistral: 8192,
   deepseek: 8192,
   nvidia: 8192,
+  openrouter: 8192,
 };
 
 const ENV_OVERRIDE_KEYS: Record<ProviderId, string> = {
@@ -24,6 +25,7 @@ const ENV_OVERRIDE_KEYS: Record<ProviderId, string> = {
   mistral: 'MISTRAL_MAX_TOKENS',
   deepseek: 'DEEPSEEK_MAX_TOKENS',
   nvidia: 'NVIDIA_MAX_TOKENS',
+  openrouter: 'OPENROUTER_MAX_TOKENS',
 };
 
 const MAX_TOKEN_KEYS: MaxTokenField[] = ['max_tokens', 'max_completion_tokens'];

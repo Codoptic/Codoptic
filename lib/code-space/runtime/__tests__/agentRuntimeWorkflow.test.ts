@@ -84,7 +84,7 @@ describe('AgentRuntime workflow contracts', () => {
           input: { edits: [{ path: 'src.ts', search: 'export const answer = 1;', replace: 'export const answer = 2;', reason: 'Update answer.' }] },
         }],
       }))
-      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, summary: 'Updated answer.' } }] }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Updated answer.' } }] }))
       .mockResolvedValueOnce(turn({
         toolCalls: [{
           id: 't4',
@@ -95,7 +95,7 @@ describe('AgentRuntime workflow contracts', () => {
       .mockResolvedValueOnce(turn({
         toolCalls: [{ id: 't5', name: 'run_command', input: { command: 'node', args: ['.agent/tests/smoke.js'], reason: 'Run focused smoke script.' } }],
       }))
-      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't6', name: 'attempt_completion', input: { success: true, summary: 'Smoke script passed.' } }] }));
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't6', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Smoke script passed.' } }] }));
 
     const events: AgentSSEEvent[] = [];
     await new AgentRuntime().run(

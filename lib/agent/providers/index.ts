@@ -7,6 +7,7 @@ import { LocalModelProvider } from './local';
 import { MistralProvider } from './mistral';
 import { DeepSeekProvider } from './deepseek';
 import { NvidiaProvider } from './nvidia';
+import { OpenRouterProvider } from './openrouter';
 import type {
   Provider,
   ProviderId,
@@ -41,6 +42,7 @@ export const PROVIDER_ENV: Record<ProviderId, string> = {
   mistral: 'MISTRAL_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
 };
 
 export function getDefaultProvider(): ProviderId {
@@ -54,7 +56,8 @@ export function getDefaultProvider(): ProviderId {
     env === 'local' ||
     env === 'mistral' ||
     env === 'deepseek' ||
-    env === 'nvidia'
+    env === 'nvidia' ||
+    env === 'openrouter'
   ) {
     return env;
   }
@@ -81,6 +84,8 @@ export function makeProvider(id: ProviderId, cfg: ProviderConfig): Provider {
       return new DeepSeekProvider(cfg);
     case 'nvidia':
       return new NvidiaProvider(cfg);
+    case 'openrouter':
+      return new OpenRouterProvider(cfg);
   }
 }
 

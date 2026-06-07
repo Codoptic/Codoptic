@@ -27,6 +27,7 @@ const PROVIDERS: Array<{ id: ProviderId; label: string; envVar: string; note: st
   },
   { id: 'nvidia', label: 'NVIDIA NIM', envVar: 'NVIDIA_API_KEY', note: 'Endpoint + model required (NIM API).' },
   { id: 'foundry', label: 'Azure Foundry', envVar: 'FOUNDRY_API_KEY', note: 'Provide the deployment name for your custom model.' },
+  { id: 'openrouter', label: 'Open Router', envVar: 'OPENROUTER_API_KEY', note: 'Provide an OpenRouter model name and API URL.' },
   { id: 'local', label: 'Local Model', envVar: '', note: 'OpenAI-compatible API — works with Ollama, LM Studio, llama.cpp, Jan.' },
 ];
 
@@ -38,9 +39,10 @@ const MODELS_BY_PROVIDER: Record<string, readonly string[]> = {
   grok: GROK_MODELS,
   mistral: MISTRAL_MODELS,
   deepseek: DEEPSEEK_MODELS,
+  openrouter: [],
 };
 
-const CUSTOM_ENDPOINT_PROVIDERS: ProviderId[] = ['foundry', 'nvidia'];
+const CUSTOM_ENDPOINT_PROVIDERS: ProviderId[] = ['foundry', 'nvidia', 'openrouter'];
 
 function LocalModelTestButton({ baseUrl, apiKey }: { baseUrl: string; apiKey: string }) {
   const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
@@ -103,10 +105,16 @@ export function ProviderConfig() {
   const [validation, setValidation] = useState<{ ok: boolean; error?: string } | null>(null);
   const showModelSelect = !CUSTOM_ENDPOINT_PROVIDERS.includes(provider.provider) && provider.provider !== 'local';
   const customModelPlaceholder =
-    provider.provider === 'nvidia' ? 'e.g. meta/llama-3.1-70b-instruct' : 'e.g. my-gpt-deployment';
+    provider.provider === 'nvidia'
+      ? 'e.g. meta/llama-3.1-70b-instruct'
+      : provider.provider === 'openrouter'
+        ? 'e.g. openai/gpt-4o'
+        : 'e.g. my-gpt-deployment';
   const endpointPlaceholder =
     provider.provider === 'foundry'
       ? 'https://<your-resource>.openai.azure.com'
+      : provider.provider === 'openrouter'
+      ? 'https://openrouter.ai/api/v1'
       : 'https://nvidia.com';
   const summaryUsesCustomModel = CUSTOM_ENDPOINT_PROVIDERS.includes(provider.provider);
   const summaryModel = summaryUsesCustomModel ? provider.customModel ?? '?' : provider.model;
@@ -125,7 +133,7 @@ export function ProviderConfig() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: provider.provider,
-          model: provider.provider === 'foundry' ? provider.customModel ?? '' : provider.model,
+          model: CUSTOM_ENDPOINT_PROVIDERS.includes(provider.provider) ? provider.customModel ?? '' : provider.model,
           apiKey: provider.apiKey || undefined,
           endpoint: provider.endpoint || undefined,
         }),
@@ -203,6 +211,8 @@ export function ProviderConfig() {
           <div className="mb-1 text-[10px] uppercase tracking-widest text-ink-400">
             {provider.provider === 'foundry'
               ? 'Deployment (model name)'
+              : provider.provider === 'openrouter'
+              ? 'OpenRouter model name'
               : provider.provider === 'deepseek'
               ? 'DeepSeek model name'
               : 'Model name'}
@@ -216,6 +226,8 @@ export function ProviderConfig() {
           <div className="mt-1 text-[10px] text-ink-400">
             {provider.provider === 'foundry'
               ? 'Point to an Azure deployment (e.g. my-gpt-deployment).'
+              : provider.provider === 'openrouter'
+              ? 'Enter the OpenRouter model slug you want to use (e.g. openai/gpt-4o).'
               : provider.provider === 'deepseek'
               ? 'Enter the DeepSeek model you want to use (e.g. deepseek-v4-pro).'
               : 'Provide the NVIDIA NIM model path (e.g. meta/llama-3.1-70b-instruct).'}

@@ -111,7 +111,7 @@ export function FixPanel({ onFixApplied }: Props) {
   }, [changeDescription, step, clarify, answers]);
 
   const currentModel =
-    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia'
+    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter'
       ? (provider.customModel ?? '?')
       : provider.model;
 

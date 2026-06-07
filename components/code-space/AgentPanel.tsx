@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bot, Check, Copy, Edit3, ExternalLink, Layers3, Loader2, Share2, Sparkles, Zap } from 'lucide-react';
+import { Bot, Check, Copy, Edit3, ExternalLink, Layers3, Loader2, Settings, Share2, Sparkles, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -490,8 +490,14 @@ export function AgentPanel({
           </button>
         ) : null}
         <span className="ml-auto truncate text-[10px] text-[#6e7681]">{providerSummary}</span>
-        <button type="button" onClick={onOpenModelConfig} className="text-[10px] text-[#58a6ff] underline underline-offset-2 hover:text-[#79b8ff]">
-          Model Configuration
+        <button
+          type="button"
+          onClick={onOpenModelConfig}
+          className="rounded p-1 text-[#8b949e] hover:bg-[#161b22] hover:text-[#79b8ff]"
+          title="Model Configuration"
+          aria-label="Model Configuration"
+        >
+          <Settings size={14} />
         </button>
       </div>
 

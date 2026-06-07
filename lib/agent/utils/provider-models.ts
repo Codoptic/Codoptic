@@ -26,6 +26,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderId, string> = {
   mistral: 'mistral-large',
   deepseek: 'deepseek-v4-pro',
   nvidia: 'meta/llama-3.1-70b-instruct',
+  openrouter: '',
 };
 
 export const PROVIDER_MODEL_ENV: Record<ProviderId, string> = {
@@ -38,6 +39,7 @@ export const PROVIDER_MODEL_ENV: Record<ProviderId, string> = {
   mistral: 'MISTRAL_MODEL',
   deepseek: 'DEEPSEEK_MODEL',
   nvidia: 'NVIDIA_MODEL',
+  openrouter: 'OPENROUTER_MODEL',
 };
 
 export function getProviderDefaultModel(provider: ProviderId): string {

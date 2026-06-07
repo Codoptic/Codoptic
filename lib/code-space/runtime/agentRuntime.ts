@@ -55,7 +55,7 @@ export const ResumeValidationRequestSchema = z.object({
   projectRoot: z.string(),
   projectName: z.string().optional().default(''),
   model: z.string().optional().default(''),
-  providerId: z.enum(['anthropic', 'openai', 'gemini', 'grok', 'foundry', 'local']).optional().default('openai'),
+  providerId: z.enum(['anthropic', 'openai', 'gemini', 'grok', 'foundry', 'local', 'mistral', 'deepseek', 'nvidia', 'openrouter']).optional().default('openai'),
   apiKey: z.string().optional().default(''),
   endpoint: z.string().optional(),
   toolBudget: z.number().optional().default(50),
@@ -81,7 +81,7 @@ export const AgentRuntimeRequestSchema = z.object({
   projectName: z.string(),
   messages: z.array(RuntimeMessageSchema).min(1),
   model: z.string().optional().default(''),
-  providerId: z.enum(['anthropic', 'openai', 'gemini', 'grok', 'foundry', 'local']).optional().default('openai'),
+  providerId: z.enum(['anthropic', 'openai', 'gemini', 'grok', 'foundry', 'local', 'mistral', 'deepseek', 'nvidia', 'openrouter']).optional().default('openai'),
   apiKey: z.string().optional().default(''),
   endpoint: z.string().optional(),
   openTabs: z.array(z.string()).default([]),
@@ -945,7 +945,15 @@ async function resolveProviderCredentials(root: string, request: AgentRuntimeReq
           ? [keyName('XAI_API'), keyName('GROK_API')]
           : request.providerId === 'foundry'
             ? [keyName('FOUNDRY_API'), keyName('AZURE_OPENAI_API'), keyName('AZURE_AI_FOUNDRY_API')]
-            : [keyName('OPENAI_API')];
+            : request.providerId === 'mistral'
+              ? [keyName('MISTRAL_API')]
+              : request.providerId === 'deepseek'
+                ? [keyName('DEEPSEEK_API')]
+                : request.providerId === 'nvidia'
+                  ? [keyName('NVIDIA_API')]
+                  : request.providerId === 'openrouter'
+                    ? [keyName('OPENROUTER_API')]
+                    : [keyName('OPENAI_API')];
   const env = await loadWorkspaceEnv(root);
   return { apiKey: keys.map((key) => env[key] ?? process.env[key]).find(Boolean) ?? '', endpoint };
 }

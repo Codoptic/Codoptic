@@ -68,7 +68,7 @@ export function AgentPanel() {
         body: JSON.stringify({
           provider: provider.provider,
           model:
-            provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia'
+            provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter'
               ? provider.customModel ?? ''
               : provider.model,
           apiKey: provider.apiKey || undefined,
@@ -188,7 +188,8 @@ export function AgentPanel() {
                   {provider.provider}/
                   {(provider.provider === 'foundry' ||
                     provider.provider === 'deepseek' ||
-                    provider.provider === 'nvidia'
+                    provider.provider === 'nvidia' ||
+                    provider.provider === 'openrouter'
                     ? provider.customModel ?? '?'
                     : provider.model)}
                 </span>

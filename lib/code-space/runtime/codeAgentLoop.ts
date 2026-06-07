@@ -212,6 +212,15 @@ export class CodeAgentLoop {
           });
           continue;
         }
+        if (success && canMutateSource && call.input?.completedOriginalRequest !== true) {
+          toolResults.push({
+            toolCallId: call.id,
+            isError: true,
+            content:
+              'Cannot complete successfully yet: compare the full diff against the original Task and Definition of Done, finish any missing requested work, then call attempt_completion with completedOriginalRequest=true. If anything remains incomplete, use success=false with the exact blocker.',
+          });
+          continue;
+        }
         completion = { completed: true, success, summary: summary || (success ? 'Task completed.' : 'Task could not be completed.'), stopReason: 'completed' };
         toolResults.push({ toolCallId: call.id, content: 'Completion recorded.' });
         continue;
@@ -253,11 +262,13 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '3. Use external helpers only when they materially improve the result: research_web with queries/URLs for current docs and OSS examples, harness_context before large unfamiliar changes, and scan_code_quality for refactors, reviews, duplication, secret, or bug-hunting work.',
     '4. After editing, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
     '5. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
-    '6. When the work is done, call attempt_completion with success=true and a concise summary of what changed.',
+    '6. Before completion, compare the cumulative diff, validation output, and files touched against the original Task and Definition of Done. Finish every requested item, including nearby tests/docs/config updates implied by the request.',
+    '7. When the work is done, call attempt_completion with success=true, completedOriginalRequest=true, and a concise summary of what changed.',
     '',
     'Hard rules:',
     '- Do not fabricate results or write markdown notes as a substitute for real code changes.',
     '- Reserve success=false for impossible, contradictory, or blocked tasks with exact evidence.',
+    '- Do not call attempt_completion(success=true) after only a partial patch. If any part of the user request is unfinished, keep working or report success=false with the exact blocker.',
     '- Only edit files that the task requires. Avoid unrelated refactors or speculative abstractions.',
     '- Prefer the smallest change that correctly solves the problem.',
     '- Edits are checkpointed and can be restored if a change makes the result worse.',
@@ -323,6 +334,11 @@ export async function buildCodeSeedMessage(
     '',
     'Definition of Done for this implementation run:',
     formatWorkflowDodMarkdown(),
+    '',
+    'Completion gate before attempt_completion(success=true):',
+    '- Re-read the Task above and verify the final diff satisfies the complete original request, not just the first obvious subtask.',
+    '- Check affected call sites, tests, docs/configs, and validation output for follow-through implied by the request.',
+    '- Only set completedOriginalRequest=true after that comparison is complete; otherwise continue editing or return success=false with the exact blocker.',
     '',
     'Validation commands expected after changes:',
     validation,

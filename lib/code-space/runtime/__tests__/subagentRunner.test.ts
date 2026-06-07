@@ -81,7 +81,7 @@ describe('SubagentRunner', () => {
 
     mockedTurn
       .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'edit_file', input: { edits: [{ path: '.agent/tests/run-1/t.ts', search: 'old', replace: 'new', reason: 'add test' }] } }] }))
-      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: true, summary: 'Wrote a test.' } }] }));
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Wrote a test.' } }] }));
 
     const parent = makeParent();
     const runner = new SubagentRunner(parent, { id: 'openai', model: 'test', apiKey: '' }, 'demo');

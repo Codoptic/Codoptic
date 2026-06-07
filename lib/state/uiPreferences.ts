@@ -46,7 +46,7 @@ const MODES = new Set<PersistedMode>(['editor', 'code-space', 'agent', 'multi-la
 const THEMES = new Set<PersistedTheme>(['dark', 'light']);
 const DIAGRAM_TYPES = new Set<PersistedDiagramType>(['architecture', 'sequence', 'class', 'data-flow', 'deployment']);
 const EDITOR_TABS = new Set<PersistedEditorTab>(['dsl', 'ir', 'diagnostics', 'fix']);
-const PROVIDERS = new Set<ProviderId>(['openai', 'anthropic', 'gemini', 'grok', 'foundry', 'mistral', 'deepseek', 'nvidia']);
+const PROVIDERS = new Set<ProviderId>(['openai', 'anthropic', 'gemini', 'grok', 'foundry', 'mistral', 'deepseek', 'nvidia', 'openrouter']);
 const LAYOUT_STRATEGIES = new Set<LayoutStrategy>(['auto', 'layered', 'force-lite', 'grid-cluster', 'manual']);
 
 function canUseLocalStorage(): boolean {

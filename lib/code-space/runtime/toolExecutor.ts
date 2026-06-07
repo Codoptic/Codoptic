@@ -240,8 +240,16 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'attempt_completion',
-    description: 'Signal that the task is finished. Set success=false if you could not complete it; never fabricate a result. Provide a concise summary of what changed (or why it could not be done).',
-    inputSchema: { type: 'object', properties: { success: { type: 'boolean' }, summary: { type: 'string' } }, required: ['success', 'summary'] },
+    description: 'Signal that the task is finished. For success=true, first compare the final diff and validation against the complete original request, then set completedOriginalRequest=true. Set success=false if you could not complete it; never fabricate a result. Provide a concise summary of what changed (or why it could not be done).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        summary: { type: 'string' },
+        completedOriginalRequest: { type: 'boolean', description: 'Required true when success=true after checking the final diff against the complete original user request.' },
+      },
+      required: ['success', 'summary'],
+    },
   },
 ];
 

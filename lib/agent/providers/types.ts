@@ -7,7 +7,8 @@ export type ProviderId =
   | 'local'
   | 'mistral'
   | 'deepseek'
-  | 'nvidia';
+  | 'nvidia'
+  | 'openrouter';
 
 /** A single tool call requested by the model. `input` is always a parsed object. */
 export interface ToolCall {

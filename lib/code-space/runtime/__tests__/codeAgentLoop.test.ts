@@ -70,7 +70,7 @@ describe('CodeAgentLoop', () => {
           input: { edits: [{ path: 'src.ts', search: 'export const answer = 1;', replace: 'export const answer = 42;', reason: 'bump' }] },
         }],
       }))
-      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, summary: 'Bumped answer to 42.' } }] }));
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Bumped answer to 42.' } }] }));
 
     const events: AgentSSEEvent[] = [];
     const ctx = makeContext(events);
@@ -133,6 +133,38 @@ describe('CodeAgentLoop', () => {
     expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('Cannot complete successfully')))).toBe(true);
   });
 
+  it('rejects successful completion after edits until the original request is explicitly checked', async () => {
+    await writeFile(path.join(tmpDir, 'src.ts'), 'export const answer = 1;\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{
+          id: 't1',
+          name: 'edit_file',
+          input: { edits: [{ path: 'src.ts', search: 'export const answer = 1;', replace: 'export const answer = 2;', reason: 'bump' }] },
+        }],
+      }))
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: true, summary: 'Updated answer.' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't3', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Updated answer.' } }],
+      }));
+
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const loop = new CodeAgentLoop();
+    loop.seed('system', 'Update answer in src.ts and verify the request is complete');
+
+    const result = await loop.run(ctx, { session: { id: 'openai', model: 'test', apiKey: '' }, budget: new ToolBudget(10, 40) });
+
+    expect(result.completed).toBe(true);
+    expect(result.success).toBe(true);
+    expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('completedOriginalRequest=true')))).toBe(true);
+  });
+
   it('stops at the hard turn cap without completing', async () => {
     mockedTurn.mockResolvedValue(turn({ toolCalls: [{ id: 'loop', name: 'read_file', input: { path: 'missing.ts' } }] }));
 
@@ -183,7 +215,7 @@ describe('CodeAgentLoop', () => {
         }],
       }))
       .mockResolvedValueOnce(turn({
-        toolCalls: [{ id: 't4', name: 'attempt_completion', input: { success: true, summary: 'Updated config value.' } }],
+        toolCalls: [{ id: 't4', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Updated config value.' } }],
       }));
 
     const events: AgentSSEEvent[] = [];

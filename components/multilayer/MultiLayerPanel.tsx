@@ -65,7 +65,7 @@ export function MultiLayerPanel() {
           body: JSON.stringify({
             provider: provider.provider,
             model:
-              provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia'
+              provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter'
                 ? provider.customModel ?? ''
                 : provider.model,
             apiKey: provider.apiKey || undefined,
@@ -194,7 +194,8 @@ export function MultiLayerPanel() {
                 {ignoredFolders.length ? ` · ${ignoredFolders.length} ignored folder${ignoredFolders.length === 1 ? '' : 's'}` : ''} · provider {provider.provider}/
                 {(provider.provider === 'foundry' ||
                   provider.provider === 'deepseek' ||
-                  provider.provider === 'nvidia'
+                  provider.provider === 'nvidia' ||
+                  provider.provider === 'openrouter'
                   ? provider.customModel ?? '?'
                   : provider.model)}
                 {quickMode ? <> · <span className="text-accent">Quick Mode</span></> : null}

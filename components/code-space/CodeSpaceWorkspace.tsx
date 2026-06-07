@@ -317,7 +317,7 @@ export function CodeSpaceWorkspace() {
   // Motivation vs Logic: replaces every `window.prompt`/`window.confirm` flow in this workspace
   // with portal-mounted modals so renames, deletes, and clones share consistent in-app chrome
   // instead of leaking the page origin in the native browser dialog.
-  const { prompt: openPromptDialog, confirm: openConfirmDialog, dialogs: appDialogs } = useAppDialogs();
+  const { prompt: openPromptDialog, confirm: openConfirmDialog, alert: openAlertDialog, dialogs: appDialogs } = useAppDialogs();
   const [projects, setProjects] = useState<CodeSpaceProject[]>([]);
   const [sessions, setSessions] = useState<CodeSpaceAgentSession[]>([]);
   const [tabs, setTabs] = useState<CodeSpaceEditorTab[]>([]);
@@ -1329,6 +1329,120 @@ export function CodeSpaceWorkspace() {
     [activeProject, openFile],
   );
 
+  const writeProjectFile = useCallback(
+    async (project: CodeSpaceProject, filePath: string, content: string) => {
+      if (!project.rootPath) throw new Error('Unable to write a file without a project root');
+      const res = await fetch('/api/code-space/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'write', rootPath: project.rootPath, path: filePath, content }),
+      });
+      const data = (await res.json()) as { error?: string; hash?: string };
+      if (!res.ok) throw new Error(data.error ?? `Could not write ${filePath}`);
+      return data;
+    },
+    [],
+  );
+
+  const handleAddPlugin = useCallback(async () => {
+    const project = activeProject;
+    if (!project?.rootPath) {
+      await openAlertDialog({
+        title: 'No Code Space project',
+        message: 'Open a Code Space project before adding an MCP plugin.',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const serverKind = await openPromptDialog({
+      title: 'Add MCP plugin',
+      description: 'Type "local" for a command-based MCP server or "url" for a remote server.',
+      label: 'MCP server type',
+      placeholder: 'local or url',
+      defaultValue: 'local',
+      confirmLabel: 'Create mcp.json',
+      validate: (value) => (/^(local|url)$/i.test(value.trim()) ? null : 'Enter local or url.'),
+      selectOnOpen: true,
+    });
+    if (!serverKind) return;
+
+    const isLocal = serverKind.trim().toLowerCase() === 'local';
+    const mcpConfig = isLocal
+      ? {
+          mcpServers: {
+            'tool-name': {
+              command: 'node',
+              args: ['/absolute/path/to/server/index.js'],
+              env: {
+                API_KEY: 'your_api_key_here',
+                DATABASE_URL: 'localhost:5432',
+              },
+            },
+          },
+        }
+      : {
+          mcpServers: {
+            'my-secure-remote-server': {
+              url: 'https://yourdomain.com',
+              headers: {
+                Authorization: 'Bearer YOUR_SECRET_API_TOKEN',
+                'X-Custom-Header': 'CustomValue',
+              },
+            },
+          },
+        };
+
+    try {
+      await writeProjectFile(project, 'mcp.json', `${JSON.stringify(mcpConfig, null, 2)}\n`);
+
+      let gitignore = '';
+      let nextGitignoreContent: string | null = null;
+      let nextGitignoreHash = '';
+      try {
+        gitignore = (await loadFilePayload(project, '.gitignore')).content;
+      } catch {
+        gitignore = '';
+      }
+      const gitignoreLines = gitignore.split(/\r?\n/);
+      if (!gitignoreLines.some((line) => line.trim() === 'mcp.json')) {
+        const prefix = gitignore.trimEnd();
+        nextGitignoreContent = `${prefix}${prefix ? '\n' : ''}mcp.json\n`;
+        nextGitignoreHash = (await writeProjectFile(project, '.gitignore', nextGitignoreContent)).hash ?? '';
+      }
+
+      const data = await loadFilePayload(project, 'mcp.json');
+      if (nextGitignoreContent) {
+        setTabs((current) =>
+          current.map((tab) =>
+            tab.projectId === project.id && tab.path === '.gitignore'
+              ? { ...tab, contentHash: nextGitignoreHash, dirty: false, lastOpenedAt: Date.now() }
+              : tab,
+          ),
+        );
+      }
+      setFileContents((current) => {
+        const next = { ...current };
+        for (const tab of tabs) {
+          if (tab.projectId === project.id && tab.path === 'mcp.json') next[tab.id] = data;
+          if (nextGitignoreContent && tab.projectId === project.id && tab.path === '.gitignore') {
+            next[tab.id] = {
+              path: '.gitignore',
+              content: nextGitignoreContent,
+              hash: nextGitignoreHash,
+              modifiedAt: Date.now(),
+            };
+          }
+        }
+        return next;
+      });
+      await openFile(project, 'mcp.json', { preview: false });
+      await loadTree(project, '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [activeProject, loadFilePayload, loadTree, openAlertDialog, openFile, openPromptDialog, tabs, writeProjectFile]);
+
   useEffect(() => {
     // Root Cause vs Logic: the plan card already falls back to dispatching a custom event when no direct callback is supplied,
     // but the workspace never subscribed to that event, so "View plan..." was a dead click. Reuse the normal file opener here
@@ -1845,7 +1959,7 @@ export function CodeSpaceWorkspace() {
 
     const openTabs = tabs.map((tab) => tab.path).filter((path): path is string => Boolean(path));
     const usesCustomModel =
-      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
     const model =
       usesCustomModel
         ? (provider.customModel ?? provider.model)
@@ -2024,8 +2138,10 @@ export function CodeSpaceWorkspace() {
                 createdAt: Date.now(),
               });
             } else if (event.type === 'plan_markdown_created') {
+              setAgentMode('code');
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
+                mode: 'code',
                 planMarkdown: {
                   filePath: event.filePath,
                   content: event.content,
@@ -2322,8 +2438,10 @@ export function CodeSpaceWorkspace() {
                 createdAt: Date.now(),
               });
             } else if (event.type === 'plan_markdown_created') {
+              setAgentMode('code');
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
+                mode: 'code',
                 planMarkdown: {
                   filePath: event.filePath,
                   content: event.content,
@@ -2597,7 +2715,7 @@ export function CodeSpaceWorkspace() {
       return;
     }
     const runToken = nowId('run');
-    const usesCustomModel = provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+    const usesCustomModel = provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
     const model = usesCustomModel
       ? (provider.customModel ?? provider.model)
       : provider.provider === 'local'
@@ -3454,7 +3572,7 @@ export function CodeSpaceWorkspace() {
             pendingDiffs={pendingDiffs}
             appliedDiffs={agentChangesets}
             providerSummary={`${provider.provider}/${
-              provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia'
+              provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter'
                 ? provider.customModel ?? provider.model
                 : provider.model
             }`}
@@ -3831,6 +3949,16 @@ export function CodeSpaceWorkspace() {
             </div>
             <div className="mt-4">
               <ProviderConfig />
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleAddPlugin()}
+                className="inline-flex items-center gap-2 rounded-md border border-[#2a2a2a] bg-[#252526] px-3 py-1.5 text-xs font-semibold text-[#d4d4d4] hover:bg-[#2a2d2e]"
+              >
+                <Plus size={14} />
+                Add Plugin
+              </button>
             </div>
             <div className="mt-4 rounded-xl border border-[#2a2a2a] bg-[#111111] p-3">
               <label htmlFor="code-space-instruction" className="block text-[10px] uppercase tracking-widest text-[#8b8b8b]">

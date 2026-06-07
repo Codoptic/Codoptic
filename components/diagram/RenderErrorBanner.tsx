@@ -54,7 +54,7 @@ export function RenderErrorBanner({ errors, onDismiss }: Props) {
     : 'Diagram rendering error — DSL syntax/format issue detected';
 
   const currentModel =
-    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia'
+    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter'
       ? (provider.customModel ?? provider.model)
       : provider.model;
 

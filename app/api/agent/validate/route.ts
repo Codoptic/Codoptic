@@ -6,7 +6,7 @@ import { methodNotAllowedResponse } from '@/lib/util/http';
 export const runtime = 'nodejs';
 
 const Body = z.object({
-  provider: z.enum(['openai', 'anthropic', 'gemini', 'foundry', 'grok', 'mistral', 'deepseek', 'nvidia']),
+  provider: z.enum(['openai', 'anthropic', 'gemini', 'foundry', 'grok', 'mistral', 'deepseek', 'nvidia', 'openrouter']),
   model: z.string(),
   apiKey: z.string().optional(),
   endpoint: z.string().optional(),
@@ -49,6 +49,8 @@ export async function POST(req: Request) {
         ? process.env.DEEPSEEK_ENDPOINT
         : cfg.provider === 'nvidia'
         ? process.env.NVIDIA_ENDPOINT
+        : cfg.provider === 'openrouter'
+        ? process.env.OPENROUTER_ENDPOINT
         : cfg.provider === 'mistral'
         ? process.env.MISTRAL_ENDPOINT
         : undefined);

@@ -4,7 +4,7 @@ import { makeProvider, PROVIDER_ENV } from '@/lib/agent/providers';
 
 const BodySchema = z.object({
   query: z.string().min(1).max(100),
-  providerId: z.enum(['openai', 'anthropic', 'gemini', 'grok', 'foundry', 'local', 'mistral', 'deepseek', 'nvidia']),
+  providerId: z.enum(['openai', 'anthropic', 'gemini', 'grok', 'foundry', 'local', 'mistral', 'deepseek', 'nvidia', 'openrouter']),
   model: z.string().min(1),
   apiKey: z.string().optional().default(''),
   endpoint: z.string().optional(),

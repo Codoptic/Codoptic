@@ -103,7 +103,7 @@ export function CustomPromptPanel() {
   const [animTitle, setAnimTitle] = useState('Generating questions…');
   const abortRef = useRef<AbortController | null>(null);
   const summaryUsesCustomModel =
-    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+    provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
   const summaryModel = summaryUsesCustomModel ? provider.customModel ?? '?' : provider.model;
 
   // Restore persisted state on mount
@@ -165,7 +165,7 @@ export function CustomPromptPanel() {
     abortRef.current = ac;
 
     const clarifyUsesCustomModel =
-      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
     const clarifyModel =
       clarifyUsesCustomModel
         ? (provider.customModel ?? provider.model)
@@ -295,7 +295,7 @@ export function CustomPromptPanel() {
     const apiEndpoint = isMulti ? '/api/agent/custom-multilayer' : '/api/agent/custom';
 
     const genUsesCustomModel =
-      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia';
+      provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
     const genModel =
       genUsesCustomModel
         ? (provider.customModel ?? provider.model)
