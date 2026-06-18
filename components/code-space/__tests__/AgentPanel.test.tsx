@@ -51,14 +51,6 @@ function createSession(): CodeSpaceAgentSession {
   };
 }
 
-function openSection(container: HTMLDivElement, title: string): void {
-  const button = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes(title));
-  if (!button) return;
-  act(() => {
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  });
-}
-
 function renderPanel(
   onOpenPlanFile = vi.fn(),
   overrides: Partial<React.ComponentProps<typeof AgentPanel>> = {},
@@ -210,14 +202,14 @@ describe('AgentPanel', () => {
       },
     ];
     const { container } = renderPanel(vi.fn(), { pendingDiffs, onOpenDiffFile });
-    const fileButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('src/example.ts'));
+    const fileButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('example.ts'));
     act(() => {
       fileButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(onOpenDiffFile).toHaveBeenCalledWith('src/example.ts');
   });
 
-  it('shows Accept and Reject actions in confirm mode for pending changes', () => {
+  it('renders pending changes inline with patch counts and review controls', () => {
     const unifiedDiff = '@@ -1 +1 @@\n-a\n+b';
     const pendingDiffs = [
       {
@@ -231,14 +223,19 @@ describe('AgentPanel', () => {
       },
     ];
     const { container } = renderPanel(vi.fn(), { pendingDiffs, executionPolicy: 'manual' as CodeSpaceExecutionPolicy });
+    expect(container.textContent).not.toContain('Live run');
+    expect(container.textContent).not.toContain('Code changes');
+    expect(container.textContent).not.toContain('Validation');
+    expect(container.textContent).toContain('example.ts');
     expect(container.textContent).toContain('Accept');
     expect(container.textContent).toContain('Reject');
+    expect(container.textContent).toContain('Review');
     expect(container.textContent).toContain('+1');
     expect(container.textContent).toContain('-1');
-    expect(container.textContent).toContain('1 patch');
+    expect(container.textContent).toContain('1 hunk');
   });
 
-  it('keeps applied patch containers visible in the code changes rail', () => {
+  it('keeps applied patch cards visible inline without the old code changes rail', () => {
     const appliedDiffs = [
       {
         filePath: 'components/example.tsx',
@@ -248,12 +245,12 @@ describe('AgentPanel', () => {
       },
     ];
     const { container } = renderPanel(vi.fn(), { appliedDiffs });
-    expect(container.textContent).toContain('Code changes');
-    expect(container.textContent).toContain('components/example.tsx');
+    expect(container.textContent).not.toContain('Code changes');
+    expect(container.textContent).toContain('example.tsx');
     expect(container.textContent).toContain('Applied change');
   });
 
-  it('shows a cursor-style activity summary for file and search tool calls', () => {
+  it('shows a cursor-style exploration summary without individual tool cards', () => {
     const session = createSession();
     session.toolCalls = [
       {
@@ -279,11 +276,10 @@ describe('AgentPanel', () => {
     ];
 
     const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
-    openSection(container, 'Explored 1 file, 1 search');
 
     expect(container.textContent).toContain('Explored 1 file, 1 search');
-    expect(container.textContent).toContain('Read BottomPanel.tsx L1-80');
-    expect(container.textContent).toContain('Searched Explored x files, y searches');
+    expect(container.textContent).not.toContain('Read BottomPanel.tsx L1-80');
+    expect(container.textContent).not.toContain('Searched Explored x files, y searches');
   });
 
   it('keeps raw tool JSON out of the session subtitle', () => {
@@ -304,7 +300,6 @@ describe('AgentPanel', () => {
     ];
 
     const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
-    openSection(container, 'Session');
 
     expect(container.textContent).toContain('Thinking through the plan.');
     expect(container.textContent).not.toContain('Started read_file: {');

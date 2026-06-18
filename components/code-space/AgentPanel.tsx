@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Activity, Bot, Check, CheckCircle2, Copy, Edit3, ExternalLink, FileCode2, Layers3, Loader2, Settings, Share2, Sparkles, Terminal, Wrench, XCircle, Zap } from 'lucide-react';
+import { Bot, Check, ChevronRight, Copy, Edit3, ExternalLink, FileCode2, Infinity as InfinityIcon, Layers3, Loader2, Mic, Paperclip, Settings, Share2, Sparkles, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -10,18 +10,18 @@ import { getCodeSpaceExecutionPolicyMeta, type CodeSpaceExecutionPolicy } from '
 import { buildPlanImplementationPrompt, type CodeSpacePromptOptions } from '@/lib/code-space/planBuild';
 import { AgentModeSelector } from './AgentModeSelector';
 import { ExecutionPolicySelector } from './ExecutionPolicySelector';
-import { CollapsibleSection } from './CollapsibleSection';
 import { SessionListSection } from './SessionListSection';
 import { FileMentionInput } from './FileMentionInput';
 import { PlanClarificationPanel } from './PlanClarificationPanel';
 import { PlanLink } from './PlanLink';
-import { countDiffLines, type CodeSpacePendingDiff } from '@/components/code-space/diffHunks';
+import type { CodeSpacePendingDiff } from '@/components/code-space/diffHunks';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import type { FileMentionIndex } from '@/lib/code-space/mentions/index';
 import { buildMentionIndex } from '@/lib/code-space/mentions/index';
 import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionIndex';
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
 import { MentionChip } from './mentions/MentionChip';
+import { buildAgentTimeline, type AgentTimelineItem } from './agentTimeline';
 
 interface AgentPanelProps {
   session: CodeSpaceAgentSession | null;
@@ -185,135 +185,6 @@ function modeContract(mode: CodeSpaceAgentMode) {
   return 'Reviewable patches with validation gates';
 }
 
-function truncateInlineText(value: string, maxLength = 72): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function basename(filePath: string): string {
-  return filePath.split('/').filter(Boolean).pop() ?? filePath;
-}
-
-function formatLineRange(input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const record = input as Record<string, unknown>;
-  const start = typeof record.startLine === 'number' ? Math.max(1, Math.floor(record.startLine)) : null;
-  const end = typeof record.endLine === 'number' ? Math.max(1, Math.floor(record.endLine)) : null;
-  if (start == null && end == null) return '';
-  if (start != null && end != null && start !== end) return ` L${start}-${end}`;
-  return ` L${start ?? end ?? 1}`;
-}
-
-function describeToolCall(name: string, input: unknown): { label: string; kind: 'file' | 'search' | 'task'; detail?: string } {
-  if (input && typeof input === 'object') {
-    const record = input as Record<string, unknown>;
-    if (name === 'read_file') {
-      const path = typeof record.path === 'string' ? record.path : 'file';
-      return { label: `Read ${basename(path)}${formatLineRange(input)}`, kind: 'file' };
-    }
-    if (name === 'search_text') {
-      const query = typeof record.query === 'string' ? record.query : '';
-      return { label: `Searched ${truncateInlineText(query, 48) || 'the repo'}`, kind: 'search' };
-    }
-    if (name === 'list_files') {
-      const path = typeof record.path === 'string' && record.path.trim() ? record.path.trim() : '.';
-      return { label: `Listed ${path}`, kind: 'task' };
-    }
-    if (name === 'dependency_trace') {
-      const paths = Array.isArray(record.paths) ? record.paths.filter((path): path is string => typeof path === 'string') : [];
-      const firstPath = paths[0];
-      return {
-        label: firstPath ? `Traced dependencies for ${basename(firstPath)}` : 'Traced dependencies',
-        kind: 'task',
-      };
-    }
-    if (name === 'repo_map') {
-      return { label: 'Mapped repository', kind: 'task' };
-    }
-    if (name === 'git_status') {
-      return { label: 'Checked git status', kind: 'task' };
-    }
-    if (name === 'git_diff') {
-      const path = typeof record.path === 'string' && record.path.trim() ? record.path.trim() : '';
-      return { label: path ? `Read git diff for ${basename(path)}` : 'Read git diff', kind: 'task' };
-    }
-    if (name === 'read_artifact') {
-      const artifactId = typeof record.artifactId === 'string' ? record.artifactId : '';
-      return { label: artifactId ? `Read artifact ${artifactId}` : 'Read artifact', kind: 'task' };
-    }
-    if (name === 'grep_artifact') {
-      const pattern = typeof record.pattern === 'string' ? record.pattern : '';
-      return { label: pattern ? `Searched artifact for ${truncateInlineText(pattern, 40)}` : 'Searched artifact', kind: 'search' };
-    }
-    if (name === 'run_command') {
-      const command = typeof record.command === 'string' ? record.command : '';
-      const args = Array.isArray(record.args) ? record.args.filter((arg): arg is string => typeof arg === 'string') : [];
-      return {
-        label: command ? `Ran ${truncateInlineText([command, ...args].join(' '), 56)}` : 'Ran command',
-        kind: 'task',
-      };
-    }
-    if (name === 'edit_file') {
-      const edits = Array.isArray(record.edits) ? record.edits.length : 0;
-      return { label: edits > 0 ? `Prepared ${edits} edit${edits === 1 ? '' : 's'}` : 'Prepared edits', kind: 'task' };
-    }
-  }
-
-  return { label: `${name.replace(/_/g, ' ')}`, kind: 'task' };
-}
-
-function buildToolActivity(session: CodeSpaceAgentSession | null): {
-  summary: string;
-  entries: Array<{ id: string; label: string; detail?: string; timestamp: number; kind: 'file' | 'search' | 'task' }>;
-} {
-  const toolCalls = session?.toolCalls ?? [];
-  const readFiles = new Set<string>();
-  let searchCount = 0;
-  const entries = toolCalls
-    .map((call) => {
-      const description = describeToolCall(call.name, call.input);
-      if (call.name === 'read_file' && call.input && typeof call.input === 'object') {
-        const record = call.input as Record<string, unknown>;
-        const path = typeof record.path === 'string' ? record.path.trim() : '';
-        if (path) readFiles.add(path);
-      }
-      if (call.name === 'search_text') searchCount += 1;
-      return {
-        id: call.id,
-        label: description.label,
-        detail: call.status === 'error' ? call.error ?? call.summary : call.status === 'success' ? call.summary : undefined,
-        timestamp: call.updatedAt ?? call.createdAt,
-        kind: description.kind,
-      };
-    })
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  const filesLabel = `${readFiles.size} file${readFiles.size === 1 ? '' : 's'}`;
-  const searchesLabel = `${searchCount} search${searchCount === 1 ? '' : 'es'}`;
-  return {
-    summary: `Explored ${filesLabel}, ${searchesLabel}`,
-    entries,
-  };
-}
-
-function feedIcon(kind: NonNullable<CodeSpaceAgentSession['runFeed']>[number]['kind'], status?: string) {
-  if (status === 'error') return <XCircle size={12} className="text-[#f85149]" />;
-  if (status === 'success') return <CheckCircle2 size={12} className="text-[#3fb950]" />;
-  if (kind === 'patch') return <FileCode2 size={12} className="text-[#56d364]" />;
-  if (kind === 'terminal' || kind === 'validation') return <Terminal size={12} className="text-[#d2a8ff]" />;
-  if (kind === 'tool') return <Wrench size={12} className="text-[#79c0ff]" />;
-  return <Activity size={12} className="text-[#8b949e]" />;
-}
-
-function statusClass(status?: string) {
-  if (status === 'success') return 'text-[#3fb950]';
-  if (status === 'error') return 'text-[#f85149]';
-  if (status === 'warning') return 'text-[#f0883e]';
-  if (status === 'pending') return 'text-[#d2a8ff]';
-  return 'text-[#8b949e]';
-}
-
 export function AgentPanel({
   session,
   sessions,
@@ -365,58 +236,15 @@ export function AgentPanel({
   }, [mentionIndex, filePaths]);
   const executionPolicyMeta = getCodeSpaceExecutionPolicyMeta(executionPolicy);
 
-  const chatEntries = useMemo(() => {
-    return (session?.messages ?? [])
-      .filter((message) => message.role !== 'tool')
-      .map((message, index) => ({
-        key: message.id ?? `${message.role}:${index}`,
-        message,
-      }));
-  }, [session?.messages]);
-
-  const visibleValidationResults = useMemo(() => {
-    return (session?.verificationResults ?? []).filter((result) => result.status === 'failed' || result.output.trim());
-  }, [session?.verificationResults]);
   const visiblePlanBuildStatus = session?.planMarkdown?.buildStatus ?? 'available';
-  const toolActivity = useMemo(() => buildToolActivity(session), [session]);
-  const runFeedEntries = useMemo(() => (session?.runFeed ?? []).slice(-80), [session?.runFeed]);
-  const contractSummary = useMemo(() => {
-    const contract = session?.coverageLedger;
-    if (!contract?.requirements.length) return '';
-    const covered = contract.requirements.filter((requirement) => requirement.status === 'covered').length;
-    return `${covered}/${contract.requirements.length} covered`;
-  }, [session?.coverageLedger]);
-
-  // Motivation vs Logic: Cursor-style review keeps applied patches visible alongside pending ones, so the sidebar
-  // shows the full change history instead of dropping a container as soon as a patch is accepted.
-  const visibleDiffs = useMemo(() => {
-    const pending = pendingDiffs.map((diff) => ({
-      ...diff,
-      kind: 'pending' as const,
-      oldContent: diff.oldContent,
-      newContent: diff.newContent,
-      sortAt: Number.MAX_SAFE_INTEGER,
-    }));
-    const applied = appliedDiffs.map((diff) => ({
-      ...diff,
-      diffId: `applied:${diff.acceptedAt}:${diff.filePath}`,
-      oldContent: diff.beforeContent,
-      newContent: diff.afterContent,
-      explanation: 'Applied change',
-      unifiedDiff: undefined,
-      kind: 'applied' as const,
-      sortAt: diff.acceptedAt,
-    }));
-    return [...pending, ...applied].sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === 'pending' ? -1 : 1;
-      if (a.kind === 'pending' && b.kind === 'pending') return 0;
-      return b.sortAt - a.sortAt;
-    });
-  }, [appliedDiffs, pendingDiffs]);
+  const agentTimeline = useMemo(
+    () => buildAgentTimeline({ session, pendingDiffs, appliedDiffs }),
+    [appliedDiffs, pendingDiffs, session],
+  );
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [session?.messages, isRunning, session?.planMarkdown?.filePath]);
+  }, [agentTimeline.length, isRunning, session?.planMarkdown?.filePath]);
 
   useEffect(() => {
     if (draftPrompt == null) return;
@@ -492,6 +320,173 @@ export function AgentPanel({
     }
   };
 
+  const renderTimelineItem = (item: AgentTimelineItem) => {
+    if (item.kind === 'user_prompt') {
+      const syntheticMessage: CodeSpaceMessage = {
+        id: item.messageId,
+        role: 'user',
+        content: item.content,
+        createdAt: item.createdAt,
+      };
+      return (
+        <div key={item.id} className="group">
+          <div className="relative max-h-44 overflow-hidden rounded-[22px] border border-[#343434] bg-[#1b1b1d] px-4 py-4 text-[21px] font-semibold leading-8 text-[#dedede] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <MarkdownRenderer
+              markdown={item.content}
+              className="text-inherit"
+              contentClassName="text-[21px] leading-8"
+              componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
+            />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#1b1b1d] to-transparent" />
+          </div>
+          <div className="mt-1.5 flex items-center gap-1 px-1 opacity-70 transition-opacity group-hover:opacity-100">
+            <button
+              type="button"
+              onClick={() => void handleCopyPrompt(syntheticMessage)}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#242424] hover:text-[#d6d6d6]"
+              title="Copy prompt"
+              aria-label="Copy prompt"
+            >
+              {copiedMessageId === item.messageId ? <Check size={11} /> : <Copy size={11} />}
+              {copiedMessageId === item.messageId ? 'Copied' : 'Copy'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onEditPrompt(item.messageId)}
+              disabled={isRunning}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#242424] hover:text-[#d6d6d6] disabled:cursor-not-allowed disabled:opacity-40"
+              title="Edit prompt and rewind context"
+              aria-label="Edit prompt and rewind context"
+            >
+              <Edit3 size={11} />
+              Edit
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (item.kind === 'assistant_text') {
+      return (
+        <MarkdownRenderer
+          key={item.id}
+          markdown={item.content}
+          className="text-[#d6d6d6]"
+          contentClassName="whitespace-pre-wrap text-[21px] font-semibold leading-9"
+          componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
+        />
+      );
+    }
+
+    if (item.kind === 'status_summary') {
+      const tone =
+        item.status === 'error'
+          ? 'text-[#f85149]'
+          : item.status === 'warning'
+            ? 'text-[#c9a46a]'
+            : item.status === 'success'
+              ? 'text-[#56d364]'
+              : 'text-[#8e8e93]';
+      return (
+        <div key={item.id} className={`text-[19px] font-semibold leading-8 ${tone}`}>
+          {item.text}
+        </div>
+      );
+    }
+
+    if (item.kind === 'patch_card') {
+      const isPending = item.status === 'pending';
+      const isRemovalHeavy = item.removed > item.added;
+      return (
+        <div key={item.id} className="overflow-hidden rounded-[20px] border border-[#303030] bg-[#141414] shadow-[0_12px_36px_rgba(0,0,0,0.18)]">
+          <div className="flex items-center gap-2 border-b border-[#282828] px-4 py-3">
+            <FileCode2 size={15} className="shrink-0 text-[#7dd3fc]" />
+            <button
+              type="button"
+              onClick={() => onOpenDiffFile?.(item.filePath)}
+              className="min-w-0 truncate text-left text-[18px] font-semibold leading-6 text-[#bfbfbf] hover:text-[#e6e6e6]"
+              title={`Open ${item.filePath}`}
+            >
+              {item.title}
+            </button>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5 text-[18px] font-semibold">
+              {item.added > 0 ? <span className="text-[#2fbf71]">+{item.added}</span> : null}
+              {item.removed > 0 ? <span className="text-[#ff5c8a]">-{item.removed}</span> : null}
+            </div>
+          </div>
+          {item.explanation ? <div className="px-4 py-2 text-[12px] leading-5 text-[#8e8e93]">{item.explanation}</div> : null}
+          <div className={`max-h-36 overflow-hidden border-l-4 ${isRemovalHeavy ? 'border-[#b7425a]' : 'border-[#2f9f61]'} bg-[#101010] py-2 font-mono text-[15px] leading-6`}>
+            {renderDiff(item.diff)}
+          </div>
+          <div className="flex items-center justify-between gap-2 border-t border-[#282828] px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-[#777]">
+            <span>
+              {item.hunks} hunk{item.hunks === 1 ? '' : 's'} · {item.status}
+            </span>
+            {isPending && executionPolicy !== 'auto' ? (
+              <span className="flex items-center gap-2">
+                <button type="button" onClick={() => onRejectDiff(item.diffId)} className="rounded border border-[#3a2a2f] px-2 py-1 text-[#ff7b8a] hover:bg-[#2d1517]">
+                  Reject
+                </button>
+                <button type="button" onClick={() => onAcceptDiff(item.diffId)} className="rounded bg-[#238636] px-2 py-1 text-white hover:bg-[#2ea043]">
+                  Accept
+                </button>
+              </span>
+            ) : (
+              <span className={executionPolicyMeta.accentClassName}>{item.status === 'applied' ? 'Applied' : executionPolicyMeta.label}</span>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (item.kind === 'file_group') {
+      return (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => item.files[0] && onOpenDiffFile?.(item.files[0])}
+          className="inline-flex items-center gap-2 rounded-lg px-1 text-[19px] font-semibold leading-8 text-[#8e8e93] hover:text-[#d6d6d6]"
+          title={item.files.join('\n')}
+        >
+          <ChevronRight size={18} />
+          {item.count} Files
+        </button>
+      );
+    }
+
+    if (item.kind === 'review_gate') {
+      return (
+        <div key={item.id} className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => pendingDiffs[0] && onOpenDiffFile?.(pendingDiffs[0].filePath)}
+            className="rounded-lg bg-[#7a7a7a] px-4 py-2 text-[18px] font-semibold leading-6 text-white hover:bg-[#8b8b8b]"
+          >
+            Review
+          </button>
+        </div>
+      );
+    }
+
+    if (item.kind === 'validation_summary') {
+      const tone = item.status === 'passed' ? 'text-[#56d364]' : item.status === 'failed' ? 'text-[#ff7b8a]' : 'text-[#c9a46a]';
+      return (
+        <div key={item.id} className="rounded-lg border border-[#303030] bg-[#131313] px-3 py-2">
+          <div className={`text-[15px] font-semibold leading-6 ${tone}`}>
+            {item.status} · {item.command}
+          </div>
+          {item.output ? <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#8e8e93]">{item.output}</pre> : null}
+        </div>
+      );
+    }
+
+    return (
+      <div key={item.id} className="rounded-lg border border-[#4a242a] bg-[#1f1114] px-3 py-2 text-[13px] leading-5 text-[#ff9aa8]">
+        {item.text}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full flex-col border-l border-[#30363d] bg-[#0d1117] text-xs font-mono text-[#e6edf3]">
       <div className="flex flex-wrap items-center gap-2 border-b border-[#30363d] px-3 py-2">
@@ -525,7 +520,8 @@ export function AgentPanel({
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="space-y-2 border-b border-[#242424] px-2 py-2">
         <SessionListSection
           sessions={sessions}
           activeSessionId={session?.id ?? null}
@@ -534,144 +530,29 @@ export function AgentPanel({
           onRenameSession={onRenameSession}
           onDeleteSession={onDeleteSession}
         />
-        {runFeedEntries.length > 0 ? (
-          <CollapsibleSection
-            title="Live run"
-            defaultOpen
-            compact
-            rightSlot={
-              <span className="text-[9px] text-[#6d6d6d]">
-                {contractSummary || runFeedEntries.length}
-              </span>
-            }
-          >
-            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-1.5">
-              {runFeedEntries.map((entry) => (
-                <div key={entry.id} className="rounded border border-[#242a31] bg-[#0f1114] px-2 py-1.5">
-                  <div className="flex min-w-0 items-start gap-2">
-                    <span className="mt-0.5 shrink-0">{feedIcon(entry.kind, entry.status)}</span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-[11px] leading-5 text-[#c9d1d9]">{entry.title}</span>
-                        {entry.status ? (
-                          <span className={`ml-auto shrink-0 text-[9px] uppercase tracking-wider ${statusClass(entry.status)}`}>
-                            {entry.status}
-                          </span>
-                        ) : null}
-                      </div>
-                      {entry.filePath ? <button type="button" onClick={() => onOpenDiffFile?.(entry.filePath!)} className="mt-0.5 truncate text-[10px] text-[#58a6ff] hover:underline">{entry.filePath}</button> : null}
-                      {entry.added != null || entry.removed != null ? (
-                        <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px]">
-                          <span className="rounded border border-[#30363d] px-1.5 py-0.5"><span className="text-[#3fb950]">+{entry.added ?? 0}</span> <span className="text-[#f85149]">-{entry.removed ?? 0}</span></span>
-                          <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[#8b949e]">{entry.hunks ?? 1} hunk{entry.hunks === 1 ? '' : 's'}</span>
-                        </div>
-                      ) : null}
-                      {entry.detail ? <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-[10px] leading-4 text-[#8b949e]">{entry.detail}</div> : null}
-                      {entry.diff ? <div className="mt-1 max-h-28 overflow-auto border-t border-[#1b1f24] pt-1 text-[9px] leading-4">{renderDiff(entry.diff)}</div> : null}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CollapsibleSection>
-        ) : null}
-        {toolActivity.entries.length > 0 ? (
-          <CollapsibleSection
-            title={toolActivity.summary}
-            defaultOpen={false}
-            compact
-            rightSlot={<span className="text-[9px] text-[#6d6d6d]">{toolActivity.entries.length}</span>}
-          >
-            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-1.5">
-              {toolActivity.entries.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="flex items-start gap-2 rounded px-1.5 py-1 text-[11px] leading-5 text-[#c9d1d9] hover:bg-[#161b22]"
-                >
-                  <span
-                    className={`mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full ${
-                      entry.kind === 'file' ? 'bg-[#58a6ff]' : entry.kind === 'search' ? 'bg-[#f0883e]' : 'bg-[#8b949e]'
-                    }`}
-                    aria-hidden="true"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate">{entry.label}</div>
-                    {entry.detail ? <div className="mt-0.5 truncate text-[10px] text-[#6e7681]">{entry.detail}</div> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CollapsibleSection>
-        ) : null}
         <PlanClarificationPanel questions={session?.clarifyingQuestions ?? []} disabled={isRunning} onSubmitAnswers={onSubmitPrompt} />
-        <div className="rounded border border-[#30363d] bg-[#11182766] px-2 py-1.5 text-[10px] text-[#8b949e]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="uppercase tracking-wider text-[#6e7681]">State</span>
-            <span className="text-[#c9d1d9]">{modeContract(agentMode)}</span>
-          </div>
-          <div className="mt-1 flex items-center justify-between gap-2">
-            <span className="uppercase tracking-wider text-[#6e7681]">Phase</span>
-            <span className={session?.runtimeStatus === 'needs_review' ? 'text-[#f0883e]' : session?.runtimeStatus === 'verified' ? 'text-[#3fb950]' : 'text-[#58a6ff]'}>
+          <div className="flex items-center justify-between gap-3 px-1 text-[9px] uppercase tracking-[0.18em] text-[#6e7681]">
+            <span className="truncate">{modeContract(agentMode)}</span>
+            <span
+              className={
+                session?.runtimeStatus === 'needs_review'
+                  ? 'shrink-0 text-[#f0883e]'
+                  : session?.runtimeStatus === 'verified'
+                    ? 'shrink-0 text-[#3fb950]'
+                    : 'shrink-0 text-[#58a6ff]'
+              }
+            >
               {formatPhaseLabel(session?.runtimePhase)}
             </span>
           </div>
         </div>
-        {(session?.todos ?? []).length > 0 && (
-          <CollapsibleSection title="Todos" defaultOpen={false} compact rightSlot={<span className="text-[9px] text-[#6d6d6d]">{session?.todos.filter((todo) => !todo.done).length ?? 0}</span>}>
-            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-2">
-              {(session?.todos ?? []).map((todo) => (
-                <div key={todo.id} className="flex items-start gap-2 text-[10px] text-[#c9d1d9]">
-                  <span className={todo.done ? 'text-[#3fb950]' : 'text-[#8b949e]'}>{todo.done ? 'done' : 'todo'}</span>
-                  <span className={todo.done ? 'text-[#6e7681] line-through' : ''}>{todo.text}</span>
-                </div>
-              ))}
-            </div>
-          </CollapsibleSection>
-        )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto rounded border border-[#2a2a2a] bg-[#111111] p-2">
-          {chatEntries.length === 0 ? (
-            <p className="mt-6 text-center text-[#6e7681]">Describe a task to get started</p>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+          {agentTimeline.length === 0 ? (
+            <p className="mt-6 text-center text-[13px] text-[#6e7681]">Describe a task to get started</p>
           ) : (
-            <div className="space-y-2">
-              {chatEntries.map(({ key, message }) => (
-                <div key={key} className={`rounded border px-2 py-1.5 ${message.role === 'user' ? 'border-[#1f6feb55] bg-[#1f6feb1f] text-[#e6edf3]' : message.role === 'assistant' ? 'border-[#30363d] bg-[#161b22] text-[#e6edf3]' : message.role === 'reasoning' ? 'border-[#30363d33] bg-[#0d1117] text-[#6e7681] italic' : 'border-[#30363d] bg-[#151515] text-[#8b949e]'}`}>
-                  <div className="mb-1 flex items-center gap-1 text-[9px] uppercase tracking-widest text-[#6e7681]">
-                    {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : message.role === 'reasoning' ? 'Progress' : message.role}
-                  </div>
-                  <MarkdownRenderer
-                    markdown={renderMessageText(message)}
-                    className="text-inherit"
-                    contentClassName="text-[11px] leading-5"
-                    componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
-                  />
-                  {message.role === 'user' ? (
-                    <div className="mt-1.5 flex items-center gap-1 border-t border-[#1f6feb33] pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void handleCopyPrompt(message)}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#1f6feb22] hover:text-[#c9d1d9]"
-                        title="Copy prompt"
-                        aria-label="Copy prompt"
-                      >
-                        {copiedMessageId === message.id ? <Check size={11} /> : <Copy size={11} />}
-                        {copiedMessageId === message.id ? 'Copied' : 'Copy'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onEditPrompt(message.id)}
-                        disabled={isRunning}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e] hover:bg-[#1f6feb22] hover:text-[#c9d1d9] disabled:cursor-not-allowed disabled:opacity-40"
-                        title="Edit prompt and rewind context"
-                        aria-label="Edit prompt and rewind context"
-                      >
-                        <Edit3 size={11} />
-                        Edit
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+            <div className="space-y-5">
+              {agentTimeline.map(renderTimelineItem)}
               <PlanLink
                 filePath={session?.planMarkdown?.filePath}
                 disabled={isRunning}
@@ -680,8 +561,8 @@ export function AgentPanel({
                 onRun={handleBuildFromPlan}
               />
               {isRunning && (
-                <div className="flex items-center gap-2 text-[10px] text-[#8b949e]">
-                  <Loader2 size={12} className="animate-spin" />
+                <div className="flex items-center gap-2 text-[19px] font-semibold leading-8 text-[#8e8e93]">
+                  <Loader2 size={18} className="animate-spin" />
                   <span>{getWorkingLabel(agentMode)}</span>
                 </div>
               )}
@@ -689,84 +570,22 @@ export function AgentPanel({
           )}
           <div ref={chatEndRef} />
         </div>
-
-        {visibleDiffs.length > 0 && (
-          <CollapsibleSection title="Code changes" defaultOpen compact rightSlot={<span className="text-[9px] text-[#6d6d6d]">{visibleDiffs.length}</span>}>
-            <div className="space-y-2 rounded border border-[#2a2a2a] bg-[#111111] p-2">
-              {visibleDiffs.map((diff) => {
-                const lineCounts = countDiffLines(diff.unifiedDiff, 'hunks' in diff ? diff.hunks : undefined);
-                const hunkCount = 'hunks' in diff && diff.hunks?.length ? diff.hunks.length : 1;
-                return (
-                <div key={diff.diffId} className="rounded border border-[#30363d] bg-[#0f1114]">
-                  <div className="flex items-center gap-2 border-b border-[#1f1f1f] px-2 py-1">
-                    <button
-                      type="button"
-                      onClick={() => onOpenDiffFile?.(diff.filePath)}
-                      className="truncate text-[10px] text-[#58a6ff] underline-offset-2 hover:underline"
-                      title={`Open ${diff.filePath}`}
-                    >
-                      {diff.filePath}
-                    </button>
-                    {diff.kind === 'pending' ? (
-                      <>
-                        <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[9px]">
-                          <span className="text-[#3fb950]">+{lineCounts.added}</span>{' '}
-                          <span className="text-[#f85149]">-{lineCounts.removed}</span>
-                        </span>
-                        <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[#8b949e]">
-                          {hunkCount} patch{hunkCount === 1 ? '' : 'es'}
-                        </span>
-                      </>
-                    ) : null}
-                    <span className={`ml-auto text-[9px] uppercase tracking-wider ${executionPolicyMeta.accentClassName}`}>
-                      {diff.kind === 'applied' ? 'applied' : executionPolicy === 'auto' ? 'auto mode enabled' : 'confirm mode required'}
-                    </span>
-                  </div>
-                  {diff.explanation && <p className="px-2 pt-2 text-[10px] leading-4 text-[#8b949e]">{diff.explanation}</p>}
-                  <div className="max-h-72 overflow-auto border-t border-[#1b1f24] bg-[#0d1117] py-2 text-[9px] leading-4">
-                    {renderDiff(diff.unifiedDiff ?? `${diff.oldContent}\n---\n${diff.newContent}`)}
-                  </div>
-                  <div className="flex justify-end gap-2 border-t border-[#1f1f1f] px-2 py-1.5">
-                    {diff.kind === 'applied' || executionPolicy === 'auto' ? (
-                      <span className={`text-[9px] uppercase tracking-wider ${executionPolicyMeta.accentClassName}`}>Applied</span>
-                    ) : (
-                      <>
-                        <button type="button" onClick={() => onRejectDiff(diff.diffId)} className="rounded border border-[#30363d] px-2 py-1 text-[10px] text-[#f85149] hover:bg-[#2d1517]">Reject</button>
-                        <button type="button" onClick={() => onAcceptDiff(diff.diffId)} className="rounded bg-[#238636] px-2 py-1 text-[10px] text-white hover:bg-[#2ea043]">Accept</button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                );
-              })}
-            </div>
-          </CollapsibleSection>
-        )}
-
-        {visibleValidationResults.length > 0 && (
-          <CollapsibleSection title="Validation" defaultOpen={false} compact rightSlot={<span className="text-[9px] text-[#6d6d6d]">{visibleValidationResults.length}</span>}>
-            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-2">
-              {visibleValidationResults.map((result) => (
-                <div key={result.id} className="rounded border border-[#1f1f1f] bg-[#0f1114] px-2 py-1">
-                  <div className="flex items-center gap-2 text-[10px]">
-                    <span className={result.status === 'passed' ? 'text-[#3fb950]' : result.status === 'failed' ? 'text-[#f85149]' : 'text-[#f0883e]'}>{result.status}</span>
-                    <span className="truncate text-[#c9d1d9]">{result.command}</span>
-                  </div>
-                  {result.output && <pre className="mt-1 max-h-24 overflow-auto text-[9px] leading-4 text-[#8b949e]">{result.output}</pre>}
-                </div>
-              ))}
-            </div>
-          </CollapsibleSection>
-        )}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-shrink-0 border-t border-[#30363d] p-2">
-        <div className="flex items-end gap-2">
-          <FileMentionInput value={prompt} mentions={promptMentions} onChange={(nextValue, nextMentions) => { setPrompt(nextValue); setPromptMentions(nextMentions); }} onSubmit={(nextValue, nextMentions) => { const trimmed = nextValue.trim(); if (!trimmed || isRunning) return; onSubmitPrompt(trimmed, nextMentions); setPrompt(''); setPromptMentions([]); }} mentionIndex={effectiveIndex} indexStatus={indexStatus} indexError={indexError} openFiles={openFiles} recentFiles={recentFiles} currentEditorFilePath={currentEditorFilePath} disabled={isRunning} placeholder="Describe a task..." />
-          {isRunning ? <button type="button" onClick={onCancelRun} className="rounded bg-[#b91c1c] px-2 py-1 text-[10px] text-white">Stop</button> : <button type="submit" disabled={!prompt.trim()} className="rounded bg-[#1f6feb] px-2 py-1 text-[10px] text-white disabled:opacity-40"><Zap size={10} /></button>}
-        </div>
-        <div className="mt-1 flex items-center justify-between gap-2 px-0.5">
-          <div className="flex items-center gap-3 text-[10px] whitespace-nowrap">
+      <form onSubmit={handleSubmit} className="flex-shrink-0 border-t border-[#242424] bg-[#0d1117] p-2">
+        <div className="rounded-[24px] border border-[#343434] bg-[#1b1b1d] px-3 py-3 shadow-[0_-12px_38px_rgba(0,0,0,0.18)]">
+          <FileMentionInput value={prompt} mentions={promptMentions} onChange={(nextValue, nextMentions) => { setPrompt(nextValue); setPromptMentions(nextMentions); }} onSubmit={(nextValue, nextMentions) => { const trimmed = nextValue.trim(); if (!trimmed || isRunning) return; onSubmitPrompt(trimmed, nextMentions); setPrompt(''); setPromptMentions([]); }} mentionIndex={effectiveIndex} indexStatus={indexStatus} indexError={indexError} openFiles={openFiles} recentFiles={recentFiles} currentEditorFilePath={currentEditorFilePath} disabled={isRunning} placeholder="Plan, Build, / for skills, @ for context" />
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-[10px] whitespace-nowrap">
+              <div className="inline-flex h-8 items-center gap-1 rounded-full bg-[#2a2a2d] px-3 text-[16px] font-semibold text-[#d7d7d7]">
+                <InfinityIcon size={17} />
+                <ChevronRight size={13} className="rotate-90 text-[#8e8e93]" />
+              </div>
+              <ExecutionPolicySelector policy={executionPolicy} disabled={isRunning} onChange={onExecutionPolicyChange} />
+              <AgentModeSelector mode={agentMode} disabled={isRunning} onChange={onAgentModeChange} />
+            </div>
+            <TokenUsageSpinbar />
+            <div className="flex items-center gap-2 whitespace-nowrap">
             <button
               type="button"
               onClick={onGenerateDiagram}
@@ -786,11 +605,32 @@ export function AgentPanel({
             >
               <Sparkles size={15} />
             </button>
-          </div>
-          <TokenUsageSpinbar />
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <ExecutionPolicySelector policy={executionPolicy} disabled={isRunning} onChange={onExecutionPolicyChange} />
-            <AgentModeSelector mode={agentMode} disabled={isRunning} onChange={onAgentModeChange} />
+              <button
+                type="button"
+                title="Attach context"
+                aria-label="Attach context"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#b7b7bb] hover:bg-[#2a2a2d] hover:text-[#f0f0f0]"
+              >
+                <Paperclip size={17} />
+              </button>
+              <button
+                type="button"
+                title="Voice input"
+                aria-label="Voice input"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#d6d6d6] text-[#161616] hover:bg-white"
+              >
+                <Mic size={17} />
+              </button>
+              {isRunning ? (
+                <button type="button" onClick={onCancelRun} className="rounded-full bg-[#b91c1c] px-3 py-1.5 text-[11px] font-semibold text-white">
+                  Stop
+                </button>
+              ) : (
+                <button type="submit" disabled={!prompt.trim()} className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#2f81f7] text-white disabled:opacity-40" aria-label="Submit prompt">
+                  <Zap size={14} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </form>

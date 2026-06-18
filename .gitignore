@@ -26,6 +26,7 @@ tests/visual/__snapshots__/*.diff.png
 
 docs/superpowers/
 docs/plan/
+docs/landing/
 
 .claude
 .superpowers

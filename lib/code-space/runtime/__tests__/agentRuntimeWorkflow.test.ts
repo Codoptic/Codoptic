@@ -130,6 +130,7 @@ describe('AgentRuntime workflow contracts', () => {
         events.push(event);
       },
     );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     const diffIndex = events.findIndex((event) => event.type === 'diff_confirmation_required');
     const validationIndex = events.findIndex((event) => event.type === 'validation_result');
@@ -139,7 +140,10 @@ describe('AgentRuntime workflow contracts', () => {
     expect(doneIndex).toBeGreaterThan(validationIndex);
     expect(events.some((event) => event.type === 'structured_event' && event.event.type === 'plan.updated' && (event.event.payload as { phase?: string }).phase === 'diff_review_emitted')).toBe(true);
     const verdicts = events.filter((event) => event.type === 'supervisor_verdict');
-    expect(verdicts.some((event) => event.status === 'verified' && event.blockers.length === 0)).toBe(true);
+    expect(
+      verdicts.some((event) => event.status === 'verified' && event.blockers.length === 0),
+      JSON.stringify(verdicts),
+    ).toBe(true);
     expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toContain('answer = 2');
   });
 
