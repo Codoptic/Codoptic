@@ -98,6 +98,7 @@ import { useMentionIndex } from '@/lib/code-space/mentions/useMentionIndex';
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
 import { extractBuildPlanPath, type CodeSpacePromptOptions } from '@/lib/code-space/planBuild';
 import { buildAgentRuntimeHistory } from './agentRuntimeHistory';
+import { appendPatchHistory, appendRunFeedEvent } from './agentRunFeed';
 
 interface FilePayload {
   path: string;
@@ -299,6 +300,8 @@ function createSession(projectId: string | null, title = 'New coding session', m
     toolBudget: 50,
     toolCallCount: 0,
     filesChanged: [],
+    runFeed: [],
+    patchHistory: [],
     agentChangesets: [],
   };
 }
@@ -815,6 +818,9 @@ export function CodeSpaceWorkspace() {
       todos: [],
       verificationResults: [],
       filesChanged: [],
+      runFeed: [],
+      patchHistory: [],
+      coverageLedger: undefined,
       agentChangesets: [],
       planMarkdown: undefined,
       status: 'idle',
@@ -1880,6 +1886,9 @@ export function CodeSpaceWorkspace() {
       messages: [...session.messages, userMessage],
       toolCallCount: 0,
       clarifyingQuestions: [],
+      runFeed: [],
+      patchHistory: [],
+      coverageLedger: undefined,
       planMarkdown:
         buildPlanPath && session.planMarkdown?.filePath === buildPlanPath
           ? { ...session.planMarkdown, buildStatus: 'running' }
@@ -2024,6 +2033,16 @@ export function CodeSpaceWorkspace() {
       }
     };
 
+    const recordRunFeedEvent = (event: AgentSSEEvent) => {
+      patchSession(sessionWithPrompt.id, (current) => ({
+        ...current,
+        runFeed: appendRunFeedEvent(current.runFeed ?? [], event),
+        patchHistory: appendPatchHistory(current.patchHistory ?? [], event),
+        coverageLedger: event.type === 'coverage_updated' ? event.contract : current.coverageLedger,
+        updatedAt: Date.now(),
+      }));
+    };
+
     try {
       const response = await fetch('/api/code-space/agent', {
         method: 'POST',
@@ -2079,6 +2098,7 @@ export function CodeSpaceWorkspace() {
           if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            recordRunFeedEvent(event);
             if (event.type === 'diff_proposed') {
               const diff = buildPendingDiffFromEvent({
                 diffId: event.diffId,
@@ -2381,6 +2401,7 @@ export function CodeSpaceWorkspace() {
           if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            recordRunFeedEvent(event);
             if (event.type === 'diff_proposed') {
               const diff = buildPendingDiffFromEvent({
                 diffId: event.diffId,
@@ -2765,6 +2786,15 @@ export function CodeSpaceWorkspace() {
       }
       patchSession(gate.sessionId, (current) => ({ ...current, status: 'blocked', updatedAt: Date.now() }));
     };
+    const recordValidationFeedEvent = (event: AgentSSEEvent) => {
+      patchSession(gate.sessionId, (current) => ({
+        ...current,
+        runFeed: appendRunFeedEvent(current.runFeed ?? [], event),
+        patchHistory: appendPatchHistory(current.patchHistory ?? [], event),
+        coverageLedger: event.type === 'coverage_updated' ? event.contract : current.coverageLedger,
+        updatedAt: Date.now(),
+      }));
+    };
     try {
       const response = await fetch('/api/code-space/runs/validate', {
         method: 'POST',
@@ -2802,6 +2832,7 @@ export function CodeSpaceWorkspace() {
           if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            recordValidationFeedEvent(event);
             if (event.type === 'validation_result') {
               patchSession(gate.sessionId, (current) => ({
                 ...current,
@@ -2885,6 +2916,7 @@ export function CodeSpaceWorkspace() {
           if (!isCurrentRun()) continue;
           try {
             const event: AgentSSEEvent = JSON.parse(line.slice(6));
+            recordValidationFeedEvent(event);
             if (event.type === 'validation_result') {
               patchSession(gate.sessionId, (current) => ({
                 ...current,

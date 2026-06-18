@@ -7,9 +7,17 @@ import { AgentRuntime, runtimeSourceFingerprintForTests } from '../agentRuntime'
 import { PlanningEngine, REQUIRED_PLAN_SECTIONS, sanitizePlanMarkdown } from '../planningEngine';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 
-vi.mock('@/lib/agent/providers', () => ({
-  chatTurnWithTools: vi.fn(),
-}));
+vi.mock('@/lib/agent/providers', () => {
+  const chatTurnWithTools = vi.fn();
+  return {
+    chatTurnWithTools,
+    chatTurnWithToolsStream: async function* (...args: unknown[]) {
+      const turn = await chatTurnWithTools(...args);
+      if (turn.text) yield { type: 'text_delta', delta: turn.text };
+      yield { type: 'final', turn };
+    },
+  };
+});
 
 const mockedTurn = vi.mocked(chatTurnWithTools);
 
@@ -23,9 +31,14 @@ let tmpDir: string | null = null;
 
 beforeEach(() => {
   mockedTurn.mockReset();
+  mockedTurn.mockClear();
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_BASE_URL;
 });
 
 afterEach(async () => {
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_BASE_URL;
   if (tmpDir) {
     await rm(tmpDir, { recursive: true, force: true });
     tmpDir = null;
@@ -126,7 +139,7 @@ describe('AgentRuntime workflow contracts', () => {
     expect(doneIndex).toBeGreaterThan(validationIndex);
     expect(events.some((event) => event.type === 'structured_event' && event.event.type === 'plan.updated' && (event.event.payload as { phase?: string }).phase === 'diff_review_emitted')).toBe(true);
     const verdicts = events.filter((event) => event.type === 'supervisor_verdict');
-    expect(verdicts).toContainEqual({ type: 'supervisor_verdict', status: 'verified', blockers: [] });
+    expect(verdicts.some((event) => event.status === 'verified' && event.blockers.length === 0)).toBe(true);
     expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toContain('answer = 2');
   });
 

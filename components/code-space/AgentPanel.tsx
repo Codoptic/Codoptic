@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bot, Check, Copy, Edit3, ExternalLink, Layers3, Loader2, Settings, Share2, Sparkles, Zap } from 'lucide-react';
+import { Activity, Bot, Check, CheckCircle2, Copy, Edit3, ExternalLink, FileCode2, Layers3, Loader2, Settings, Share2, Sparkles, Terminal, Wrench, XCircle, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -297,6 +297,23 @@ function buildToolActivity(session: CodeSpaceAgentSession | null): {
   };
 }
 
+function feedIcon(kind: NonNullable<CodeSpaceAgentSession['runFeed']>[number]['kind'], status?: string) {
+  if (status === 'error') return <XCircle size={12} className="text-[#f85149]" />;
+  if (status === 'success') return <CheckCircle2 size={12} className="text-[#3fb950]" />;
+  if (kind === 'patch') return <FileCode2 size={12} className="text-[#56d364]" />;
+  if (kind === 'terminal' || kind === 'validation') return <Terminal size={12} className="text-[#d2a8ff]" />;
+  if (kind === 'tool') return <Wrench size={12} className="text-[#79c0ff]" />;
+  return <Activity size={12} className="text-[#8b949e]" />;
+}
+
+function statusClass(status?: string) {
+  if (status === 'success') return 'text-[#3fb950]';
+  if (status === 'error') return 'text-[#f85149]';
+  if (status === 'warning') return 'text-[#f0883e]';
+  if (status === 'pending') return 'text-[#d2a8ff]';
+  return 'text-[#8b949e]';
+}
+
 export function AgentPanel({
   session,
   sessions,
@@ -362,6 +379,13 @@ export function AgentPanel({
   }, [session?.verificationResults]);
   const visiblePlanBuildStatus = session?.planMarkdown?.buildStatus ?? 'available';
   const toolActivity = useMemo(() => buildToolActivity(session), [session]);
+  const runFeedEntries = useMemo(() => (session?.runFeed ?? []).slice(-80), [session?.runFeed]);
+  const contractSummary = useMemo(() => {
+    const contract = session?.coverageLedger;
+    if (!contract?.requirements.length) return '';
+    const covered = contract.requirements.filter((requirement) => requirement.status === 'covered').length;
+    return `${covered}/${contract.requirements.length} covered`;
+  }, [session?.coverageLedger]);
 
   // Motivation vs Logic: Cursor-style review keeps applied patches visible alongside pending ones, so the sidebar
   // shows the full change history instead of dropping a container as soon as a patch is accepted.
@@ -510,6 +534,47 @@ export function AgentPanel({
           onRenameSession={onRenameSession}
           onDeleteSession={onDeleteSession}
         />
+        {runFeedEntries.length > 0 ? (
+          <CollapsibleSection
+            title="Live run"
+            defaultOpen
+            compact
+            rightSlot={
+              <span className="text-[9px] text-[#6d6d6d]">
+                {contractSummary || runFeedEntries.length}
+              </span>
+            }
+          >
+            <div className="space-y-1 rounded border border-[#2a2a2a] bg-[#111111] p-1.5">
+              {runFeedEntries.map((entry) => (
+                <div key={entry.id} className="rounded border border-[#242a31] bg-[#0f1114] px-2 py-1.5">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className="mt-0.5 shrink-0">{feedIcon(entry.kind, entry.status)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[11px] leading-5 text-[#c9d1d9]">{entry.title}</span>
+                        {entry.status ? (
+                          <span className={`ml-auto shrink-0 text-[9px] uppercase tracking-wider ${statusClass(entry.status)}`}>
+                            {entry.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      {entry.filePath ? <button type="button" onClick={() => onOpenDiffFile?.(entry.filePath!)} className="mt-0.5 truncate text-[10px] text-[#58a6ff] hover:underline">{entry.filePath}</button> : null}
+                      {entry.added != null || entry.removed != null ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px]">
+                          <span className="rounded border border-[#30363d] px-1.5 py-0.5"><span className="text-[#3fb950]">+{entry.added ?? 0}</span> <span className="text-[#f85149]">-{entry.removed ?? 0}</span></span>
+                          <span className="rounded border border-[#30363d] px-1.5 py-0.5 text-[#8b949e]">{entry.hunks ?? 1} hunk{entry.hunks === 1 ? '' : 's'}</span>
+                        </div>
+                      ) : null}
+                      {entry.detail ? <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-[10px] leading-4 text-[#8b949e]">{entry.detail}</div> : null}
+                      {entry.diff ? <div className="mt-1 max-h-28 overflow-auto border-t border-[#1b1f24] pt-1 text-[9px] leading-4">{renderDiff(entry.diff)}</div> : null}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        ) : null}
         {toolActivity.entries.length > 0 ? (
           <CollapsibleSection
             title={toolActivity.summary}
@@ -572,7 +637,7 @@ export function AgentPanel({
               {chatEntries.map(({ key, message }) => (
                 <div key={key} className={`rounded border px-2 py-1.5 ${message.role === 'user' ? 'border-[#1f6feb55] bg-[#1f6feb1f] text-[#e6edf3]' : message.role === 'assistant' ? 'border-[#30363d] bg-[#161b22] text-[#e6edf3]' : message.role === 'reasoning' ? 'border-[#30363d33] bg-[#0d1117] text-[#6e7681] italic' : 'border-[#30363d] bg-[#151515] text-[#8b949e]'}`}>
                   <div className="mb-1 flex items-center gap-1 text-[9px] uppercase tracking-widest text-[#6e7681]">
-                    {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : message.role === 'reasoning' ? 'Thinking' : message.role}
+                    {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : message.role === 'reasoning' ? 'Progress' : message.role}
                   </div>
                   <MarkdownRenderer
                     markdown={renderMessageText(message)}

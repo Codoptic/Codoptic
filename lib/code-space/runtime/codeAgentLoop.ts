@@ -1,5 +1,5 @@
 import type { AssistantTurn, ChatMessage, ProviderSession, ToolSpec } from '@/lib/agent/providers';
-import { chatTurnWithTools } from '@/lib/agent/providers';
+import { chatTurnWithToolsStream } from '@/lib/agent/providers';
 import type { ContextGraphResult } from './contextGraphEngine';
 import { listRepositoryFiles } from './repoMap';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
@@ -114,11 +114,7 @@ export class CodeAgentLoop {
       opts.budget.recordTurn();
       let turn: AssistantTurn;
       try {
-        turn = await chatTurnWithTools(opts.session, this.messages, tools, {
-          signal: opts.signal,
-          toolChoice: 'auto',
-          maxTokens: opts.maxTokens,
-        });
+        turn = await this.streamTurn(ctx, opts, tools);
       } catch (err) {
         if (isReduciblePromptError(err) && this.contextPruneCount < 2) {
           this.contextPruneCount++;
@@ -131,11 +127,7 @@ export class CodeAgentLoop {
             this.stripSeedEvidence();
           }
           opts.budget.recordTurn();
-          turn = await chatTurnWithTools(opts.session, this.messages, tools, {
-            signal: opts.signal,
-            toolChoice: 'auto',
-            maxTokens: opts.maxTokens,
-          });
+          turn = await this.streamTurn(ctx, opts, tools);
         } else {
           throw err;
         }
@@ -155,6 +147,60 @@ export class CodeAgentLoop {
       const completion = await this.executeToolCalls(turn, ctx, opts);
       if (completion) return completion;
     }
+  }
+
+  private async streamTurn(ctx: CodeAgentContext, opts: CodeAgentLoopOptions, tools: ToolSpec[]): Promise<AssistantTurn> {
+    let finalTurn: AssistantTurn | null = null;
+    let streamedText = '';
+    for await (const event of chatTurnWithToolsStream(opts.session, this.messages, tools, {
+          signal: opts.signal,
+          toolChoice: 'auto',
+          maxTokens: opts.maxTokens,
+    })) {
+      if (event.type === 'status') {
+        await ctx.emit({
+          type: 'agent_status',
+          status: {
+            id: `status:${ctx.runId}:model:${Date.now()}`,
+            title: event.message,
+            phase: 'model_turn',
+            status: 'running',
+            createdAt: Date.now(),
+          },
+        });
+      } else if (event.type === 'text_delta') {
+        streamedText += event.delta;
+        const sentence = latestProgressSentence(streamedText);
+        if (sentence) {
+          await ctx.emit({
+            type: 'agent_status',
+            status: {
+              id: `status:${ctx.runId}:model:text`,
+              title: sentence,
+              phase: 'model_turn',
+              status: 'running',
+              createdAt: Date.now(),
+            },
+          });
+        }
+      } else if (event.type === 'tool_call_delta') {
+        await ctx.emit({
+          type: 'agent_status',
+          status: {
+            id: `status:${ctx.runId}:tool-draft:${event.toolCallId}`,
+            title: event.name ? `Preparing ${event.name}` : 'Preparing tool call',
+            detail: event.inputDelta,
+            phase: 'model_turn',
+            status: 'running',
+            createdAt: Date.now(),
+          },
+        });
+      } else if (event.type === 'final') {
+        finalTurn = event.turn;
+      }
+    }
+    if (!finalTurn) throw new Error('Provider stream ended without a final assistant turn.');
+    return finalTurn;
   }
 
   private async recordAssistantTurn(turn: AssistantTurn, ctx: CodeAgentContext): Promise<void> {
@@ -378,4 +424,13 @@ export function selectEvidenceFiles(context: ContextGraphResult, prompt: string,
     .sort((a, b) => b.weight - a.weight || a.originalIndex - b.originalIndex)
     .slice(0, Math.max(1, limit))
     .map((item) => item.file);
+}
+
+function latestProgressSentence(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  const sentences = normalized.match(/[^.!?]+[.!?]?/g) ?? [normalized];
+  const latest = sentences[sentences.length - 1]?.trim() ?? normalized;
+  const clipped = latest.length > 96 ? `${latest.slice(0, 95).trimEnd()}…` : latest;
+  return clipped;
 }

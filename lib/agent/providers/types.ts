@@ -50,6 +50,12 @@ export interface AssistantTurn {
   stopReason: ToolStopReason;
 }
 
+export type ChatWithToolsStreamEvent =
+  | { type: 'status'; message: string }
+  | { type: 'text_delta'; delta: string }
+  | { type: 'tool_call_delta'; toolCallId: string; name?: string; inputDelta?: string }
+  | { type: 'final'; turn: AssistantTurn };
+
 export interface ChatWithToolsParams {
   messages: ChatMessage[];
   model: string;
@@ -92,6 +98,8 @@ export interface Provider {
   chat(params: ChatParams): Promise<string>;
   /** Optional native multi-turn tool-calling. One round-trip → one assistant turn. */
   chatWithTools?(params: ChatWithToolsParams): Promise<AssistantTurn>;
+  /** Optional native streaming tool-calling. Must yield exactly one final turn event. */
+  chatWithToolsStream?(params: ChatWithToolsParams): AsyncIterable<ChatWithToolsStreamEvent>;
 }
 
 export type RetryListener = (notice: RetryNotice) => void;

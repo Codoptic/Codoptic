@@ -125,6 +125,8 @@ export async function readCodeSpaceSessions(): Promise<CodeSpaceAgentSession[]> 
       ...session,
       mode: session.mode === 'fresh-start' ? 'fresh-start' : normalizeCodeSpaceAgentMode(session.mode),
       clarifyingQuestions: session.clarifyingQuestions ?? [],
+      runFeed: session.runFeed ?? [],
+      patchHistory: session.patchHistory ?? [],
     }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }

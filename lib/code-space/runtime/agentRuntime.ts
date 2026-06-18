@@ -49,6 +49,11 @@ import {
   loadKnowledgeGraph,
   type KnowledgeGraphMetadata,
 } from './knowledgeGraph';
+import {
+  addValidationCoverage,
+  createImplementationContract,
+  summarizeContract,
+} from './implementationContract';
 
 export const ResumeValidationRequestSchema = z.object({
   runId: z.string(),
@@ -412,6 +417,7 @@ export class AgentRuntime {
     }
 
     await emitRuntime('plan.updated', { phase: 'proposing_patch' });
+    const buildPlanPath = extractBuildPlanPath(prompt);
     const store = getCodeSpaceStore();
     const ledger = new Map<string, LedgerEntry>();
     const persistCheckpoint = async (checkpoint: FileCheckpoint) => {
@@ -434,6 +440,8 @@ export class AgentRuntime {
       emit,
       emitRuntime,
       ledger,
+      patchHistory: [],
+      implementationContract: createImplementationContract(prompt, await readPlanMarkdown(root, buildPlanPath)),
       proposedFiles: new Set<string>(),
       proposedLedger: new Map(),
       editFailures: new Map(),
@@ -446,6 +454,18 @@ export class AgentRuntime {
       onCheckpoint: persistCheckpoint,
       signal,
     };
+    emit({ type: 'coverage_updated', contract: ctx.implementationContract! });
+    emit({
+      type: 'agent_status',
+      status: {
+        id: `status:${runId}:contract`,
+        title: 'Tracking implementation contract',
+        detail: summarizeContract(ctx.implementationContract),
+        phase: 'proposing_patch',
+        status: 'running',
+        createdAt: Date.now(),
+      },
+    });
 
     const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
@@ -685,7 +705,7 @@ export class AgentRuntime {
     await emitRuntime('integration.reviewed', { findings: coherence.findings });
 
     // Step 2: run validation progressively (syntax → typecheck → lint → test → e2e → build).
-    let validationRuns = await this.runAndEmitValidation(root, runId, progressiveOrder(validationCommands), signal, emit, emitRuntime);
+    let validationRuns = await this.runAndEmitValidation(root, runId, progressiveOrder(validationCommands), signal, emit, emitRuntime, ctx);
 
     // Step 3: generate + run focused test scripts via a test-writer subagent (in .agent/tests/<runId>/).
     const testScripts = await verifier.generateAndRunTestScripts(ctx, runId, prompt);
@@ -720,6 +740,7 @@ export class AgentRuntime {
       validationRuns,
       unresolvedEditFailures: formatUnresolvedEditFailures(ctx),
       subagentResults: testScripts.result ? [testScripts.result] : [],
+      implementationContract: ctx.implementationContract,
     });
     emit({ type: 'supervisor_verdict', status: verdict.status, blockers: verdict.blockers });
     await emitRuntime('supervisor.verdict', { status: verdict.status, blockers: verdict.blockers });
@@ -812,6 +833,8 @@ export class AgentRuntime {
       emit,
       emitRuntime,
       ledger: new Map<string, LedgerEntry>(),
+      patchHistory: [],
+      implementationContract: createImplementationContract(record.prompt, await readPlanMarkdown(root, extractBuildPlanPath(record.prompt))),
       proposedFiles: new Set<string>(),
       proposedLedger: new Map(),
       editFailures: new Map(),
@@ -824,6 +847,7 @@ export class AgentRuntime {
       onCheckpoint: persistCheckpoint,
       signal,
     };
+    emit({ type: 'coverage_updated', contract: ctx.implementationContract! });
 
     // Rebuild the ledger from the persisted snapshot, refreshing afterContent from disk so the
     // coherence/syntax review reflects exactly what is on disk right now.
@@ -884,10 +908,43 @@ export class AgentRuntime {
     signal: AbortSignal | undefined,
     emit: AgentRuntimeEmit,
     emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>,
+    ctx?: CodeAgentContext,
   ): Promise<ValidationRunResult[]> {
-    const validationRuns = await this.validation.runValidationCommands(root, runId, validationCommands, signal);
+    const validationRuns = await this.validation.runValidationCommands(root, runId, validationCommands, signal, {
+      onStart: async (command) => {
+        const display = [command.command, ...command.args].join(' ');
+        emit({
+          type: 'agent_status',
+          status: {
+            id: `status:${runId}:validation:${command.kind}`,
+            title: `Running ${command.kind}`,
+            detail: display,
+            phase: 'validating',
+            status: 'running',
+            createdAt: Date.now(),
+          },
+        });
+        await emitRuntime('validation.started', { command: display, kind: command.kind });
+      },
+      onChunk: async (chunk) => {
+        emit({ type: 'terminal_chunk', chunk: chunk.chunk, stream: chunk.stream, command: chunk.command });
+        await emitRuntime('terminal.output', { command: chunk.command, stream: chunk.stream, chunk: chunk.chunk });
+      },
+    });
     for (const result of validationRuns) {
-      emit({ type: 'validation_result', id: `validation:${runId}:${result.kind}`, command: result.command, status: result.status, output: result.output });
+      if (ctx) {
+        ctx.implementationContract = addValidationCoverage(ctx.implementationContract, result);
+        if (ctx.implementationContract) emit({ type: 'coverage_updated', contract: ctx.implementationContract });
+      }
+      emit({
+        type: 'validation_result',
+        id: `validation:${runId}:${result.kind}`,
+        command: result.command,
+        status: result.status,
+        output: result.output,
+        durationMs: result.durationMs,
+        artifactId: result.artifact?.artifactId,
+      });
       await emitRuntime(result.status === 'failed' ? 'validation.failed' : 'validation.completed', { command: result.command, status: result.status, artifact: result.artifact });
     }
     return validationRuns;
@@ -983,6 +1040,15 @@ function parseEnv(raw: string): Record<string, string> {
 
 function findOriginalPlanPrompt(messages: AgentRuntimeRequest['messages'], fallback: string): string {
   return messages.find((message) => message.role === 'user' && !message.content.startsWith('Plan clarification answers:'))?.content ?? fallback;
+}
+
+async function readPlanMarkdown(root: string, buildPlanPath?: string | null): Promise<string> {
+  if (!buildPlanPath) return '';
+  try {
+    return await fs.readFile(path.join(root, buildPlanPath), 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function chunkText(text: string): string[] {

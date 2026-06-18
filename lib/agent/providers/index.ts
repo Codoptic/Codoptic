@@ -21,6 +21,7 @@ import type {
   ToolCall,
   ToolResultMessage,
   ToolStopReason,
+  ChatWithToolsStreamEvent,
 } from './types';
 import { defaultIsRetryable, withRetry, type RetryError } from './retry';
 
@@ -193,6 +194,47 @@ export async function chatTurnWithTools(
   );
 }
 
+export async function* chatTurnWithToolsStream(
+  session: ProviderSession,
+  messages: ChatMessage[],
+  tools: ToolSpec[],
+  opts: {
+    signal?: AbortSignal;
+    onRetry?: RetryListener;
+    toolChoice?: 'auto' | 'none' | 'required';
+    maxTokens?: number;
+  } = {},
+): AsyncGenerator<ChatWithToolsStreamEvent> {
+  const provider = makeProvider(session.id, {
+    apiKey: session.apiKey,
+    endpoint: session.endpoint,
+    temperature: session.temperature,
+    maxTokens: session.maxTokens,
+  });
+  const params = {
+    model: session.model,
+    messages,
+    tools,
+    toolChoice: opts.toolChoice,
+    maxTokens: opts.maxTokens ?? session.maxTokens,
+    signal: opts.signal,
+  };
+
+  if (provider.chatWithToolsStream) {
+    try {
+      yield* provider.chatWithToolsStream(params);
+      return;
+    } catch {
+      yield { type: 'status', message: 'Streaming unavailable; falling back to a stable model turn.' };
+    }
+  }
+
+  yield { type: 'status', message: 'Waiting for model turn.' };
+  const turn = await chatTurnWithTools(session, messages, tools, opts);
+  if (turn.text) yield { type: 'text_delta', delta: turn.text };
+  yield { type: 'final', turn };
+}
+
 function cooldownKey(session: ProviderSession): string {
   return `${session.id}:${session.model}:${session.endpoint ?? 'default'}`;
 }
@@ -210,4 +252,5 @@ export type {
   ToolCall,
   ToolResultMessage,
   ToolStopReason,
+  ChatWithToolsStreamEvent,
 };

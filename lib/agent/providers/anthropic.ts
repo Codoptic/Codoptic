@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatParams,
   ChatWithToolsParams,
+  ChatWithToolsStreamEvent,
   Provider,
   ProviderConfig,
   ToolCall,
@@ -101,6 +102,68 @@ export class AnthropicProvider implements Provider {
     if (stopReason === 'tool_use' && toolCalls.length === 0) stopReason = 'end_turn';
     return { text, toolCalls, stopReason };
   }
+
+  async *chatWithToolsStream(params: ChatWithToolsParams): AsyncIterable<ChatWithToolsStreamEvent> {
+    const sys = params.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    const messages = toAnthropicMessages(params.messages.filter((m) => m.role !== 'system'));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = {
+      model: params.model,
+      max_tokens: resolveMaxTokens({ provider: 'anthropic', requested: params.maxTokens }),
+      messages,
+      ...(sys ? { system: sys } : {}),
+    };
+    if (params.tools.length) {
+      body.tools = params.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      }));
+      if (params.toolChoice === 'required') body.tool_choice = { type: 'any' };
+      else if (params.toolChoice === 'none') body.tool_choice = { type: 'none' };
+      else body.tool_choice = { type: 'auto' };
+    }
+
+    const stream = this.client.messages.stream(body, { signal: params.signal });
+    let text = '';
+    let stopReason: ToolStopReason = 'end_turn';
+    const toolParts = new Map<number, { id: string; name: string; inputJson: string }>();
+
+    for await (const event of stream) {
+      if (event.type === 'content_block_start') {
+        if (event.content_block.type === 'text' && event.content_block.text) {
+          text += event.content_block.text;
+          yield { type: 'text_delta', delta: event.content_block.text };
+        } else if (event.content_block.type === 'tool_use') {
+          toolParts.set(event.index, {
+            id: event.content_block.id,
+            name: event.content_block.name,
+            inputJson: '',
+          });
+          yield { type: 'tool_call_delta', toolCallId: event.content_block.id, name: event.content_block.name };
+        }
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'text_delta') {
+          text += event.delta.text;
+          yield { type: 'text_delta', delta: event.delta.text };
+        } else if (event.delta.type === 'input_json_delta') {
+          const current = toolParts.get(event.index);
+          if (current) {
+            current.inputJson += event.delta.partial_json;
+            yield { type: 'tool_call_delta', toolCallId: current.id, name: current.name, inputDelta: event.delta.partial_json };
+          }
+        }
+      } else if (event.type === 'message_delta') {
+        stopReason = mapAnthropicStop(event.delta.stop_reason);
+      }
+    }
+
+    const toolCalls: ToolCall[] = Array.from(toolParts.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, call]) => ({ id: call.id, name: call.name, input: parseAnthropicToolInput(call.inputJson) }));
+    if (toolCalls.length) stopReason = 'tool_use';
+    yield { type: 'final', turn: { text, toolCalls, stopReason } };
+  }
 }
 
 function mapAnthropicStop(reason: string | null): ToolStopReason {
@@ -146,4 +209,14 @@ function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] 
     out.push({ role: message.role as 'user' | 'assistant', content: message.content });
   }
   return out;
+}
+
+function parseAnthropicToolInput(value: string): Record<string, unknown> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }

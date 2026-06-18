@@ -1,6 +1,8 @@
 import type { CoherenceFinding } from './integrationVerifier';
 import type { ValidationRunResult } from './validationRunner';
 import type { SubagentResult } from './subagentRunner';
+import type { ImplementationContract } from '@/lib/code-space/core';
+import { contractBlockers } from './implementationContract';
 
 export interface SupervisorVerdict {
   status: 'verified' | 'needs_review';
@@ -14,6 +16,7 @@ export interface SupervisorInput {
   validationRuns: ValidationRunResult[];
   unresolvedEditFailures: string;
   subagentResults?: SubagentResult[];
+  implementationContract?: ImplementationContract;
 }
 
 /**
@@ -57,6 +60,8 @@ export class Supervisor {
     if (failedSubagents.length) {
       blockers.push(`Subagent(s) reported failure: ${failedSubagents.map((result) => result.role).join(', ')}.`);
     }
+
+    blockers.push(...contractBlockers(input.implementationContract));
 
     const status: SupervisorVerdict['status'] = blockers.length ? 'needs_review' : 'verified';
     return {

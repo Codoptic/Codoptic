@@ -11,9 +11,17 @@ import { PermissionManager } from '../permissionManager';
 import { TerminalRunner } from '../terminalRunner';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 
-vi.mock('@/lib/agent/providers', () => ({
-  chatTurnWithTools: vi.fn(),
-}));
+vi.mock('@/lib/agent/providers', () => {
+  const chatTurnWithTools = vi.fn();
+  return {
+    chatTurnWithTools,
+    chatTurnWithToolsStream: async function* (...args: unknown[]) {
+      const turn = await chatTurnWithTools(...args);
+      if (turn.text) yield { type: 'text_delta', delta: turn.text };
+      yield { type: 'final', turn };
+    },
+  };
+});
 
 const mockedTurn = vi.mocked(chatTurnWithTools);
 

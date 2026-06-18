@@ -2,12 +2,18 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { writeAgentArtifact, type AgentArtifact } from '@/lib/code-space/agent/artifacts';
 import { pathExists } from './repoMap';
-import { TerminalRunner, type TerminalRunResult } from './terminalRunner';
+import { TerminalRunner, type TerminalChunk, type TerminalRunResult } from './terminalRunner';
 import type { TerminalCommand } from './terminalPolicy';
 
 export interface ValidationRunResult extends TerminalRunResult {
   kind: TerminalCommand['kind'];
   artifact?: AgentArtifact;
+}
+
+export interface ValidationRunCallbacks {
+  onStart?: (command: TerminalCommand) => void | Promise<void>;
+  onChunk?: (chunk: TerminalChunk, command: TerminalCommand) => void | Promise<void>;
+  onResult?: (result: ValidationRunResult) => void | Promise<void>;
 }
 
 /**
@@ -72,7 +78,13 @@ export class ValidationRunner {
     return commands;
   }
 
-  async runValidationCommands(rootPath: string, runId: string, commands: TerminalCommand[], signal?: AbortSignal): Promise<ValidationRunResult[]> {
+  async runValidationCommands(
+    rootPath: string,
+    runId: string,
+    commands: TerminalCommand[],
+    signal?: AbortSignal,
+    callbacks: ValidationRunCallbacks = {},
+  ): Promise<ValidationRunResult[]> {
     if (!commands.length) {
       return [
         {
@@ -87,7 +99,13 @@ export class ValidationRunner {
 
     const results: ValidationRunResult[] = [];
     for (const command of commands) {
-      const result = await this.terminal.run(command, rootPath, signal);
+      await callbacks.onStart?.(command);
+      const result = await this.terminal.runStreaming(
+        command,
+        rootPath,
+        (chunk) => callbacks.onChunk?.(chunk, command),
+        signal,
+      );
       const artifact = await writeAgentArtifact({
         projectRoot: rootPath,
         runId,
@@ -95,7 +113,9 @@ export class ValidationRunner {
         content: result.output,
         summary: `${result.command}: ${result.status}`,
       });
-      results.push({ ...result, kind: command.kind, artifact, output: truncateVisibleOutput(result.output) });
+      const validationResult = { ...result, kind: command.kind, artifact, output: truncateVisibleOutput(result.output) };
+      results.push(validationResult);
+      await callbacks.onResult?.(validationResult);
       if (signal?.aborted) break;
     }
     return results;

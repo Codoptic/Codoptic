@@ -102,6 +102,8 @@ export class SubagentRunner {
       emit: this.parentCtx.emit,
       emitRuntime: this.parentCtx.emitRuntime,
       ledger: new Map<string, LedgerEntry>(),
+      patchHistory: [],
+      implementationContract: this.parentCtx.implementationContract,
       proposedFiles: new Set<string>(),
       proposedLedger: new Map(),
       editFailures: new Map(),
@@ -130,6 +132,10 @@ export class SubagentRunner {
     for (const [path, entry] of childCtx.proposedLedger) this.parentCtx.proposedLedger.set(path, entry);
     for (const [id, artifact] of childCtx.artifacts) this.parentCtx.artifacts.set(id, artifact);
     for (const checkpoint of childCtx.checkpoints) this.parentCtx.checkpoints.push(checkpoint);
+    if (childCtx.patchHistory?.length) {
+      this.parentCtx.patchHistory = [...(this.parentCtx.patchHistory ?? []), ...childCtx.patchHistory];
+    }
+    if (childCtx.implementationContract) this.parentCtx.implementationContract = childCtx.implementationContract;
 
     return { role, summary: result.summary, success: result.success !== false, toolCalls: budget.turnsUsed };
   }

@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type {
   AssistantTurn,
+  ChatWithToolsStreamEvent,
   ChatParams,
   ChatWithToolsParams,
   Provider,
@@ -107,6 +108,72 @@ export class OpenAIProvider implements Provider {
     );
     return parseOpenAIToolResponse(res);
   }
+
+  async *chatWithToolsStream(params: ChatWithToolsParams): AsyncIterable<ChatWithToolsStreamEvent> {
+    if (usesCompletionsEndpoint(params.model)) {
+      yield { type: 'status', message: 'Using stable Codex completion turn.' };
+      yield { type: 'final', turn: await this.chatWithTools(params) };
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const baseBody: any = {
+      model: params.model,
+      messages: buildOpenAIToolMessages(params.messages),
+      stream: true,
+    };
+    if (params.tools.length) {
+      baseBody.tools = buildOpenAIToolSpecs(params.tools);
+      baseBody.tool_choice =
+        params.toolChoice === 'required' ? 'required' : params.toolChoice === 'none' ? 'none' : 'auto';
+    }
+    const maxTokens = resolveMaxTokens({ provider: 'openai', requested: params.maxTokens });
+    const stream = await withMaxTokenKeyRetry(maxTokens, (key) =>
+      this.client.chat.completions.create({ ...baseBody, [key]: maxTokens }, { signal: params.signal }),
+    ) as unknown as AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>;
+
+    let text = '';
+    let stopReason: AssistantTurn['stopReason'] = 'end_turn';
+    const toolParts = new Map<number, { id: string; name: string; argumentsText: string }>();
+
+    for await (const chunk of stream) {
+      const choice = chunk.choices[0];
+      const delta = choice?.delta;
+      if (!delta) continue;
+      if (delta.content) {
+        text += delta.content;
+        yield { type: 'text_delta', delta: delta.content };
+      }
+      for (const call of delta.tool_calls ?? []) {
+        const index = call.index ?? 0;
+        const current = toolParts.get(index) ?? { id: call.id ?? `tool_${index}`, name: '', argumentsText: '' };
+        if (call.id) current.id = call.id;
+        if (call.function?.name) current.name = call.function.name;
+        if (call.function?.arguments) current.argumentsText += call.function.arguments;
+        toolParts.set(index, current);
+        yield {
+          type: 'tool_call_delta',
+          toolCallId: current.id,
+          name: current.name || undefined,
+          inputDelta: call.function?.arguments,
+        };
+      }
+      if (choice?.finish_reason === 'tool_calls') stopReason = 'tool_use';
+      else if (choice?.finish_reason === 'length') stopReason = 'max_tokens';
+      else if (choice?.finish_reason === 'content_filter') stopReason = 'refusal';
+    }
+
+    const toolCalls = Array.from(toolParts.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, call]) => ({
+        id: call.id,
+        name: call.name,
+        input: parseToolArguments(call.argumentsText),
+      }))
+      .filter((call) => call.name);
+    if (toolCalls.length) stopReason = 'tool_use';
+    yield { type: 'final', turn: { text, toolCalls, stopReason } };
+  }
 }
 
 function usesCompletionsEndpoint(model: string): boolean {
@@ -124,4 +191,14 @@ function toCompletionsPrompt(messages: ChatParams['messages'], jsonSchema?: Reco
     : '';
 
   return `${conversation}${schemaInstruction}\n\nASSISTANT:\n`;
+}
+
+function parseToolArguments(value: string): Record<string, unknown> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }

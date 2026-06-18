@@ -96,6 +96,77 @@ export interface CodeSpaceToolCall {
   updatedAt: number;
 }
 
+export type AgentRunFeedEntryKind =
+  | 'progress'
+  | 'tool'
+  | 'patch'
+  | 'terminal'
+  | 'validation'
+  | 'review'
+  | 'subagent'
+  | 'approval'
+  | 'error'
+  | 'done';
+
+export interface AgentRunFeedEntry {
+  id: string;
+  kind: AgentRunFeedEntryKind;
+  title: string;
+  detail?: string;
+  status?: 'running' | 'success' | 'error' | 'warning' | 'pending';
+  filePath?: string;
+  command?: string;
+  added?: number;
+  removed?: number;
+  hunks?: number;
+  diff?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export interface PatchHistoryEntry {
+  patchId: string;
+  batchId: string;
+  filePath: string;
+  mode: 'proposed' | 'applied' | 'repaired' | 'restored';
+  status: 'pending' | 'applied' | 'failed' | 'rejected';
+  added: number;
+  removed: number;
+  hunks: number;
+  diff: string;
+  explanation?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+export type CoverageEvidenceKind = 'patch' | 'validation' | 'review' | 'subagent' | 'supervisor' | 'blocker';
+
+export interface CoverageEvidence {
+  id: string;
+  kind: CoverageEvidenceKind;
+  summary: string;
+  filePath?: string;
+  command?: string;
+  status?: 'passed' | 'failed' | 'skipped' | 'applied' | 'pending';
+  createdAt: number;
+}
+
+export interface PlanRequirement {
+  id: string;
+  text: string;
+  source: 'original_intent' | 'plan';
+  status: 'pending' | 'covered' | 'blocked';
+  evidence: CoverageEvidence[];
+}
+
+export interface ImplementationContract {
+  id: string;
+  sourcePromptHash: string;
+  createdAt: number;
+  updatedAt: number;
+  requirements: PlanRequirement[];
+}
+
 export interface CodeSpaceMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool' | 'reasoning';
@@ -163,6 +234,9 @@ export interface CodeSpaceAgentSession {
   toolBudget: number;
   toolCallCount: number;
   filesChanged: string[];
+  runFeed?: AgentRunFeedEntry[];
+  patchHistory?: PatchHistoryEntry[];
+  coverageLedger?: ImplementationContract;
   agentChangesets: Array<{
     filePath: string;
     beforeContent: string;

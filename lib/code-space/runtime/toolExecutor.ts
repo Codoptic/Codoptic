@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AutonomyLevel } from '@/lib/code-space/domain';
 import type { CodeSpaceClarifyingQuestion } from '@/lib/code-space/core';
+import type { ImplementationContract, PatchHistoryEntry } from '@/lib/code-space/core';
 import type { ToolCall, ToolSpec } from '@/lib/agent/providers';
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import {
@@ -29,6 +30,7 @@ import { isRiskyTerminalCommand, type TerminalCommand } from './terminalPolicy';
 import { traceDependencyEdges } from './dependencyTrace';
 import { listRepositoryFiles, normalizeContextPath, safeReadTextFile } from './repoMap';
 import { hashContent } from './patchReview';
+import { addPatchCoverage } from './implementationContract';
 
 export interface LedgerEntry {
   beforeContent: string;
@@ -64,6 +66,10 @@ export interface CodeAgentContext {
   emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
   /** Original → latest content per touched path; powers the final cumulative diff. */
   ledger: Map<string, LedgerEntry>;
+  /** Immutable per-edit history for Cursor-like live patch cards. */
+  patchHistory?: PatchHistoryEntry[];
+  /** Requirement coverage ledger for build-from-plan and large implementation runs. */
+  implementationContract?: ImplementationContract;
   /** Paths proposed (but NOT written) under suggest_only autonomy — pending user accept/reject. */
   proposedFiles: Set<string>;
   /** Latest proposed before/after per path (suggest_only); used for final pre-completion validation. */
@@ -620,7 +626,15 @@ export class ToolExecutor {
 
   private async git(args: string[], ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const command: TerminalCommand = { kind: 'explore', command: 'git', args, cwd: ctx.root, reason: 'Read git state for the agent.', timeoutMs: 30_000 };
-    const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
+    const result = await ctx.terminal.runStreaming(
+      command,
+      ctx.root,
+      async (chunk) => {
+        await ctx.emit({ type: 'terminal_chunk', chunk: chunk.chunk, stream: chunk.stream, command: chunk.command });
+        await ctx.emitRuntime('terminal.output', { command: chunk.command, stream: chunk.stream, chunk: chunk.chunk });
+      },
+      ctx.signal,
+    );
     return { content: clip(result.output || '(no output)'), isError: result.status === 'failed' };
   }
 
@@ -798,10 +812,22 @@ export class ToolExecutor {
     const applied: string[] = [];
     for (const preview of grouped.previews) {
       const normalized = normalizeContextPath(preview.path);
+      const stats = diffStats(preview.unifiedDiff);
+      const patch = createPatchHistoryEntry(ctx, {
+        filePath: normalized,
+        mode: writeThisMode(applyToDisk, normalized),
+        status: applyToDisk || normalized.startsWith('.agent/tests/') ? 'applied' : 'pending',
+        diff: preview.unifiedDiff,
+        explanation: preview.explanation,
+        added: stats.added,
+        removed: stats.removed,
+        hunks: stats.hunks,
+      });
       // The verifier/test-writer may always write ephemeral test scripts under .agent/tests/, even
       // under suggest_only — they are throwaway artifacts, never user source files.
       const writeThisFile = applyToDisk || normalized.startsWith('.agent/tests/');
       if (!writeThisFile) {
+        await recordPatchHistory(ctx, patch);
         // suggest_only / approval_required → propose, do not write. Keep one cumulative proposal per
         // file: baseline against the true disk original (the first proposal's beforeContent), and
         // record the latest cumulative afterContent. The stable diffId lets the UI replace the prior
@@ -813,12 +839,17 @@ export class ToolExecutor {
         await ctx.emit({
           type: 'diff_proposed',
           diffId: `patch:${ctx.runId}:${normalized}`,
+          patchId: patch.patchId,
+          batchId: patch.batchId,
           filePath: normalized,
           oldContent: originalBefore,
           newContent: preview.afterContent,
           explanation: preview.explanation,
           unifiedDiff: cumulativeDiff,
           autoApplied: false,
+          added: stats.added,
+          removed: stats.removed,
+          hunks: stats.hunks,
         });
         ctx.proposedFiles.add(normalized);
         ctx.proposedLedger.set(normalized, { beforeContent: originalBefore, afterContent: preview.afterContent, existedBefore: originalExisted });
@@ -881,7 +912,21 @@ export class ToolExecutor {
       const original = existing ? existing.beforeContent : preview.beforeContent;
       ctx.ledger.set(normalized, { beforeContent: original, afterContent: preview.afterContent, deleted: false, existedBefore: existing ? existing.existedBefore : preview.beforeExists });
       applied.push(normalized);
-      await ctx.emit({ type: 'file_applied', filePath: normalized, beforeContent: original, afterContent: preview.afterContent, explanation: preview.explanation, unifiedDiff: preview.unifiedDiff, hash: hashContent(preview.afterContent) });
+      await recordPatchHistory(ctx, patch);
+      await ctx.emit({
+        type: 'file_applied',
+        filePath: normalized,
+        beforeContent: original,
+        afterContent: preview.afterContent,
+        explanation: preview.explanation,
+        unifiedDiff: preview.unifiedDiff,
+        hash: hashContent(preview.afterContent),
+        patchId: patch.patchId,
+        batchId: patch.batchId,
+        added: patch.added,
+        removed: patch.removed,
+        hunks: patch.hunks,
+      });
       await ctx.emitRuntime(existedBefore[normalized] ? 'file.updated' : 'file.created', { path: normalized });
     }
 
@@ -1029,6 +1074,57 @@ export async function createRunRevertCheckpoint(ctx: CodeAgentContext): Promise<
     reason: `Revert all Code-mode changes for ${ctx.runId}`,
     snapshots,
   });
+}
+
+function diffStats(diff: string): { added: number; removed: number; hunks: number } {
+  let added = 0;
+  let removed = 0;
+  let hunks = 0;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('@@')) hunks += 1;
+    else if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+  }
+  return { added, removed, hunks: Math.max(1, hunks) };
+}
+
+function createPatchHistoryEntry(
+  ctx: CodeAgentContext,
+  input: Omit<PatchHistoryEntry, 'patchId' | 'batchId' | 'createdAt'>,
+): PatchHistoryEntry {
+  const createdAt = Date.now();
+  const index = (ctx.patchHistory?.length ?? 0) + 1;
+  return {
+    ...input,
+    patchId: `patch:${ctx.runId}:${index}`,
+    batchId: `batch:${ctx.runId}:${index}`,
+    createdAt,
+  };
+}
+
+async function recordPatchHistory(ctx: CodeAgentContext, patch: PatchHistoryEntry): Promise<void> {
+  if (!ctx.patchHistory) ctx.patchHistory = [];
+  ctx.patchHistory.push(patch);
+  ctx.implementationContract = addPatchCoverage(ctx.implementationContract, patch);
+  await ctx.emit({ type: 'patch_history', patch });
+  if (ctx.implementationContract) {
+    await ctx.emit({ type: 'coverage_updated', contract: ctx.implementationContract });
+  }
+  await ctx.emitRuntime('patch.proposed', {
+    patchId: patch.patchId,
+    batchId: patch.batchId,
+    path: patch.filePath,
+    mode: patch.mode,
+    status: patch.status,
+    added: patch.added,
+    removed: patch.removed,
+    hunks: patch.hunks,
+  });
+}
+
+function writeThisMode(applyToDisk: boolean, filePath: string): PatchHistoryEntry['mode'] {
+  if (filePath.startsWith('.agent/tests/')) return 'repaired';
+  return applyToDisk ? 'applied' : 'proposed';
 }
 
 function matchesGlob(file: string, glob: string): boolean {
