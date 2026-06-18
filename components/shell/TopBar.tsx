@@ -5,13 +5,11 @@ import {
   Download,
   FileCode2,
   Maximize2,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   RotateCcw,
-  Sun,
 } from 'lucide-react';
 import logo from '@/public/logo.png';
 import { ModeToggle } from './ModeToggle';
@@ -39,16 +37,13 @@ export function TopBar({
   onToggleInspector,
 }: TopBarProps) {
   const mode = useDiagramStore((s) => s.mode);
-  const theme = useDiagramStore((s) => s.theme);
-  const setTheme = useDiagramStore((s) => s.setTheme);
-  const isLight = theme === 'light';
 
   return (
-    <header className="glass-panel z-20 flex min-h-[80px] items-center justify-between border-b border-ink-700/80 px-4 py-3">
+    <header className="glass-panel z-20 flex min-h-[84px] items-center justify-between border-b border-accent/15 px-4 py-3">
       <div className="flex min-w-0 items-center gap-5">
         <div className="flex items-center gap-3">
           {/* Motivation vs Logic: keep the app identity on the shared logo asset so the header stays in sync with the browser icon without duplicating artwork. */}
-          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-ink-700/70 bg-ink-900/40 shadow-glow">
+          <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-xl border border-accent/25 bg-black shadow-[0_0_0_1px_rgba(216,196,154,0.12),0_16px_38px_rgba(0,0,0,0.5)]">
             <Image
               alt="Codoptic logo"
               className="h-full w-full object-contain"
@@ -57,31 +52,20 @@ export function TopBar({
             />
           </div>
           <div className="leading-tight">
-            <div className="text-sm font-semibold tracking-tight text-ink-100">Codoptic</div>
-            <div className="text-[10px] uppercase tracking-[0.24em] text-ink-400">Local Studio</div>
+            <div className="font-luxury text-xl leading-none tracking-[-0.02em] text-ink-100">Codoptic</div>
+            <div className="luxury-kicker mt-1 text-[9px] text-ink-400">Local Studio</div>
           </div>
         </div>
-        <span className="h-8 w-px bg-ink-700" />
+        <span className="h-9 w-px bg-accent/15" />
         <ModeToggle />
       </div>
 
       <div className="flex items-center gap-2 text-xs">
-        <button
-          onClick={() => setTheme(isLight ? 'dark' : 'light')}
-          className="surface-transition inline-flex h-9 w-9 items-center justify-center rounded-md border border-ink-700 bg-ink-850 text-ink-300 hover:-translate-y-0.5 hover:border-accent/50 hover:text-ink-100"
-          type="button"
-          title={isLight ? 'Dark theme' : 'Light theme'}
-          aria-label={isLight ? 'Switch to dark theme' : 'Switch to light theme'}
-        >
-          {isLight ? <Moon size={16} /> : <Sun size={16} />}
-        </button>
-
         {mode === 'editor' && (
           <>
-            <span className="mx-1 h-8 w-px bg-ink-700" />
             <button
               onClick={onFitView}
-              className="surface-transition inline-flex h-9 w-9 items-center justify-center rounded-md border border-ink-700 bg-ink-850 text-ink-300 hover:-translate-y-0.5 hover:border-accent/50 hover:text-ink-100"
+              className="surface-transition inline-flex h-9 w-9 items-center justify-center rounded-full border border-accent/15 bg-black/45 text-ink-300 hover:-translate-y-0.5 hover:border-accent/45 hover:text-ink-100"
               type="button"
               title="Fit view"
               aria-label="Fit view"
@@ -90,20 +74,20 @@ export function TopBar({
             </button>
             <button
               onClick={onResetLayout}
-              className="surface-transition inline-flex h-9 w-9 items-center justify-center rounded-md border border-ink-700 bg-ink-850 text-ink-300 hover:-translate-y-0.5 hover:border-accent/50 hover:text-ink-100"
+              className="surface-transition inline-flex h-9 w-9 items-center justify-center rounded-full border border-accent/15 bg-black/45 text-ink-300 hover:-translate-y-0.5 hover:border-accent/45 hover:text-ink-100"
               type="button"
               title="Reset layout"
               aria-label="Reset layout"
             >
               <RotateCcw size={16} />
             </button>
-            <span className="mx-1 h-8 w-px bg-ink-700" />
+            <span className="mx-1 h-8 w-px bg-accent/15" />
             <button
               onClick={onToggleEditor}
-              className={`surface-transition inline-flex h-9 w-9 items-center justify-center rounded-md border ${
+              className={`surface-transition inline-flex h-9 w-9 items-center justify-center rounded-full border ${
                 isEditorVisible
-                  ? 'border-accent/50 bg-accent/15 text-accent'
-                  : 'border-ink-700 bg-ink-850 text-ink-300 hover:border-accent/50 hover:text-ink-100'
+                  ? 'border-accent/45 bg-accent/15 text-accent'
+                  : 'border-accent/15 bg-black/45 text-ink-300 hover:border-accent/45 hover:text-ink-100'
               } hover:-translate-y-0.5`}
               type="button"
               title={isEditorVisible ? 'Hide code editor' : 'Show code editor'}
@@ -114,10 +98,10 @@ export function TopBar({
             </button>
             <button
               onClick={onToggleInspector}
-              className={`surface-transition inline-flex h-9 w-9 items-center justify-center rounded-md border ${
+              className={`surface-transition inline-flex h-9 w-9 items-center justify-center rounded-full border ${
                 isInspectorVisible
-                  ? 'border-accent/50 bg-accent/15 text-accent'
-                  : 'border-ink-700 bg-ink-850 text-ink-300 hover:border-accent/50 hover:text-ink-100'
+                  ? 'border-accent/45 bg-accent/15 text-accent'
+                  : 'border-accent/15 bg-black/45 text-ink-300 hover:border-accent/45 hover:text-ink-100'
               } hover:-translate-y-0.5`}
               type="button"
               title={isInspectorVisible ? 'Hide inspector' : 'Show inspector'}
@@ -126,10 +110,10 @@ export function TopBar({
             >
               {isInspectorVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
             </button>
-            <span className="mx-1 h-8 w-px bg-ink-700" />
+            <span className="mx-1 h-8 w-px bg-accent/15" />
             <button
               onClick={onExportSvg}
-              className="surface-transition inline-flex h-9 items-center gap-2 rounded-md border border-ink-700 bg-ink-850 px-3 text-ink-200 hover:-translate-y-0.5 hover:border-accent/50"
+              className="surface-transition inline-flex h-9 items-center gap-2 rounded-full border border-accent/15 bg-black/45 px-3 text-ink-200 hover:-translate-y-0.5 hover:border-accent/45"
               type="button"
             >
               <FileCode2 size={15} />
@@ -137,7 +121,7 @@ export function TopBar({
             </button>
             <button
               onClick={onExportPng}
-              className="surface-transition inline-flex h-9 items-center gap-2 rounded-md border border-accent/50 bg-accent/15 px-3 font-medium text-accent hover:-translate-y-0.5 hover:bg-accent/25"
+              className="surface-transition inline-flex h-9 items-center gap-2 rounded-full border border-accent/45 bg-accent/15 px-3 font-medium text-accent hover:-translate-y-0.5 hover:bg-accent/20"
               type="button"
             >
               <Download size={15} />

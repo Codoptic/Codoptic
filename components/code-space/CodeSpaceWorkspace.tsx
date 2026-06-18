@@ -3264,17 +3264,17 @@ export function CodeSpaceWorkspace() {
   }, [activeTab, activeTabProject, ensureFileContent]);
 
   return (
-    <main className="code-space-workbench flex min-h-0 flex-1 overflow-hidden bg-[#181818] text-[#d4d4d4]">
+    <main className="code-space-workbench flex min-h-0 flex-1 overflow-hidden bg-black text-ink-200">
       {leftVisible && (
-        <aside className="flex min-h-0 shrink-0 border-r border-[#2a2a2a] bg-[#151515]" style={{ width: leftWidth }}>
-          <div className="flex w-11 flex-col items-center gap-2 border-r border-[#2a2a2a] bg-[#181818] py-3">
-            <button className="rounded-md bg-[#37373d] p-2 text-[#d4d4d4]" type="button" title="Explorer">
+        <aside className="flex min-h-0 shrink-0 border-r border-accent/15 bg-ink-950" style={{ width: leftWidth }}>
+          <div className="flex w-11 flex-col items-center gap-2 border-r border-accent/15 bg-black py-3">
+            <button className="rounded-md bg-accent/15 p-2 text-accent" type="button" title="Explorer">
               <Folder size={17} />
             </button>
-            <button className="rounded-md p-2 text-[#8b8b8b] hover:bg-[#2a2d2e]" type="button" title="Search">
+            <button className="rounded-md p-2 text-ink-400 hover:bg-accent/10 hover:text-ink-200" type="button" title="Search">
               <Search size={17} />
             </button>
-            <button className="rounded-md p-2 text-[#8b8b8b] hover:bg-[#2a2d2e]" type="button" title="Source Control">
+            <button className="rounded-md p-2 text-ink-400 hover:bg-accent/10 hover:text-ink-200" type="button" title="Source Control">
               <GitBranch size={17} />
             </button>
           </div>

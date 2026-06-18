@@ -40,7 +40,7 @@ interface RingProps {
   strokeWidth?: number;
 }
 
-function Ring({ pct, size = 15, strokeWidth = 2 }: RingProps) {
+function Ring({ pct, size = 13, strokeWidth = 2 }: RingProps) {
   const r = (size - strokeWidth) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ * (1 - pct / 100);
@@ -168,7 +168,7 @@ export function TokenUsageSpinbar() {
           setOpen((o) => !o);
           if (!open) refresh();
         }}
-        className="flex items-center justify-center rounded p-0.5 hover:bg-[#1f2630]"
+        className="flex h-[22px] w-[22px] items-center justify-center rounded-md hover:bg-[#1f2630]"
       >
         <Ring pct={maxPct} />
       </button>

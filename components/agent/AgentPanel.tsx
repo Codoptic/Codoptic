@@ -175,7 +175,7 @@ export function AgentPanel() {
         <DiagramTypePicker />
         <FocusPromptBox />
         <QuickModeToggle />
-        <div className="col-span-full flex items-center justify-between gap-2 rounded-xl border border-ink-700 bg-ink-900/60 p-4">
+        <div className="col-span-full flex items-center justify-between gap-2 rounded-xl border border-accent/15 bg-black/42 p-4">
           <div className="text-xs text-ink-400">
             {scan ? (
               <>

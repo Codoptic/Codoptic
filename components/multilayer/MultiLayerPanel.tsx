@@ -167,7 +167,7 @@ export function MultiLayerPanel() {
             setScanInfo({ resolved: info.resolved, fileCount: info.fileCount });
           }}
         />
-        <div className="space-y-2 rounded-xl border border-ink-700 bg-ink-900/60 p-4 text-xs">
+        <div className="space-y-2 rounded-xl border border-accent/15 bg-black/42 p-4 text-xs">
           <div className="text-[10px] uppercase tracking-widest text-ink-400">Multi-Layer mode</div>
           <p className="text-ink-300">
             The agent decomposes your repo into <strong>3–10 cohesive layers</strong> (clients, edge, services, async,
@@ -185,7 +185,7 @@ export function MultiLayerPanel() {
         <FocusPromptBox />
         <QuickModeToggle />
 
-        <div className="col-span-full flex items-center justify-between gap-2 rounded-xl border border-ink-700 bg-ink-900/60 p-4">
+        <div className="col-span-full flex items-center justify-between gap-2 rounded-xl border border-accent/15 bg-black/42 p-4">
           <div className="text-xs text-ink-400">
             {scanInfo ? (
               <>

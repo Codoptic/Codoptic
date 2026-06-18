@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Bot, Check, ChevronRight, Copy, Edit3, ExternalLink, FileCode2, Infinity as InfinityIcon, Layers3, Loader2, Mic, Paperclip, Settings, Share2, Sparkles, Zap } from 'lucide-react';
+import { Bot, Check, ChevronRight, Copy, Edit3, ExternalLink, FileCode2, Layers3, Loader2, Mic, Paperclip, Settings, Share2, Sparkles, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
 import type { CodeSpaceAgentSession, CodeSpaceMessage } from '@/lib/code-space/core';
@@ -139,6 +139,41 @@ function renderMessageLink(children: React.ReactNode, href = '') {
     </a>
   );
 }
+
+const COMPACT_MARKDOWN_COMPONENTS = {
+  h1: ({ children }: { children?: React.ReactNode }) => (
+    <h1 className="mb-2 mt-1 text-[15px] font-semibold leading-6 text-inherit">{children}</h1>
+  ),
+  h2: ({ children }: { children?: React.ReactNode }) => (
+    <h2 className="mb-2 mt-2 text-[14px] font-semibold leading-6 text-inherit">{children}</h2>
+  ),
+  h3: ({ children }: { children?: React.ReactNode }) => (
+    <h3 className="mb-1.5 mt-2 text-[13px] font-semibold leading-5 text-inherit">{children}</h3>
+  ),
+  h4: ({ children }: { children?: React.ReactNode }) => (
+    <h4 className="mb-1 mt-2 text-[12px] font-medium leading-5 text-inherit">{children}</h4>
+  ),
+  p: ({ children }: { children?: React.ReactNode }) => (
+    <p className="my-1.5 leading-5 text-inherit">{children}</p>
+  ),
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="my-1.5 list-disc space-y-1 pl-4 text-inherit">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="my-1.5 list-decimal space-y-1 pl-4 text-inherit">{children}</ol>
+  ),
+  li: ({ children }: { children?: React.ReactNode }) => <li className="pl-1 leading-5">{children}</li>,
+  pre: ({ children }: { children?: React.ReactNode }) => (
+    <pre className="my-2 max-h-40 overflow-auto rounded-md border border-[#30363d] bg-[#0b1017] p-2 font-mono text-[11px] leading-5 text-[#c9d1d9]">
+      {children}
+    </pre>
+  ),
+  code: ({ children }: { children?: React.ReactNode }) => (
+    <code className="rounded border border-[#30363d] bg-[#0b1017] px-1 py-0.5 font-mono text-[0.92em] text-[#9ecbff]">
+      {children}
+    </code>
+  ),
+};
 
 function renderDiff(diff: string) {
   return diff.split('\n').map((line, index) => {
@@ -330,12 +365,12 @@ export function AgentPanel({
       };
       return (
         <div key={item.id} className="group">
-          <div className="relative max-h-44 overflow-hidden rounded-[22px] border border-[#343434] bg-[#1b1b1d] px-4 py-4 text-[21px] font-semibold leading-8 text-[#dedede] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="relative max-h-36 overflow-hidden rounded-2xl border border-[#343434] bg-[#1b1b1d] px-3 py-2.5 font-sans text-[13px] font-normal leading-5 text-[#dedede] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <MarkdownRenderer
               markdown={item.content}
               className="text-inherit"
-              contentClassName="text-[21px] leading-8"
-              componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
+              contentClassName="text-[13px] leading-5"
+              componentsOverride={{ ...COMPACT_MARKDOWN_COMPONENTS, a: ({ children, href = '' }) => renderMessageLink(children, href) }}
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[#1b1b1d] to-transparent" />
           </div>
@@ -372,8 +407,8 @@ export function AgentPanel({
           key={item.id}
           markdown={item.content}
           className="text-[#d6d6d6]"
-          contentClassName="whitespace-pre-wrap text-[21px] font-semibold leading-9"
-          componentsOverride={{ a: ({ children, href = '' }) => renderMessageLink(children, href) }}
+          contentClassName="whitespace-pre-wrap font-sans text-[13px] font-normal leading-6"
+          componentsOverride={{ ...COMPACT_MARKDOWN_COMPONENTS, a: ({ children, href = '' }) => renderMessageLink(children, href) }}
         />
       );
     }
@@ -388,7 +423,7 @@ export function AgentPanel({
               ? 'text-[#56d364]'
               : 'text-[#8e8e93]';
       return (
-        <div key={item.id} className={`text-[19px] font-semibold leading-8 ${tone}`}>
+        <div key={item.id} className={`font-sans text-[12px] font-medium leading-5 ${tone}`}>
           {item.text}
         </div>
       );
@@ -404,18 +439,18 @@ export function AgentPanel({
             <button
               type="button"
               onClick={() => onOpenDiffFile?.(item.filePath)}
-              className="min-w-0 truncate text-left text-[18px] font-semibold leading-6 text-[#bfbfbf] hover:text-[#e6e6e6]"
+              className="min-w-0 truncate text-left font-sans text-[12px] font-medium leading-5 text-[#bfbfbf] hover:text-[#e6e6e6]"
               title={`Open ${item.filePath}`}
             >
               {item.title}
             </button>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5 text-[18px] font-semibold">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5 font-sans text-[12px] font-medium">
               {item.added > 0 ? <span className="text-[#2fbf71]">+{item.added}</span> : null}
               {item.removed > 0 ? <span className="text-[#ff5c8a]">-{item.removed}</span> : null}
             </div>
           </div>
           {item.explanation ? <div className="px-4 py-2 text-[12px] leading-5 text-[#8e8e93]">{item.explanation}</div> : null}
-          <div className={`max-h-36 overflow-hidden border-l-4 ${isRemovalHeavy ? 'border-[#b7425a]' : 'border-[#2f9f61]'} bg-[#101010] py-2 font-mono text-[15px] leading-6`}>
+          <div className={`max-h-36 overflow-hidden border-l-4 ${isRemovalHeavy ? 'border-[#b7425a]' : 'border-[#2f9f61]'} bg-[#101010] py-2 font-mono text-[11px] leading-5`}>
             {renderDiff(item.diff)}
           </div>
           <div className="flex items-center justify-between gap-2 border-t border-[#282828] px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-[#777]">
@@ -445,7 +480,7 @@ export function AgentPanel({
           key={item.id}
           type="button"
           onClick={() => item.files[0] && onOpenDiffFile?.(item.files[0])}
-          className="inline-flex items-center gap-2 rounded-lg px-1 text-[19px] font-semibold leading-8 text-[#8e8e93] hover:text-[#d6d6d6]"
+          className="inline-flex items-center gap-2 rounded-lg px-1 font-sans text-[12px] font-medium leading-5 text-[#8e8e93] hover:text-[#d6d6d6]"
           title={item.files.join('\n')}
         >
           <ChevronRight size={18} />
@@ -460,7 +495,7 @@ export function AgentPanel({
           <button
             type="button"
             onClick={() => pendingDiffs[0] && onOpenDiffFile?.(pendingDiffs[0].filePath)}
-            className="rounded-lg bg-[#7a7a7a] px-4 py-2 text-[18px] font-semibold leading-6 text-white hover:bg-[#8b8b8b]"
+            className="rounded-lg bg-[#7a7a7a] px-3 py-1.5 font-sans text-[12px] font-medium leading-5 text-white hover:bg-[#8b8b8b]"
           >
             Review
           </button>
@@ -488,7 +523,7 @@ export function AgentPanel({
   };
 
   return (
-    <div className="flex h-full flex-col border-l border-[#30363d] bg-[#0d1117] text-xs font-mono text-[#e6edf3]">
+    <div className="flex h-full flex-col border-l border-[#30363d] bg-[#0d1117] font-sans text-xs text-[#e6edf3]">
       <div className="flex flex-wrap items-center gap-2 border-b border-[#30363d] px-3 py-2">
         <Bot size={14} className="text-[#58a6ff]" />
         <span className="text-[10px] uppercase tracking-wider text-[#8b949e]">Agent</span>
@@ -561,7 +596,7 @@ export function AgentPanel({
                 onRun={handleBuildFromPlan}
               />
               {isRunning && (
-                <div className="flex items-center gap-2 text-[19px] font-semibold leading-8 text-[#8e8e93]">
+                <div className="flex items-center gap-2 font-sans text-[12px] font-medium leading-5 text-[#8e8e93]">
                   <Loader2 size={18} className="animate-spin" />
                   <span>{getWorkingLabel(agentMode)}</span>
                 </div>
@@ -573,61 +608,57 @@ export function AgentPanel({
       </div>
 
       <form onSubmit={handleSubmit} className="flex-shrink-0 border-t border-[#242424] bg-[#0d1117] p-2">
-        <div className="rounded-[24px] border border-[#343434] bg-[#1b1b1d] px-3 py-3 shadow-[0_-12px_38px_rgba(0,0,0,0.18)]">
+        <div className="rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
           <FileMentionInput value={prompt} mentions={promptMentions} onChange={(nextValue, nextMentions) => { setPrompt(nextValue); setPromptMentions(nextMentions); }} onSubmit={(nextValue, nextMentions) => { const trimmed = nextValue.trim(); if (!trimmed || isRunning) return; onSubmitPrompt(trimmed, nextMentions); setPrompt(''); setPromptMentions([]); }} mentionIndex={effectiveIndex} indexStatus={indexStatus} indexError={indexError} openFiles={openFiles} recentFiles={recentFiles} currentEditorFilePath={currentEditorFilePath} disabled={isRunning} placeholder="Plan, Build, / for skills, @ for context" />
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-[10px] whitespace-nowrap">
-              <div className="inline-flex h-8 items-center gap-1 rounded-full bg-[#2a2a2d] px-3 text-[16px] font-semibold text-[#d7d7d7]">
-                <InfinityIcon size={17} />
-                <ChevronRight size={13} className="rotate-90 text-[#8e8e93]" />
-              </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-1">
+            <div className="flex shrink-0 items-center gap-1">
               <ExecutionPolicySelector policy={executionPolicy} disabled={isRunning} onChange={onExecutionPolicyChange} />
               <AgentModeSelector mode={agentMode} disabled={isRunning} onChange={onAgentModeChange} />
             </div>
+            <div className="ml-auto flex shrink-0 items-center gap-0.5">
             <TokenUsageSpinbar />
-            <div className="flex items-center gap-2 whitespace-nowrap">
             <button
               type="button"
               onClick={onGenerateDiagram}
               disabled={!canGenerateDiagram || isRunning}
               title="Generate Diagram"
               aria-label="Generate Diagram"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#161b22] hover:text-[#79b8ff] disabled:cursor-not-allowed disabled:text-[#6e7681] disabled:hover:bg-transparent"
+              className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#21262d] hover:text-[#79b8ff] disabled:cursor-not-allowed disabled:text-[#484f58] disabled:hover:bg-transparent"
             >
-              <Layers3 size={15} />
+              <Layers3 size={11} />
             </button>
             <button
               type="button"
               onClick={onOpenAppPlanner}
               title="App Planner"
               aria-label="App Planner"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#161b22] hover:text-[#79b8ff]"
+              className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#58a6ff] hover:bg-[#21262d] hover:text-[#79b8ff]"
             >
-              <Sparkles size={15} />
+              <Sparkles size={11} />
             </button>
               <button
                 type="button"
                 title="Attach context"
                 aria-label="Attach context"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[#b7b7bb] hover:bg-[#2a2a2d] hover:text-[#f0f0f0]"
+                className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#8b949e] hover:bg-[#21262d] hover:text-[#c9d1d9]"
               >
-                <Paperclip size={17} />
+                <Paperclip size={11} />
               </button>
               <button
                 type="button"
                 title="Voice input"
                 aria-label="Voice input"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#d6d6d6] text-[#161616] hover:bg-white"
+                className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-md text-[#8b949e] hover:bg-[#21262d] hover:text-[#c9d1d9]"
               >
-                <Mic size={17} />
+                <Mic size={11} />
               </button>
               {isRunning ? (
-                <button type="button" onClick={onCancelRun} className="rounded-full bg-[#b91c1c] px-3 py-1.5 text-[11px] font-semibold text-white">
+                <button type="button" onClick={onCancelRun} className="ml-0.5 rounded-full bg-[#b91c1c] px-1.5 py-1 font-sans text-[8.5px] font-medium leading-none text-white">
                   Stop
                 </button>
               ) : (
-                <button type="submit" disabled={!prompt.trim()} className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#2f81f7] text-white disabled:opacity-40" aria-label="Submit prompt">
-                  <Zap size={14} />
+                <button type="submit" disabled={!prompt.trim()} className="ml-0.5 inline-flex h-[22px] w-[22px] items-center justify-center rounded-full bg-[#238636] text-white hover:bg-[#2ea043] disabled:opacity-40" aria-label="Submit prompt">
+                  <Zap size={10} />
                 </button>
               )}
             </div>

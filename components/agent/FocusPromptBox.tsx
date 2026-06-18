@@ -6,7 +6,7 @@ export function FocusPromptBox() {
   const focus = useDiagramStore((s) => s.focusPrompt);
   const setFocus = useDiagramStore((s) => s.setFocusPrompt);
   return (
-    <div className="space-y-2 rounded-xl border border-ink-700 bg-ink-900/60 p-4 text-xs">
+    <div className="space-y-2 rounded-xl border border-accent/15 bg-black/42 p-4 text-xs">
       <div className="text-[10px] uppercase tracking-widest text-ink-400">Focus (optional)</div>
       <textarea
         value={focus}

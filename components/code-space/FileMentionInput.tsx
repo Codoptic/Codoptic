@@ -507,7 +507,7 @@ export function FileMentionInput({
         onCopy={handleCopy}
         onFocus={handleFocus}
         onBlur={handleBlur}
-        className="mention-editor max-h-32 min-h-[34px] w-full overflow-y-auto rounded-lg bg-transparent px-0.5 py-1 font-mono text-[20px] font-semibold leading-8 text-[#e6e6e6] outline-none"
+        className="mention-editor max-h-36 min-h-[44px] w-full overflow-y-auto rounded-lg bg-transparent px-1 py-1.5 font-sans text-[13px] font-normal leading-5 tracking-normal text-[#e6edf3] outline-none"
         style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
       />
     </div>

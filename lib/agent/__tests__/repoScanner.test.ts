@@ -40,7 +40,7 @@ describe('repoScanner', () => {
         'package.json',
         'postcss.config.mjs',
         'pom.xml',
-        'public/logo.svg',
+        'public/logo.png',
         'pyproject.toml',
         'seed.ts',
         'setup.sh',

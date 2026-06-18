@@ -2,6 +2,6 @@
 
 import { CodopticWorkbench } from '../page';
 
-export default function CodeSpaceRoute() {
+export default function CodeRoute() {
   return <CodopticWorkbench routeMode="code-space" />;
 }

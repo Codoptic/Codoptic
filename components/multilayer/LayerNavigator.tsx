@@ -37,7 +37,7 @@ export function LayerNavigator() {
 
   return (
     <>
-      <div className="flex items-center gap-1.5 overflow-x-auto border-b border-ink-700 bg-ink-900 px-3 py-2">
+      <div className="flex items-center gap-1.5 overflow-x-auto border-b border-accent/15 bg-black/58 px-3 py-2">
         <span className="mr-2 shrink-0 text-[10px] uppercase tracking-widest text-ink-400">
           Layers
         </span>

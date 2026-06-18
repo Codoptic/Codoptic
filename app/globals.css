@@ -5,51 +5,53 @@
 @import url('@fontsource/inter/400.css');
 @import url('@fontsource/inter/500.css');
 @import url('@fontsource/inter/600.css');
+@import url('@fontsource/bodoni-moda/400.css');
+@import url('@fontsource/bodoni-moda/600.css');
 
 :root {
-  --ink-950: 7 9 12;
-  --ink-900: 11 14 19;
-  --ink-850: 16 20 27;
-  --ink-800: 21 26 35;
-  --ink-700: 30 38 50;
-  --ink-600: 42 51 66;
-  --ink-500: 60 70 88;
-  --ink-400: 91 102 120;
-  --ink-300: 139 149 168;
-  --ink-200: 193 199 211;
-  --ink-100: 231 234 240;
-  --accent: 124 156 255;
-  --accent-warm: 255 179 124;
-  --accent-cool: 124 240 224;
+  --ink-950: 2 2 4;
+  --ink-900: 7 7 10;
+  --ink-850: 12 12 16;
+  --ink-800: 18 18 24;
+  --ink-700: 39 36 43;
+  --ink-600: 61 56 67;
+  --ink-500: 91 84 98;
+  --ink-400: 133 125 139;
+  --ink-300: 181 174 184;
+  --ink-200: 224 218 209;
+  --ink-100: 250 246 236;
+  --accent: 216 196 154;
+  --accent-warm: 198 143 102;
+  --accent-cool: 165 142 255;
   --ink-bg: rgb(var(--ink-950));
   --ink-panel: rgb(var(--ink-900));
   --ink-border: rgb(var(--ink-700));
   --ink-text: rgb(var(--ink-200));
-  --canvas-grid: rgba(124, 156, 255, 0.055);
-  --canvas-vignette: rgba(124, 156, 255, 0.12);
+  --canvas-grid: rgba(216, 196, 154, 0.045);
+  --canvas-vignette: rgba(165, 142, 255, 0.13);
 }
 
 [data-theme='light'] {
-  --ink-950: 244 247 251;
-  --ink-900: 255 255 255;
-  --ink-850: 248 250 253;
-  --ink-800: 241 245 249;
-  --ink-700: 220 227 237;
-  --ink-600: 194 204 218;
-  --ink-500: 138 151 170;
-  --ink-400: 101 116 139;
-  --ink-300: 71 85 105;
-  --ink-200: 45 55 72;
-  --ink-100: 15 23 42;
-  --accent: 58 96 229;
-  --accent-warm: 224 115 49;
-  --accent-cool: 14 156 144;
+  --ink-950: 2 2 4;
+  --ink-900: 7 7 10;
+  --ink-850: 12 12 16;
+  --ink-800: 18 18 24;
+  --ink-700: 39 36 43;
+  --ink-600: 61 56 67;
+  --ink-500: 91 84 98;
+  --ink-400: 133 125 139;
+  --ink-300: 181 174 184;
+  --ink-200: 224 218 209;
+  --ink-100: 250 246 236;
+  --accent: 216 196 154;
+  --accent-warm: 198 143 102;
+  --accent-cool: 165 142 255;
   --ink-bg: rgb(var(--ink-950));
   --ink-panel: rgb(var(--ink-900));
   --ink-border: rgb(var(--ink-700));
   --ink-text: rgb(var(--ink-200));
-  --canvas-grid: rgba(58, 96, 229, 0.06);
-  --canvas-vignette: rgba(58, 96, 229, 0.12);
+  --canvas-grid: rgba(216, 196, 154, 0.045);
+  --canvas-vignette: rgba(165, 142, 255, 0.13);
 }
 
 /* Motivation vs Logic: the light theme keeps the same shared ink scale for backgrounds and text, but several UI surfaces use the mid-tone text utilities on white panels, which made labels wash out. Remap the muted text roles in light mode so shared components stay readable without splitting the design system. */
@@ -130,6 +132,42 @@ textarea {
   color: inherit;
 }
 
+.font-luxury {
+  font-family: 'Bodoni Moda', 'Times New Roman', serif;
+}
+
+.luxury-display {
+  font-family: 'Bodoni Moda', 'Times New Roman', serif;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.92;
+  text-wrap: balance;
+}
+
+.luxury-kicker {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+
+.dark-space-bg {
+  background:
+    radial-gradient(circle at 20% 12%, rgb(var(--accent-cool) / 0.18), transparent 28rem),
+    radial-gradient(circle at 78% 18%, rgb(var(--accent-warm) / 0.1), transparent 30rem),
+    radial-gradient(circle at 54% 82%, rgb(var(--accent) / 0.08), transparent 34rem),
+    linear-gradient(135deg, rgb(0 0 0), rgb(var(--ink-950)) 38%, rgb(var(--ink-900)));
+}
+
+.luxury-panel {
+  background:
+    linear-gradient(180deg, rgb(var(--ink-850) / 0.88), rgb(var(--ink-950) / 0.78)),
+    rgb(var(--ink-900));
+  border-color: rgb(var(--accent) / 0.2);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    0 24px 70px rgb(0 0 0 / 0.5);
+}
+
 /* Subtle scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
@@ -153,6 +191,74 @@ textarea {
   transition:
     transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
     background 200ms ease;
+}
+
+.mode-route-rail {
+  isolation: isolate;
+}
+
+.mode-route-thumb {
+  box-shadow:
+    0 0 24px rgba(216, 196, 154, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  transition:
+    transform 420ms cubic-bezier(0.16, 1, 0.3, 1),
+    width 420ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 220ms ease,
+    background-color 220ms ease;
+}
+
+.mode-route-tab {
+  transition:
+    color 220ms ease,
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mode-route-tab:hover {
+  transform: translateY(-1px);
+}
+
+.mode-route-icon {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  opacity: 0.82;
+  transition:
+    opacity 220ms ease,
+    color 220ms ease,
+    transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mode-route-tab:hover .mode-route-icon,
+.mode-route-icon-active {
+  opacity: 1;
+  transform: translateY(-0.5px) scale(1.04);
+}
+
+.mode-route-label {
+  font-family: 'Bodoni Moda', 'Times New Roman', serif;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0.035em;
+  text-transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-route-thumb,
+  .mode-route-tab,
+  .mode-route-icon {
+    transition: none;
+  }
+
+  .mode-route-tab:hover,
+  .mode-route-tab:hover .mode-route-icon,
+  .mode-route-icon-active {
+    transform: none;
+  }
 }
 
 /* Stage glow for analysis animation */
@@ -188,11 +294,13 @@ textarea {
 }
 
 .glass-panel {
-  background: linear-gradient(180deg, rgb(var(--ink-900) / 0.86), rgb(var(--ink-850) / 0.78));
+  background:
+    linear-gradient(180deg, rgb(0 0 0 / 0.92), rgb(var(--ink-900) / 0.86)),
+    radial-gradient(circle at 20% 0%, rgb(var(--accent) / 0.1), transparent 22rem);
   box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.05) inset,
-    0 18px 50px rgb(0 0 0 / 0.18);
-  backdrop-filter: blur(16px);
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 18px 50px rgb(0 0 0 / 0.42);
+  backdrop-filter: blur(20px);
 }
 
 .surface-transition {
@@ -202,6 +310,109 @@ textarea {
     color 220ms ease,
     box-shadow 220ms ease,
     transform 180ms ease;
+}
+
+.landing-story-section {
+  view-timeline-name: --landing-story-section;
+  view-timeline-axis: block;
+  animation: landing-story-reveal both cubic-bezier(0.16, 1, 0.3, 1);
+  animation-timeline: --landing-story-section;
+  animation-range: entry 10% cover 44%;
+}
+
+.landing-story-node {
+  position: absolute;
+  left: -3.25rem;
+  top: 50%;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: rgb(var(--accent-cool));
+  box-shadow:
+    0 0 0 8px rgb(var(--accent-cool) / 0.1),
+    0 0 32px rgb(var(--accent-cool) / 0.55);
+}
+
+.landing-morph-slide {
+  animation: landing-morph-slide 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.landing-morph-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(2px);
+  opacity: 0.8;
+  transform: translate3d(0, 0, 0);
+  animation: landing-orb-morph 7s cubic-bezier(0.16, 1, 0.3, 1) infinite alternate;
+}
+
+.landing-morph-orb-a {
+  left: 18%;
+  top: 24%;
+  width: 15rem;
+  height: 15rem;
+  background: rgb(var(--accent-cool) / 0.16);
+}
+
+.landing-morph-orb-b {
+  right: 10%;
+  bottom: 22%;
+  width: 18rem;
+  height: 18rem;
+  background: rgb(var(--accent) / 0.14);
+  animation-delay: -2s;
+}
+
+@keyframes landing-story-reveal {
+  from {
+    opacity: 0.36;
+    transform: translateY(32px) scale(0.975);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes landing-morph-slide {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.975);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes landing-orb-morph {
+  from {
+    transform: translate3d(-10px, 8px, 0) scale(0.92);
+  }
+  to {
+    transform: translate3d(16px, -18px, 0) scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .landing-story-section,
+  .landing-morph-slide,
+  .landing-morph-orb {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
 }
 
 /* Motivation vs Logic: the mention chip needs to look like a single inline token regardless of

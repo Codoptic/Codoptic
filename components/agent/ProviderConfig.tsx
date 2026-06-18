@@ -148,7 +148,7 @@ export function ProviderConfig() {
   };
 
   return (
-    <div className="space-y-3 rounded-xl border border-ink-700 bg-ink-900/60 p-4 text-xs">
+    <div className="space-y-3 rounded-xl border border-accent/15 bg-black/42 p-4 text-xs">
       <div className="text-[10px] uppercase tracking-widest text-ink-400">AI Provider</div>
 
       <div className="grid grid-cols-2 gap-2">

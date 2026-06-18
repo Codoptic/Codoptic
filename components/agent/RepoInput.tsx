@@ -394,7 +394,7 @@ export function RepoInput({ onScan, onConfigChange, maxMode, onMaxModeChange, in
   const previewDisabled = scanning || (sourceType === 'github' ? !repoUrl.trim() : !path.trim());
 
   return (
-    <div className="space-y-3 rounded-xl border border-ink-700 bg-ink-900/60 p-4 text-xs">
+    <div className="space-y-3 rounded-xl border border-accent/15 bg-black/42 p-4 text-xs">
       <div className="text-[10px] uppercase tracking-widest text-ink-400">Repository</div>
       <div className="flex gap-2">
         <button

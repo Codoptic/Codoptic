@@ -487,7 +487,7 @@ export function CustomPromptPanel() {
       <div className="grid h-full grid-cols-[1fr] gap-4 overflow-y-auto p-6 lg:grid-cols-2">
         <ProviderConfig />
 
-        <div className="space-y-2 rounded-xl border border-ink-700 bg-ink-900/60 p-4 text-xs">
+        <div className="space-y-2 rounded-xl border border-accent/15 bg-black/42 p-4 text-xs">
           <div className="flex items-center gap-2">
             <Sparkles size={14} className="text-accent" />
             <div className="text-[10px] uppercase tracking-widest text-ink-400">Custom Prompt mode</div>
@@ -504,7 +504,7 @@ export function CustomPromptPanel() {
           </ol>
         </div>
 
-        <div className="col-span-full space-y-4 rounded-xl border border-ink-700 bg-ink-900/60 p-4">
+        <div className="col-span-full space-y-4 rounded-xl border border-accent/15 bg-black/42 p-4">
           {/* ---- Step header ---- */}
           <div className="flex items-center justify-between">
             <div className="text-[10px] uppercase tracking-widest text-ink-400">
