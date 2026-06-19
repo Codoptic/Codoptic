@@ -16,9 +16,11 @@ vi.mock('../../cache/draftCache', () => ({
 import { useDiagramStore, type MultiLayerOutput } from '../store';
 import {
   addStoredProject,
+  getNextProjectName,
   readStoredProjects,
   writeActiveProjectId,
   writeStoredProjects,
+  renameStoredProject,
 } from '../projectStorage';
 import { writeUiPreference } from '../uiPreferences';
 
@@ -226,5 +228,17 @@ describe('project tab loading', () => {
     useDiagramStore.getState().hydrateUiPreferences();
 
     expect(useDiagramStore.getState().instructionMode).toBe(true);
+  });
+
+  it('allocates the smallest vacant project number for auto-created projects', () => {
+    addStoredProject('project1', 'one');
+    addStoredProject('project2', 'two');
+    addStoredProject('project3', 'three');
+    renameStoredProject(readStoredProjects()[1]!.id, 'Renamed');
+
+    expect(getNextProjectName()).toBe('project2');
+
+    const project = addStoredProject('project1', 'four');
+    expect(project.name).toBe('project2');
   });
 });

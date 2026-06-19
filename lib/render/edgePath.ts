@@ -23,6 +23,8 @@ export interface RoutedEdgePath {
 const CORNER_RADIUS = 0;
 const EPSILON = 0.001;
 const EDGE_LANE_SPACING = 28;
+const EDGE_FAN_LANE_SPACING = 12;
+const MAX_EDGE_LANE_OFFSET = 42;
 const EDGE_CLEARANCE = 18;
 const OBSTACLE_PADDING = 8;
 const TURN_PENALTY = 36;
@@ -840,20 +842,37 @@ function manualRoute(
 
 export function edgeLaneOffsets(edges: IREdge[]): Map<string, number> {
   const byPair = new Map<string, IREdge[]>();
+  const byEndpoint = new Map<string, IREdge[]>();
   for (const edge of edges) {
     if (edge.source === edge.target) continue;
     const key = [edge.source, edge.target].sort().join('\u0000');
     byPair.set(key, [...(byPair.get(key) ?? []), edge]);
+    byEndpoint.set(`source:${edge.source}`, [...(byEndpoint.get(`source:${edge.source}`) ?? []), edge]);
+    byEndpoint.set(`target:${edge.target}`, [...(byEndpoint.get(`target:${edge.target}`) ?? []), edge]);
   }
 
   const offsets = new Map<string, number>();
+  const addOffset = (edgeId: string, offset: number) => {
+    const next = (offsets.get(edgeId) ?? 0) + offset;
+    offsets.set(edgeId, clamp(next, -MAX_EDGE_LANE_OFFSET, MAX_EDGE_LANE_OFFSET));
+  };
+
   for (const pairEdges of byPair.values()) {
     if (pairEdges.length < 2) continue;
     const centerIndex = (pairEdges.length - 1) / 2;
     pairEdges.forEach((edge, index) => {
-      offsets.set(edge.id, (index - centerIndex) * EDGE_LANE_SPACING);
+      addOffset(edge.id, (index - centerIndex) * EDGE_LANE_SPACING);
     });
   }
+
+  for (const endpointEdges of byEndpoint.values()) {
+    if (endpointEdges.length < 2) continue;
+    const centerIndex = (endpointEdges.length - 1) / 2;
+    endpointEdges.forEach((edge, index) => {
+      addOffset(edge.id, (index - centerIndex) * EDGE_FAN_LANE_SPACING);
+    });
+  }
+
   return offsets;
 }
 

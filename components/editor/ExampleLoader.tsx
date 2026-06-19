@@ -24,7 +24,9 @@ const DEFAULT_PROJECTS: DefaultProject[] = [
 export function ExampleLoader() {
   const activeProjectId = useDiagramStore((s) => s.activeProjectId);
   const generatedProjects = useDiagramStore((s) => s.generatedProjects);
+  const dslText = useDiagramStore((s) => s.dslText);
   const openProject = useDiagramStore((s) => s.openProject);
+  const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
   const removeGeneratedProject = useDiagramStore((s) => s.removeGeneratedProject);
   const renameGeneratedProject = useDiagramStore((s) => s.renameGeneratedProject);
   const reorderGeneratedProjects = useDiagramStore((s) => s.reorderGeneratedProjects);
@@ -85,11 +87,26 @@ export function ExampleLoader() {
     setDragOverId(null);
   };
 
+  const handleAddProject = () => {
+    addGeneratedProject('project1', dslText);
+  };
+
   const pendingDeleteProject = generatedProjects.find((p) => p.id === pendingDeleteId);
 
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-      <span className="mr-1 shrink-0 text-[10px] uppercase tracking-[0.18em] text-ink-400">Projects</span>
+      <span className="mr-1 flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-ink-400">
+        <span>Projects</span>
+        <button
+          type="button"
+          title="Add project"
+          aria-label="Add project"
+          onClick={handleAddProject}
+          className="inline-flex h-5 w-5 items-center justify-center rounded border border-ink-700 bg-ink-900 text-ink-300 transition-colors hover:border-accent/50 hover:bg-ink-800 hover:text-ink-100"
+        >
+          +
+        </button>
+      </span>
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {generatedProjects.map((proj) => {
           const isActive = activeProjectId === proj.id;

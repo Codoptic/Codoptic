@@ -12,11 +12,12 @@ import type { LayoutResult, LayoutRect } from '../layout/elk';
 import { paletteFor, THEME } from './theme';
 import { getIcon } from '../icons/registry';
 import { ARROW_FWD_ID, ARROW_BWD_ID, ARROW_THICK_ID, MARKER_DEFS } from './markers';
-import { edgeLabelSize, groupTitleSize } from '../layout/measure';
+import { edgeLabelSize, groupTitleSize, nodeLabelLayout } from '../layout/measure';
 import { collectLabelObstacles, placeEdgeLabel, rectAtCenter, type RectLike } from './labelPlacement';
 import { edgeLaneOffsets, routeEdgePath } from './edgePath';
 
 const ICON_SIZE = 14;
+const NODE_BASELINE_CENTER_FACTOR = 1.05;
 
 export interface RenderOptions {
   padding?: number;
@@ -121,7 +122,16 @@ function renderNode(n: IRNode, layout: LayoutResult, opts: RenderOptions, groups
   const pal = paletteFor(color);
   const icon = getIcon(n.icon);
   const label = n.label ?? n.name;
+  const labelBox = nodeLabelLayout(label);
+  const labelX = rect.x + 8 + ICON_SIZE + 6;
+  const labelY =
+    rect.y + rect.height / 2 - labelBox.textHeight / 2 + labelBox.fontSize * NODE_BASELINE_CENTER_FACTOR;
   const iconPaths = icon.paths.join('');
+  const labelXml = labelBox.lines
+    .map((line, index) =>
+      `<tspan x="${labelX}" dy="${index === 0 ? 0 : labelBox.lineHeight}">${escapeXml(line)}</tspan>`,
+    )
+    .join('');
 
   return `
     <g data-id="${escapeXml(n.id)}" data-kind="node">
@@ -132,9 +142,8 @@ function renderNode(n: IRNode, layout: LayoutResult, opts: RenderOptions, groups
              fill="none" stroke="${pal.nodeIcon}" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">${iconPaths}</svg>
       </g>
-      <text x="${rect.x + 8 + ICON_SIZE + 6}" y="${rect.y + rect.height / 2}"
-            dominant-baseline="middle" fill="${pal.nodeLabel}" font-size="11"
-            font-family="Inter, sans-serif" font-weight="500">${escapeXml(label)}</text>
+      <text x="${labelX}" y="${labelY}" fill="${pal.nodeLabel}" font-size="${labelBox.fontSize}"
+            font-family="Inter, sans-serif" font-weight="500">${labelXml}</text>
     </g>`;
 }
 

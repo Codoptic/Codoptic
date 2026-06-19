@@ -104,15 +104,21 @@ export function writeStoredProjects(projects: StoredProject[]): void {
   window.localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
 }
 
-export function addStoredProject(
-  name: string,
-  dsl: string,
-  multiLayer?: MultiLayerOutput,
-  instructionMarkdown?: string,
-): StoredProject {
-  const projects = readStoredProjects();
+function getNextAutoProjectName(projects: StoredProject[]): string {
+  const used = new Set<number>();
 
-  // Deduplicate: find existing names to derive a unique suffix
+  for (const project of projects) {
+    const match = /^project(\d+)$/i.exec(project.name.trim());
+    if (!match) continue;
+    used.add(Number(match[1]));
+  }
+
+  let next = 1;
+  while (used.has(next)) next++;
+  return `project${next}`;
+}
+
+function getUniqueProjectName(projects: StoredProject[], name: string): string {
   const existingNames = new Set(projects.map((p) => p.name));
   let uniqueName = name;
   let counter = 2;
@@ -120,6 +126,20 @@ export function addStoredProject(
     uniqueName = `${name} ${counter}`;
     counter++;
   }
+  return uniqueName;
+}
+
+export function addStoredProject(
+  name: string,
+  dsl: string,
+  multiLayer?: MultiLayerOutput,
+  instructionMarkdown?: string,
+): StoredProject {
+  const projects = readStoredProjects();
+  const trimmedName = name.trim();
+  const uniqueName = /^project\d+$/i.test(trimmedName)
+    ? getNextAutoProjectName(projects)
+    : getUniqueProjectName(projects, trimmedName);
 
   const project: StoredProject = {
     id: `proj-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -136,6 +156,10 @@ export function addStoredProject(
 export function renameStoredProject(id: string, name: string): void {
   const projects = readStoredProjects().map((p) => (p.id === id ? { ...p, name } : p));
   writeStoredProjects(projects);
+}
+
+export function getNextProjectName(): string {
+  return getNextAutoProjectName(readStoredProjects());
 }
 
 export function removeStoredProject(id: string): void {

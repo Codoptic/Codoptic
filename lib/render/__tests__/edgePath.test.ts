@@ -93,6 +93,18 @@ function pathAvoidsRect(points: Array<{ x: number; y: number }>, rect: LayoutRec
 }
 
 describe('routeEdgePath', () => {
+  it('fans out edges that share an endpoint', () => {
+    const offsets = edgeLaneOffsets([
+      { ...edge(), id: 'e1', source: 'a', target: 'b' },
+      { ...edge(), id: 'e2', source: 'a', target: 'c' },
+      { ...edge(), id: 'e3', source: 'a', target: 'd' },
+    ]);
+
+    expect(offsets.get('e1')).not.toBe(offsets.get('e2'));
+    expect(offsets.get('e2')).toBe(0);
+    expect(offsets.get('e3')).not.toBe(offsets.get('e2'));
+  });
+
   it('reattaches arrow endpoints to moved nodes', () => {
     const layout = layoutResult();
     const movedTarget = { x: 320, y: 80, width: 100, height: 40 };

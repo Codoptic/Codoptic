@@ -18,7 +18,7 @@ import type { LayoutResult, LayoutRect } from '../layout/elk';
 import { paletteFor, themeFor, type RenderThemeMode } from './theme';
 import { getIcon } from '../icons/registry';
 import { ARROW_FWD_ID, ARROW_BWD_ID, ARROW_THICK_ID, MARKER_DEFS } from './markers';
-import { edgeLabelSize, groupTitleSize } from '../layout/measure';
+import { edgeLabelSize, groupTitleSize, nodeLabelLayout } from '../layout/measure';
 import {
   collectLabelObstacles,
   placeEdgeLabel,
@@ -84,6 +84,7 @@ export interface SceneResult {
 }
 
 const ICON_SIZE = 14;
+const NODE_BASELINE_CENTER_FACTOR = 1.05;
 
 // Extra padding around the visible rect so nodes pop into existence
 // before they touch the viewport edge (in scene-space pixels).
@@ -241,6 +242,10 @@ export function buildScene(
     const pal = paletteFor(color, opts.theme);
     const icon = getIcon(n.icon);
     const label = n.label ?? n.name;
+    const labelBox = nodeLabelLayout(label);
+    const labelX = rect.x + 8 + ICON_SIZE + 6;
+    const labelY =
+      rect.y + rect.height / 2 - labelBox.textHeight / 2 + labelBox.fontSize * NODE_BASELINE_CENTER_FACTOR;
     const isSelected = opts.selectedId === n.id || (opts.multiSelectedIds?.has(n.id) ?? false);
 
     return (
@@ -270,15 +275,18 @@ export function buildScene(
           />
         </g>
         <text
-          x={rect.x + 8 + ICON_SIZE + 6}
-          y={rect.y + rect.height / 2}
-          dominantBaseline="middle"
+          x={labelX}
+          y={labelY}
           fill={pal.nodeLabel}
-          fontSize={11}
+          fontSize={labelBox.fontSize}
           fontFamily="Inter, sans-serif"
           fontWeight={500}
         >
-          {label}
+          {labelBox.lines.map((line, index) => (
+            <tspan key={`${n.id}-${index}`} x={labelX} dy={index === 0 ? 0 : labelBox.lineHeight}>
+              {line}
+            </tspan>
+          ))}
         </text>
       </g>
     );
