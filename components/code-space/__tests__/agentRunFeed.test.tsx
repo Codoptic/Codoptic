@@ -33,4 +33,23 @@ describe('agentRunFeed', () => {
     expect(feed[1]).toMatchObject({ filePath: 'src/app.ts', added: 2, removed: 1 });
     expect(appendPatchHistory([], patchEvent)).toHaveLength(1);
   });
+
+  it('keeps recoverable tool failures as sanitized progress', () => {
+    const feed = appendRunFeedEvent([], {
+      type: 'tool_result',
+      toolCallId: 'tool-1',
+      tool: 'read_file',
+      output: 'File not found or unreadable: .agent/tests/run:1/result.test.ts',
+      durationMs: 3,
+      recoverable: true,
+    });
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      kind: 'progress',
+      title: 'Replanning automatically',
+      status: 'warning',
+    });
+    expect(feed[0]?.detail).not.toContain('File not found');
+  });
 });

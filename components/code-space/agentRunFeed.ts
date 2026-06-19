@@ -43,6 +43,16 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
     };
   }
   if (event.type === 'tool_result') {
+    if (event.recoverable) {
+      return {
+        id: `feed:tool:${event.toolCallId}`,
+        kind: 'progress',
+        title: 'Replanning automatically',
+        detail: describeTool(event.tool, undefined),
+        status: 'warning',
+        createdAt: now,
+      };
+    }
     return {
       id: `feed:tool:${event.toolCallId}`,
       kind: 'tool',

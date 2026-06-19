@@ -134,4 +134,46 @@ describe('buildAgentTimeline', () => {
       text: 'Explored 2 files, 2 searches',
     });
   });
+
+  it('hides internal tool errors and noisy model-turn status while keeping live progress', () => {
+    const session = createSession();
+    session.messages = [{ id: 'user-1', role: 'user', content: 'Fix the agent bar.', createdAt: session.createdAt }];
+    session.toolCalls = [];
+    session.verificationResults = [];
+    session.runFeed = [
+      {
+        id: 'status-1',
+        kind: 'progress',
+        title: 'Waiting for model turn.',
+        status: 'running',
+        createdAt: session.createdAt + 1,
+      },
+      {
+        id: 'tool-1',
+        kind: 'tool',
+        title: 'read_file failed',
+        detail: 'File not found or unreadable: .agent/tests/run:1/result.test.ts',
+        status: 'error',
+        createdAt: session.createdAt + 2,
+      },
+      {
+        id: 'status-2',
+        kind: 'progress',
+        title: 'Reviewing the agent timeline renderer.',
+        status: 'running',
+        createdAt: session.createdAt + 3,
+      },
+    ];
+
+    const items = buildAgentTimeline({ session, pendingDiffs: [], appliedDiffs: [] });
+
+    expect(items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'assistant_text', content: 'Reviewing the agent timeline renderer.' }),
+      ]),
+    );
+    expect(items.some((item) => item.kind === 'error')).toBe(false);
+    expect(items.some((item) => 'content' in item && item.content === 'Waiting for model turn.')).toBe(false);
+    expect(items.some((item) => 'text' in item && item.text.includes('File not found'))).toBe(false);
+  });
 });

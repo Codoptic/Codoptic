@@ -26,7 +26,7 @@ export type AgentSSEEvent =
   | { type: 'todo_created'; todo: { id: string; text: string; done: boolean } }
   | { type: 'todo_updated'; todoId: string; done: boolean }
   | { type: 'tool_start'; toolCallId: string; tool: string; input: unknown }
-  | { type: 'tool_result'; toolCallId: string; tool: string; output: unknown; durationMs: number; error?: string }
+  | { type: 'tool_result'; toolCallId: string; tool: string; output: unknown; durationMs: number; error?: string; recoverable?: boolean }
   | { type: 'patch_history'; patch: PatchHistoryEntry }
   | { type: 'coverage_updated'; contract: ImplementationContract }
   | { type: 'diff_proposed'; diffId: string; filePath: string; oldContent: string; newContent: string; deleted?: boolean; explanation?: string; unifiedDiff?: string; autoApplied?: boolean; patchId?: string; batchId?: string; added?: number; removed?: number; hunks?: number }

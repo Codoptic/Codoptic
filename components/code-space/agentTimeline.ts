@@ -55,11 +55,13 @@ export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: Buil
   const exploration = summarizeExploration(session);
   if (exploration) items.push(exploration);
 
+  let previousProgressTitle = '';
   for (const entry of session.runFeed ?? []) {
     if (entry.kind === 'progress' && entry.title && !isNoisyProgress(entry.title)) {
+      const normalizedTitle = entry.title.trim().toLowerCase();
+      if (normalizedTitle === previousProgressTitle) continue;
+      previousProgressTitle = normalizedTitle;
       items.push({ id: `feed:${entry.id}`, kind: 'assistant_text', content: entry.title, createdAt: entry.createdAt });
-    } else if (entry.kind === 'tool' && entry.status === 'error') {
-      items.push({ id: `feed:${entry.id}`, kind: 'error', text: entry.detail || entry.title, createdAt: entry.createdAt });
     } else if (entry.kind === 'review' && entry.status && entry.status !== 'success') {
       items.push({ id: `feed:${entry.id}`, kind: 'status_summary', text: entry.detail ? `${entry.title}: ${entry.detail}` : entry.title, status: entry.status, createdAt: entry.createdAt });
     }
@@ -211,5 +213,5 @@ function orderRank(kind: AgentTimelineItem['kind']): number {
 }
 
 function isNoisyProgress(title: string): boolean {
-  return /^(waiting for model turn|streaming unavailable|tracking implementation contract)$/i.test(title.trim());
+  return /^(waiting for model turn|streaming unavailable|tracking implementation contract)[.!…]*$/i.test(title.trim());
 }

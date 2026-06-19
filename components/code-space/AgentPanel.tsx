@@ -128,7 +128,7 @@ function renderMessageLink(children: React.ReactNode, href = '') {
   const isExternal = /^[a-z][a-z0-9+.-]*:/.test(href) || href.startsWith('//');
   return (
     <a
-      className="inline-flex items-center gap-1 text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
+      className="inline-flex min-w-0 items-center gap-1 break-all text-accent underline decoration-accent/40 underline-offset-4 hover:decoration-accent"
       href={href}
       rel={isExternal ? 'noreferrer' : undefined}
       target={isExternal ? '_blank' : undefined}
@@ -154,7 +154,7 @@ const COMPACT_MARKDOWN_COMPONENTS = {
     <h4 className="mb-1 mt-2 text-[12px] font-medium leading-5 text-inherit">{children}</h4>
   ),
   p: ({ children }: { children?: React.ReactNode }) => (
-    <p className="my-1.5 leading-5 text-inherit">{children}</p>
+    <p className="my-1.5 break-words leading-5 text-inherit">{children}</p>
   ),
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className="my-1.5 list-disc space-y-1 pl-4 text-inherit">{children}</ul>
@@ -164,12 +164,12 @@ const COMPACT_MARKDOWN_COMPONENTS = {
   ),
   li: ({ children }: { children?: React.ReactNode }) => <li className="pl-1 leading-5">{children}</li>,
   pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-2 max-h-40 overflow-auto rounded-md border border-[#30363d] bg-[#0b1017] p-2 font-mono text-[11px] leading-5 text-[#c9d1d9]">
+    <pre className="my-2 max-h-40 max-w-full overflow-auto rounded-md border border-[#30363d] bg-[#0b1017] p-2 font-mono text-[11px] leading-5 text-[#c9d1d9]">
       {children}
     </pre>
   ),
   code: ({ children }: { children?: React.ReactNode }) => (
-    <code className="rounded border border-[#30363d] bg-[#0b1017] px-1 py-0.5 font-mono text-[0.92em] text-[#9ecbff]">
+    <code className="break-all rounded border border-[#30363d] bg-[#0b1017] px-1 py-0.5 font-mono text-[0.92em] text-[#9ecbff]">
       {children}
     </code>
   ),
@@ -365,7 +365,7 @@ export function AgentPanel({
       };
       return (
         <div key={item.id} className="group">
-          <div className="relative max-h-36 overflow-hidden rounded-2xl border border-[#343434] bg-[#1b1b1d] px-3 py-2.5 font-sans text-[13px] font-normal leading-5 text-[#dedede] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="relative max-h-36 min-w-0 max-w-full overflow-hidden break-words rounded-2xl border border-[#343434] bg-[#1b1b1d] px-3 py-2.5 font-sans text-[13px] font-normal leading-5 text-[#dedede] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <MarkdownRenderer
               markdown={item.content}
               className="text-inherit"
@@ -406,8 +406,8 @@ export function AgentPanel({
         <MarkdownRenderer
           key={item.id}
           markdown={item.content}
-          className="text-[#d6d6d6]"
-          contentClassName="whitespace-pre-wrap font-sans text-[13px] font-normal leading-6"
+          className="min-w-0 max-w-full overflow-hidden text-[#d6d6d6]"
+          contentClassName="whitespace-pre-wrap break-words font-sans text-[13px] font-normal leading-6"
           componentsOverride={{ ...COMPACT_MARKDOWN_COMPONENTS, a: ({ children, href = '' }) => renderMessageLink(children, href) }}
         />
       );
@@ -423,7 +423,7 @@ export function AgentPanel({
               ? 'text-[#56d364]'
               : 'text-[#8e8e93]';
       return (
-        <div key={item.id} className={`font-sans text-[12px] font-medium leading-5 ${tone}`}>
+        <div key={item.id} className={`min-w-0 max-w-full break-words font-sans text-[12px] font-medium leading-5 ${tone}`}>
           {item.text}
         </div>
       );
@@ -506,17 +506,17 @@ export function AgentPanel({
     if (item.kind === 'validation_summary') {
       const tone = item.status === 'passed' ? 'text-[#56d364]' : item.status === 'failed' ? 'text-[#ff7b8a]' : 'text-[#c9a46a]';
       return (
-        <div key={item.id} className="rounded-lg border border-[#303030] bg-[#131313] px-3 py-2">
-          <div className={`text-[15px] font-semibold leading-6 ${tone}`}>
+        <div key={item.id} className="min-w-0 max-w-full overflow-hidden rounded-lg border border-[#303030] bg-[#131313] px-3 py-2">
+          <div className={`break-words text-[15px] font-semibold leading-6 ${tone}`}>
             {item.status} · {item.command}
           </div>
-          {item.output ? <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-[#8e8e93]">{item.output}</pre> : null}
+          {item.output ? <pre className="mt-1 max-h-28 max-w-full overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-[#8e8e93]">{item.output}</pre> : null}
         </div>
       );
     }
 
     return (
-      <div key={item.id} className="rounded-lg border border-[#4a242a] bg-[#1f1114] px-3 py-2 text-[13px] leading-5 text-[#ff9aa8]">
+      <div key={item.id} className="min-w-0 max-w-full overflow-hidden break-words rounded-lg border border-[#4a242a] bg-[#1f1114] px-3 py-2 text-[13px] leading-5 text-[#ff9aa8]">
         {item.text}
       </div>
     );
@@ -586,7 +586,7 @@ export function AgentPanel({
           {agentTimeline.length === 0 ? (
             <p className="mt-6 text-center text-[13px] text-[#6e7681]">Describe a task to get started</p>
           ) : (
-            <div className="space-y-5">
+            <div className="min-w-0 space-y-5">
               {agentTimeline.map(renderTimelineItem)}
               <PlanLink
                 filePath={session?.planMarkdown?.filePath}

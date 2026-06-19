@@ -241,6 +241,61 @@ describe('CodeAgentLoop', () => {
     expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('Cannot complete')))).toBe(true);
   });
 
+  it('replans after a recoverable verification command failure instead of emitting it as final error', async () => {
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { 'verify:career': 'node check.js' } }), 'utf8');
+    await writeFile(
+      path.join(tmpDir, 'check.js'),
+      [
+        "const fs = require('node:fs');",
+        "const source = fs.readFileSync('src.ts', 'utf8');",
+        "if (!source.includes('fixed')) {",
+        "  console.error('src.ts:1:1 error prefer-const verification failed');",
+        '  process.exit(1);',
+        '}',
+        "console.log('verification passed');",
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    await writeFile(path.join(tmpDir, 'src.ts'), 'export const status = "broken";\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't1', name: 'run_command', input: { command: 'npm', args: ['run', 'verify:career'], reason: 'Verify career flow.' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: false, summary: '[failed] npm run verify:career artifactId: artifact:run-1:terminal_log:abc' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{
+          id: 't3',
+          name: 'edit_file',
+          input: { edits: [{ path: 'src.ts', search: 'export const status = "broken";', replace: 'export const status = "fixed";', reason: 'Fix verification failure.' }] },
+        }],
+      }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't4', name: 'run_command', input: { command: 'npm', args: ['run', 'verify:career'], reason: 'Re-run verification.' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't5', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Fixed verification failure.' } }],
+      }));
+
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const loop = new CodeAgentLoop();
+    loop.seed('system', 'Fix career verification');
+
+    const result = await loop.run(ctx, { session: { id: 'openai', model: 'test', apiKey: '' }, budget: new ToolBudget(10, 40) });
+
+    const failedCommandEvent = events.find((event) => event.type === 'tool_result' && event.toolCallId === 't1');
+    expect(result.success).toBe(true);
+    expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toContain('"fixed"');
+    expect(failedCommandEvent && failedCommandEvent.type === 'tool_result' ? failedCommandEvent.error : undefined).toBeUndefined();
+    expect(events.some((event) => event.type === 'agent_status' && /replanning automatically/i.test(event.status.title))).toBe(true);
+    expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('a validation or verification command failed')))).toBe(true);
+    expect(ctx.recoverableFailures?.size ?? 0).toBe(0);
+  });
+
   it('does not charge mutation budget for failed edit_file', async () => {
     await writeFile(path.join(tmpDir, 'a.ts'), 'export const x = 1;\n', 'utf8');
 

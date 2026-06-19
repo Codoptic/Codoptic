@@ -4,7 +4,14 @@ import type { ContextGraphResult } from './contextGraphEngine';
 import { listRepositoryFiles } from './repoMap';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
 import { validateSyntaxLightweight } from '@/lib/code-space/agent/editBlocks';
-import { CODE_MODE_TOOL_SPECS, ToolExecutor, formatUnresolvedEditFailures, type CodeAgentContext } from './toolExecutor';
+import {
+  CODE_MODE_TOOL_SPECS,
+  ToolExecutor,
+  formatUnresolvedEditFailures,
+  type CodeAgentContext,
+  type RecoverableToolFailure,
+  type ToolExecutionResult,
+} from './toolExecutor';
 import {
   buildWorkflowKernelPrompt,
   formatContextSufficiencyMarkdown,
@@ -136,6 +143,11 @@ export class CodeAgentLoop {
       await this.recordAssistantTurn(turn, ctx);
 
       if (!turn.toolCalls.length) {
+        const recoverableFeedback = buildRecoverableFailureDirective(ctx);
+        if (recoverableFeedback && !opts.budget.turnsExhausted() && !opts.budget.mutationBudgetExhausted()) {
+          this.messages.push({ role: 'user', content: recoverableFeedback });
+          continue;
+        }
         return {
           completed: false,
           success: turn.stopReason === 'end_turn',
@@ -237,6 +249,16 @@ export class CodeAgentLoop {
           continue;
         }
 
+        const recoverableDetail = formatRecoverableToolFailures(ctx);
+        if (recoverableDetail && !opts.budget.turnsExhausted() && !opts.budget.mutationBudgetExhausted()) {
+          toolResults.push({
+            toolCallId: call.id,
+            isError: true,
+            content: `Cannot complete: a tool, validation, or verification step failed and is still recoverable. Replan from the output, edit the smallest affected area if needed, and retry the failed step before attempt_completion:\n${recoverableDetail}`,
+          });
+          continue;
+        }
+
         const unresolvedDetail = formatUnresolvedEditFailures(ctx);
         if (unresolvedDetail) {
           toolResults.push({
@@ -277,7 +299,7 @@ export class CodeAgentLoop {
       const startedAt = Date.now();
 
       const mutating = !isReadOnlyTool(call.name);
-      let result: { content: string; isError?: boolean };
+      let result: ToolExecutionResult;
       if (mutating && opts.budget.mutationBudgetExhausted()) {
         result = { content: `Mutation budget exhausted (${opts.budget.mutationsUsed}/${opts.budget.max}). Finish with the current state and exact blockers.`, isError: true };
       } else {
@@ -285,14 +307,86 @@ export class CodeAgentLoop {
         if (mutating && !result.isError) opts.budget.charge(call.name);
       }
 
-      await ctx.emit({ type: 'tool_result', toolCallId: call.id, tool: call.name, output: result.content, durationMs: Date.now() - startedAt, error: result.isError ? result.content : undefined });
-      await ctx.emitRuntime(result.isError ? 'tool.failed' : 'tool.completed', { tool: call.name });
+      updateRecoverableToolFailures(ctx, call.name, result);
+      if (result.isError && result.recoverable) {
+        const validationLike = Boolean(result.command) || call.name === 'run_validation_matrix' || call.name === 'run_command';
+        await ctx.emit({
+          type: 'agent_status',
+          status: {
+            id: `status:${ctx.runId}:recoverable:${call.id}`,
+            title: validationLike ? 'Validation failed; replanning automatically' : 'Replanning automatically',
+            phase: 'model_turn',
+            status: 'warning',
+            createdAt: Date.now(),
+          },
+        });
+      }
+      await ctx.emit({
+        type: 'tool_result',
+        toolCallId: call.id,
+        tool: call.name,
+        output: result.content,
+        durationMs: Date.now() - startedAt,
+        error: result.isError && !result.recoverable ? result.content : undefined,
+        recoverable: result.isError && result.recoverable ? true : undefined,
+      });
+      await ctx.emitRuntime(result.isError && !result.recoverable ? 'tool.failed' : 'tool.completed', { tool: call.name, recoverable: result.recoverable, command: result.command });
       toolResults.push({ toolCallId: call.id, content: result.content, isError: result.isError });
     }
 
     this.messages.push({ role: 'tool', content: '', toolResults });
     return completion;
   }
+}
+
+function recoverableFailureMap(ctx: CodeAgentContext): Map<string, RecoverableToolFailure> {
+  if (!ctx.recoverableFailures) ctx.recoverableFailures = new Map();
+  return ctx.recoverableFailures;
+}
+
+function updateRecoverableToolFailures(ctx: CodeAgentContext, tool: string, result: ToolExecutionResult): void {
+  const failures = recoverableFailureMap(ctx);
+  if (result.isError && result.recoverable) {
+    const command = result.command || tool;
+    failures.set(command, {
+      tool,
+      command,
+      artifactId: result.artifactId,
+      output: result.content,
+      at: Date.now(),
+    });
+    return;
+  }
+
+  if (!result.isError && result.command) {
+    failures.delete(result.command);
+  }
+  if (!result.isError && tool === 'run_validation_matrix') {
+    failures.clear();
+  }
+}
+
+function formatRecoverableToolFailures(ctx: CodeAgentContext): string {
+  const failures = Array.from(recoverableFailureMap(ctx).values());
+  if (!failures.length) return '';
+  return failures
+    .slice(-3)
+    .map((failure) => {
+      const output = failure.output.length > 1600 ? `${failure.output.slice(0, 1600)}\n…[truncated; read full output via read_artifact id=${failure.artifactId ?? 'n/a'}]` : failure.output;
+      return [`Command: ${failure.command} → FAILED`, failure.artifactId ? `artifactId: ${failure.artifactId}` : '', 'Output:', output].filter(Boolean).join('\n');
+    })
+    .join('\n\n');
+}
+
+function buildRecoverableFailureDirective(ctx: CodeAgentContext): string {
+  const detail = formatRecoverableToolFailures(ctx);
+  if (!detail) return '';
+  return [
+    'The previous tool, validation, or verification step failed, but this is recoverable. Do not answer the user with the raw failure.',
+    'Autonomously diagnose the output, read the named files if needed, edit the smallest affected area, and retry the failed step. Only call attempt_completion after the issue is resolved or the tool/turn budget is exhausted.',
+    '',
+    detail,
+  ].join('\n');
 }
 
 export function buildCodeSystemPrompt(projectName: string, instructionFiles: string[]): string {
@@ -315,6 +409,7 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '- Do not fabricate results or write markdown notes as a substitute for real code changes.',
     '- Reserve success=false for impossible, contradictory, or blocked tasks with exact evidence.',
     '- Do not call attempt_completion(success=true) after only a partial patch. If any part of the user request is unfinished, keep working or report success=false with the exact blocker.',
+    '- Never use attempt_completion to echo raw validation, lint, test, build, or verify output. Treat those failures as repair feedback: inspect the named files, fix the smallest affected area, and re-run the failed command.',
     '- Only edit files that the task requires. Avoid unrelated refactors or speculative abstractions.',
     '- Prefer the smallest change that correctly solves the problem.',
     '- Edits are checkpointed and can be restored if a change makes the result worse.',

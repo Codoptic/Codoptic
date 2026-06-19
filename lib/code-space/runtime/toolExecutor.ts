@@ -42,6 +42,18 @@ export interface LedgerEntry {
 export interface ToolExecutionResult {
   content: string;
   isError?: boolean;
+  /** Failed validation/test/lint commands are feedback for the agent, not terminal user errors. */
+  recoverable?: boolean;
+  command?: string;
+  artifactId?: string;
+}
+
+export interface RecoverableToolFailure {
+  tool: string;
+  command: string;
+  artifactId?: string;
+  output: string;
+  at: number;
 }
 
 export type EditFailureCode = 'SEARCH_NOT_FOUND' | 'SEARCH_NOT_UNIQUE' | 'SYNTAX_ERROR' | 'AST_PREVALIDATION_FAILED';
@@ -76,6 +88,8 @@ export interface CodeAgentContext {
   proposedLedger: Map<string, Pick<LedgerEntry, 'beforeContent' | 'afterContent' | 'existedBefore'>>;
   /** Recoverable edit_file failures per path — cleared when a working edit lands. */
   editFailures: Map<string, EditFailure[]>;
+  /** Recoverable failed validation/terminal commands that must be fixed and re-run before completion. */
+  recoverableFailures?: Map<string, RecoverableToolFailure>;
   /** Files the model has read this run. */
   readFiles: Set<string>;
   /** Artifacts produced during the run, keyed by artifactId. */
@@ -480,23 +494,23 @@ export class ToolExecutor {
         case 'write_plan_artifact':
           return this.writePlanArtifactTool(call, ctx);
         default:
-          return { content: `Unknown tool "${call.name}". Use one of the provided tools.`, isError: true };
+          return { content: `Unknown tool "${call.name}". Use one of the provided tools.`, isError: true, recoverable: true };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return { content: `Tool ${call.name} failed: ${message}`, isError: true };
+      return { content: `Tool ${call.name} failed: ${message}`, isError: true, recoverable: true };
     }
   }
 
   private async readFile(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const target = str(call.input.path);
-    if (!target) return { content: 'read_file requires "path".', isError: true };
+    if (!target) return { content: 'read_file requires "path".', isError: true, recoverable: true };
     const normalized = normalizeContextPath(target);
     // Overlay: if this run already proposed (but did not write) changes to this file, serve the
     // pending proposed content so the model stacks subsequent edits onto its own latest proposal.
     const proposed = ctx.proposedLedger.get(normalized);
     const content = proposed ? proposed.afterContent : await safeReadTextFile(ctx.root, target);
-    if (content == null) return { content: `File not found or unreadable: ${target}`, isError: true };
+    if (content == null) return { content: `File not found or unreadable: ${target}`, isError: true, recoverable: true };
     ctx.readFiles.add(normalized);
     await ctx.emitRuntime('file.read', { path: target });
     const lines = content.split('\n');
@@ -520,9 +534,9 @@ export class ToolExecutor {
       return { content: clip(matches.join('\n') || '(no files)') };
     }
     const dir = path.resolve(ctx.root, rel === '.' ? '' : rel);
-    if (dir !== ctx.root && !dir.startsWith(`${ctx.root}${path.sep}`)) return { content: 'Path escapes workspace root.', isError: true };
+    if (dir !== ctx.root && !dir.startsWith(`${ctx.root}${path.sep}`)) return { content: 'Path escapes workspace root.', isError: true, recoverable: true };
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
-    if (!entries) return { content: `Directory not found: ${rel}`, isError: true };
+    if (!entries) return { content: `Directory not found: ${rel}`, isError: true, recoverable: true };
     const listing = entries
       .filter((entry) => !['node_modules', '.git', '.next', 'dist', 'build'].includes(entry.name))
       .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
@@ -532,7 +546,7 @@ export class ToolExecutor {
 
   private async searchText(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const query = str(call.input.query);
-    if (!query) return { content: 'search_text requires "query".', isError: true };
+    if (!query) return { content: 'search_text requires "query".', isError: true, recoverable: true };
     const glob = str(call.input.glob);
     const contextLines = typeof call.input.contextLines === 'number' ? Math.max(0, Math.min(6, Math.floor(call.input.contextLines))) : 1;
     let rx: RegExp;
@@ -617,7 +631,7 @@ export class ToolExecutor {
 
   private async dependencyTrace(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const paths = Array.isArray(call.input.paths) ? call.input.paths.filter((p): p is string => typeof p === 'string') : [];
-    if (!paths.length) return { content: 'dependency_trace requires "paths".', isError: true };
+    if (!paths.length) return { content: 'dependency_trace requires "paths".', isError: true, recoverable: true };
     const candidates = await listRepositoryFiles(ctx.root);
     const trace = await traceDependencyEdges({ root: ctx.root, candidates, selected: paths });
     const edges = trace.edges.slice(0, 100).map((edge) => `${edge.reason}: ${edge.from} -> ${edge.to}`);
@@ -651,7 +665,7 @@ export class ToolExecutor {
     const decision = this.decide(registryToolName, ctx.autonomy);
     if (decision.permission !== 'auto') {
       await ctx.emitRuntime('tool.approval.required', { tool: registryToolName, command: [command.command, ...command.args].join(' '), reason: decision.reason });
-      return { content: `${registryToolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true };
+      return { content: `${registryToolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true, recoverable: true };
     }
     const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
     const artifact = await writeAgentArtifact({
@@ -668,6 +682,9 @@ export class ToolExecutor {
     return {
       content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`,
       isError: result.status === 'failed',
+      recoverable: registryToolName === 'run_validation_matrix' && result.status === 'failed',
+      command: result.command,
+      artifactId: artifact.artifactId,
     };
   }
 
@@ -675,7 +692,7 @@ export class ToolExecutor {
     const queries = Array.isArray(call.input.queries) ? call.input.queries.filter((query): query is string => typeof query === 'string' && query.trim().length > 0).slice(0, 4) : [];
     const urls = Array.isArray(call.input.urls) ? call.input.urls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).slice(0, 4) : [];
     const githubRepo = str(call.input.githubRepo);
-    if (!queries.length && !urls.length && !githubRepo) return { content: 'research_web requires at least one query, URL, or githubRepo.', isError: true };
+    if (!queries.length && !urls.length && !githubRepo) return { content: 'research_web requires at least one query, URL, or githubRepo.', isError: true, recoverable: true };
     const args = [this.toolScript('researcher', 'research.py')];
     for (const query of queries) args.push('--query', query);
     for (const url of urls) args.push('--url', url);
@@ -716,16 +733,16 @@ export class ToolExecutor {
 
   private async readArtifact(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const artifact = ctx.artifacts.get(str(call.input.artifactId));
-    if (!artifact) return { content: `Unknown artifactId: ${str(call.input.artifactId)}`, isError: true };
+    if (!artifact) return { content: `Unknown artifactId: ${str(call.input.artifactId)}`, isError: true, recoverable: true };
     const range = await readArtifactRange(artifact.path, Number(call.input.startLine) || 1, Number(call.input.endLine) || 80);
     return { content: clip(`${artifact.artifactId} (lines ${range.startLine}-${range.endLine} of ${range.lineCount}):\n${range.content}`) };
   }
 
   private async grepArtifactTool(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
     const artifact = ctx.artifacts.get(str(call.input.artifactId));
-    if (!artifact) return { content: `Unknown artifactId: ${str(call.input.artifactId)}`, isError: true };
+    if (!artifact) return { content: `Unknown artifactId: ${str(call.input.artifactId)}`, isError: true, recoverable: true };
     const pattern = str(call.input.pattern);
-    if (!pattern) return { content: 'grep_artifact requires "pattern".', isError: true };
+    if (!pattern) return { content: 'grep_artifact requires "pattern".', isError: true, recoverable: true };
     const result = await grepArtifact(artifact.path, pattern, typeof call.input.contextLines === 'number' ? call.input.contextLines : 3);
     const rendered = result.matches.map((match) => `L${match.line}: ${match.text}`).join('\n');
     return { content: clip(rendered || `No matches for "${pattern}" in ${artifact.artifactId}.`) };
@@ -742,7 +759,7 @@ export class ToolExecutor {
         reason: str(edit.reason) || 'Code edit',
       }))
       .filter((edit) => edit.path);
-    if (!edits.length) return { content: 'edit_file requires a non-empty "edits" array of {path, search, replace, reason}.', isError: true };
+    if (!edits.length) return { content: 'edit_file requires a non-empty "edits" array of {path, search, replace, reason}.', isError: true, recoverable: true };
 
     // Build current content per file. Overlay: when this run already proposed (but did not write)
     // changes to a file, baseline new edits off the latest proposed content so sequential proposals
@@ -779,6 +796,7 @@ export class ToolExecutor {
       return {
         content: buildEditFailureResponse('edit_file could not apply cleanly. Fix and retry:', grouped.diagnostics, currentFiles, edits, repeatedFailureCount),
         isError: true,
+        recoverable: true,
       };
     }
 
@@ -803,6 +821,7 @@ export class ToolExecutor {
           edits,
         ),
         isError: true,
+        recoverable: true,
       };
     }
 
@@ -963,7 +982,13 @@ export class ToolExecutor {
     const artifact = await writeAgentArtifact({ projectRoot: ctx.root, runId: ctx.runId, kind: 'terminal_log', content: result.output, summary: `${result.command}: ${result.status}` });
     ctx.artifacts.set(artifact.artifactId, artifact);
     const preview = result.output.length > MAX_TOOL_OUTPUT ? `${result.output.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; read full output via read_artifact id=${artifact.artifactId}]` : result.output;
-    return { content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`, isError: result.status === 'failed' };
+    return {
+      content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`,
+      isError: result.status === 'failed',
+      recoverable: result.status === 'failed' && isValidationLikeCommand(result.command, result.output),
+      command: result.command,
+      artifactId: artifact.artifactId,
+    };
   }
 
   private async restoreCheckpoint(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -1125,6 +1150,16 @@ async function recordPatchHistory(ctx: CodeAgentContext, patch: PatchHistoryEntr
 function writeThisMode(applyToDisk: boolean, filePath: string): PatchHistoryEntry['mode'] {
   if (filePath.startsWith('.agent/tests/')) return 'repaired';
   return applyToDisk ? 'applied' : 'proposed';
+}
+
+function isValidationLikeCommand(command: string, output: string): boolean {
+  const combined = `${command}\n${output}`;
+  return (
+    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:lint|test|typecheck|build|verify|check|compile|format)(?:\b|:)/i.test(command) ||
+    /\b(?:eslint|tsc|vitest|jest|mocha|pytest|ruff|mypy|go\s+test|cargo\s+test|cargo\s+check)\b/i.test(command) ||
+    /\b(?:error|warning)\s+['"`]?[^'"`\n]+['"`]?\s+(?:is\s+)?(?:defined|assigned|never|not|missing|unexpected|invalid)/i.test(combined) ||
+    /\b(?:prefer-const|no-unused-vars|@typescript-eslint\/|TS\d{4}|SyntaxError|TypeError|AssertionError)\b/i.test(combined)
+  );
 }
 
 function matchesGlob(file: string, glob: string): boolean {
