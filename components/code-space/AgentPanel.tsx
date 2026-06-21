@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import React, { useEffect, useMemo, useRef, useState, type FormEvent, type SetStateAction } from 'react';
 import { Bot, Check, ChevronRight, Copy, Edit3, ExternalLink, FileCode2, Layers3, Loader2, Mic, Paperclip, Settings, Share2, Sparkles, Zap } from 'lucide-react';
 import { addSessionTokens, estimateTokens } from '@/lib/code-space/tokenUsage';
 import { TokenUsageSpinbar } from './TokenUsageSpinbar';
@@ -50,6 +50,7 @@ interface AgentPanelProps {
   onRenameSession: (session: CodeSpaceAgentSession) => void;
   onDeleteSession: (session: CodeSpaceAgentSession) => void;
   onSubmitPrompt: (prompt: string, attachments?: SelectedMention[], options?: CodeSpacePromptOptions) => void;
+  onClarifyingAnswersChange?: React.Dispatch<SetStateAction<Record<string, string[]>>>;
   onEditPrompt: (messageId: string) => void;
   onCancelRun: () => void;
   onAcceptDiff: (diffId: string) => void;
@@ -240,6 +241,7 @@ export function AgentPanel({
   onRenameSession,
   onDeleteSession,
   onSubmitPrompt,
+  onClarifyingAnswersChange,
   onEditPrompt,
   onCancelRun,
   onAcceptDiff,
@@ -272,6 +274,7 @@ export function AgentPanel({
   const executionPolicyMeta = getCodeSpaceExecutionPolicyMeta(executionPolicy);
 
   const visiblePlanBuildStatus = session?.planMarkdown?.buildStatus ?? 'available';
+  const hasClarifyingQuestions = (session?.clarifyingQuestions?.length ?? 0) > 0;
   const agentTimeline = useMemo(
     () => buildAgentTimeline({ session, pendingDiffs, appliedDiffs }),
     [appliedDiffs, pendingDiffs, session],
@@ -507,7 +510,7 @@ export function AgentPanel({
       const tone = item.status === 'passed' ? 'text-[#56d364]' : item.status === 'failed' ? 'text-[#ff7b8a]' : 'text-[#c9a46a]';
       return (
         <div key={item.id} className="min-w-0 max-w-full overflow-hidden rounded-lg border border-[#303030] bg-[#131313] px-3 py-2">
-          <div className={`break-words text-[15px] font-semibold leading-6 ${tone}`}>
+        <div className={`break-words text-[12px] font-medium leading-3 ${tone}`}>
             {item.status} · {item.command}
           </div>
           {item.output ? <pre className="mt-1 max-h-28 max-w-full overflow-auto whitespace-pre-wrap break-words text-[11px] leading-5 text-[#8e8e93]">{item.output}</pre> : null}
@@ -556,7 +559,12 @@ export function AgentPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="space-y-2 border-b border-[#242424] px-2 py-2">
+        <div
+          className={`flex flex-col gap-2 border-b border-[#242424] px-2 py-2 ${
+            hasClarifyingQuestions ? 'min-h-0 flex-1 overflow-hidden' : 'shrink-0'
+          }`}
+        >
+        <div className="shrink-0">
         <SessionListSection
           sessions={sessions}
           activeSessionId={session?.id ?? null}
@@ -565,8 +573,17 @@ export function AgentPanel({
           onRenameSession={onRenameSession}
           onDeleteSession={onDeleteSession}
         />
-        <PlanClarificationPanel questions={session?.clarifyingQuestions ?? []} disabled={isRunning} onSubmitAnswers={onSubmitPrompt} />
-          <div className="flex items-center justify-between gap-3 px-1 text-[9px] uppercase tracking-[0.18em] text-[#6e7681]">
+        </div>
+        <div className={hasClarifyingQuestions ? 'min-h-0 flex-1' : undefined}>
+        <PlanClarificationPanel
+          questions={session?.clarifyingQuestions ?? []}
+          answers={session?.clarifyingQuestionAnswers ?? {}}
+          onAnswersChange={onClarifyingAnswersChange}
+          disabled={isRunning}
+          onSubmitAnswers={onSubmitPrompt}
+        />
+        </div>
+          <div className="flex shrink-0 items-center justify-between gap-3 px-1 text-[9px] uppercase tracking-[0.18em] text-[#6e7681]">
             <span className="truncate">{modeContract(agentMode)}</span>
             <span
               className={

@@ -22,19 +22,27 @@ const questions: CodeSpaceClarifyingQuestion[] = [
   },
 ];
 
+function TestHarness(props: Partial<React.ComponentProps<typeof PlanClarificationPanel>> = {}) {
+  const [answers, setAnswers] = React.useState<Record<string, string[]>>(props.answers ?? {});
+  const onSubmitAnswers = props.onSubmitAnswers ?? vi.fn();
+  return (
+    <PlanClarificationPanel
+      questions={props.questions ?? questions}
+      answers={answers}
+      onAnswersChange={setAnswers}
+      disabled={props.disabled ?? false}
+      onSubmitAnswers={onSubmitAnswers}
+    />
+  );
+}
+
 function renderPanel(props: Partial<React.ComponentProps<typeof PlanClarificationPanel>> = {}) {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   const onSubmitAnswers = props.onSubmitAnswers ?? vi.fn();
   act(() => {
-    root?.render(
-      <PlanClarificationPanel
-        questions={props.questions ?? questions}
-        disabled={props.disabled ?? false}
-        onSubmitAnswers={onSubmitAnswers}
-      />,
-    );
+    root?.render(<TestHarness {...props} onSubmitAnswers={onSubmitAnswers} />);
   });
   return { container, onSubmitAnswers };
 }

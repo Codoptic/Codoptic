@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type SetStateAction } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import {
@@ -47,6 +47,7 @@ import {
   type CodeSpaceEditorTab,
   type CodeSpaceMessage,
   type CodeSpaceProject,
+  type CodeSpaceSessionPendingDiff,
   type CodeSpaceTreeNode,
 } from '@/lib/code-space/core';
 import {
@@ -66,6 +67,8 @@ import {
     deleteCodeSpaceProject,
     deleteCodeSpaceSession,
     deleteCodeSpaceTab,
+  flushCodeSpaceSessionWrites,
+  mergeCodeSpaceSessions,
   readCodeSpacePreferences,
   readCodeSpaceProjects,
   readCodeSpaceSessions,
@@ -171,6 +174,34 @@ function buildPendingDiffFromEvent(event: {
     unifiedDiff: event.unifiedDiff,
     hunks: splitUnifiedDiffIntoHunks(event.unifiedDiff, event.oldContent, event.newContent),
     hunkStatus: {},
+  };
+}
+
+function toSessionPendingDiff(diff: CodeSpacePendingDiff): CodeSpaceSessionPendingDiff {
+  return {
+    diffId: diff.diffId,
+    filePath: diff.filePath,
+    oldContent: diff.oldContent,
+    newContent: diff.newContent,
+    deleted: diff.deleted,
+    explanation: diff.explanation,
+    unifiedDiff: diff.unifiedDiff,
+    hunks: diff.hunks,
+    hunkStatus: diff.hunkStatus,
+  };
+}
+
+function fromSessionPendingDiff(diff: CodeSpaceSessionPendingDiff): CodeSpacePendingDiff {
+  return {
+    diffId: diff.diffId,
+    filePath: diff.filePath,
+    oldContent: diff.oldContent,
+    newContent: diff.newContent,
+    deleted: diff.deleted,
+    explanation: diff.explanation,
+    unifiedDiff: diff.unifiedDiff,
+    hunks: diff.hunks,
+    hunkStatus: diff.hunkStatus,
   };
 }
 
@@ -290,6 +321,8 @@ function createSession(projectId: string | null, title = 'New coding session', m
     toolCalls: [],
     plan: [],
     clarifyingQuestions: [],
+    clarifyingQuestionAnswers: {},
+    pendingPanelDiffs: [],
     todos: [],
     changesets: [],
     verificationResults: [],
@@ -438,6 +471,8 @@ export function CodeSpaceWorkspace() {
   const applyingDiffIdsRef = useRef<Set<string>>(new Set());
   const executionPolicyRef = useRef<CodeSpaceExecutionPolicy>(executionPolicy);
   const diffDecorationIdsRef = useRef<string[]>([]);
+  const panelRestoreSessionIdRef = useRef<string | null>(null);
+  const skipPanelPersistRef = useRef(false);
 
   useEffect(() => {
     projectsRef.current = projects;
@@ -491,7 +526,7 @@ export function CodeSpaceWorkspace() {
           }
           return kept;
         });
-        setSessions((current) => mergeById(current, storedSessions));
+        setSessions((current) => mergeCodeSpaceSessions(current, storedSessions));
         setTabs((current) => mergeById(current, storedTabs));
         const firstProject = storedProjects[0];
         if (!preferences.activeProjectId && firstProject) {
@@ -573,6 +608,81 @@ export function CodeSpaceWorkspace() {
       void saveCodeSpaceSession(nextSession);
     }
   }, []);
+
+  // Restore agent-panel UI state when switching sessions or hydrating from IndexedDB.
+  useEffect(() => {
+    if (!activeSession) {
+      panelRestoreSessionIdRef.current = null;
+      return;
+    }
+    if (panelRestoreSessionIdRef.current === activeSession.id) return;
+    panelRestoreSessionIdRef.current = activeSession.id;
+    skipPanelPersistRef.current = true;
+    setPendingDiffs((activeSession.pendingPanelDiffs ?? []).map(fromSessionPendingDiff));
+    setAgentChangesets(activeSession.agentChangesets ?? []);
+    setDiffConfirmation(activeSession.diffConfirmation ?? null);
+    queueMicrotask(() => {
+      skipPanelPersistRef.current = false;
+    });
+  }, [activeSession]);
+
+  useEffect(() => {
+    if (skipPanelPersistRef.current || !activeSession) return;
+    patchSession(activeSession.id, (session) => {
+      const nextDiffs = pendingDiffs.map(toSessionPendingDiff);
+      const sameDiffs =
+        JSON.stringify(session.pendingPanelDiffs ?? []) === JSON.stringify(nextDiffs);
+      if (sameDiffs) return session;
+      return {
+        ...session,
+        pendingPanelDiffs: nextDiffs,
+        updatedAt: Date.now(),
+      };
+    });
+  }, [activeSession, patchSession, pendingDiffs]);
+
+  useEffect(() => {
+    if (skipPanelPersistRef.current || !activeSession) return;
+    patchSession(activeSession.id, (session) => {
+      const nextConfirmation = diffConfirmation ?? undefined;
+      if (JSON.stringify(session.diffConfirmation ?? null) === JSON.stringify(nextConfirmation ?? null)) {
+        return session;
+      }
+      return {
+        ...session,
+        diffConfirmation: nextConfirmation,
+        updatedAt: Date.now(),
+      };
+    });
+  }, [activeSession, diffConfirmation, patchSession]);
+
+  useEffect(() => {
+    const flush = () => {
+      void flushCodeSpaceSessionWrites();
+    };
+    window.addEventListener('pagehide', flush);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      window.removeEventListener('beforeunload', flush);
+    };
+  }, []);
+
+  const handleClarifyingAnswersChange = useCallback(
+    (updater: SetStateAction<Record<string, string[]>>) => {
+      if (!activeSession) return;
+      patchSession(activeSession.id, (session) => {
+        const current = session.clarifyingQuestionAnswers ?? {};
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        return {
+          ...session,
+          clarifyingQuestionAnswers: next,
+          updatedAt: Date.now(),
+        };
+      });
+    },
+    [activeSession, patchSession],
+  );
 
   const appendSessionMessage = useCallback(
     (sessionId: string, message: { id: string; role: CodeSpaceMessage['role']; content: string; createdAt: number }) => {
@@ -815,6 +925,9 @@ export function CodeSpaceWorkspace() {
       toolCalls: [],
       plan: [],
       clarifyingQuestions: [],
+      clarifyingQuestionAnswers: {},
+      pendingPanelDiffs: [],
+      diffConfirmation: undefined,
       todos: [],
       verificationResults: [],
       filesChanged: [],
@@ -831,6 +944,7 @@ export function CodeSpaceWorkspace() {
     updateSession(nextSession);
     setPendingDiffs([]);
     setAgentChangesets([]);
+    setDiffConfirmation(null);
     setPromptDraft(message.content);
     setPromptDraftVersion((version) => version + 1);
     if (activeProject) void refreshGitStatus(activeProject);
@@ -1886,6 +2000,9 @@ export function CodeSpaceWorkspace() {
       messages: [...session.messages, userMessage],
       toolCallCount: 0,
       clarifyingQuestions: [],
+      clarifyingQuestionAnswers: {},
+      pendingPanelDiffs: [],
+      diffConfirmation: undefined,
       runFeed: [],
       patchHistory: [],
       coverageLedger: undefined,
@@ -1906,6 +2023,7 @@ export function CodeSpaceWorkspace() {
     setAgentRunning(true);
     setTerminalStream('');
     setPendingDiffs([]);
+    setDiffConfirmation(null);
 
     // Root Cause vs Logic: the plan card used to keep its Build affordance forever because build completion was never
     // persisted on the session; track the build lifecycle here so the right sidebar can hide the action when done.
@@ -2184,6 +2302,9 @@ export function CodeSpaceWorkspace() {
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
                 clarifyingQuestions: event.questions,
+                clarifyingQuestionAnswers: {},
+                runtimePhase: 'awaiting_clarification',
+                status: 'waiting_review',
                 updatedAt: Date.now(),
               }));
             } else if (event.type === 'diff_confirmation_required') {
@@ -2485,6 +2606,9 @@ export function CodeSpaceWorkspace() {
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
                 clarifyingQuestions: event.questions,
+                clarifyingQuestionAnswers: {},
+                runtimePhase: 'awaiting_clarification',
+                status: 'waiting_review',
                 updatedAt: Date.now(),
               }));
             } else if (event.type === 'diff_confirmation_required') {
@@ -3633,6 +3757,7 @@ export function CodeSpaceWorkspace() {
             onRenameSession={renameSession}
             onDeleteSession={(session) => removeSessionRecord(session)}
             onSubmitPrompt={handleRunAgent}
+            onClarifyingAnswersChange={handleClarifyingAnswersChange}
             onEditPrompt={(messageId) => void handleEditPrompt(messageId)}
             onCancelRun={handleCancelRun}
             onAcceptDiff={(diffId) => void acceptPendingDiff(diffId)}

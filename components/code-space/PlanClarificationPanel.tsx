@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Check, HelpCircle, Send } from 'lucide-react';
 import type { CodeSpaceClarifyingQuestion } from '@/lib/code-space/core';
 
 interface PlanClarificationPanelProps {
   questions: CodeSpaceClarifyingQuestion[];
+  answers?: Record<string, string[]>;
+  onAnswersChange?: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
   disabled?: boolean;
   onSubmitAnswers: (prompt: string) => void;
 }
@@ -20,9 +22,13 @@ function formatAnswerPrompt(questions: CodeSpaceClarifyingQuestion[], answers: R
 }
 
 // Motivation vs Logic: Plan-mode clarifications are workflow controls, not chat prose. Keeping MCQs in a reusable sidebar panel lets the agent append targeted questions after scanning context while leaving the full planning document hidden until the final wrap-up.
-export function PlanClarificationPanel({ questions, disabled = false, onSubmitAnswers }: PlanClarificationPanelProps) {
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
-
+export function PlanClarificationPanel({
+  questions,
+  answers = {},
+  onAnswersChange,
+  disabled = false,
+  onSubmitAnswers,
+}: PlanClarificationPanelProps) {
   const allAnswered = useMemo(
     () => questions.length > 0 && questions.every((question) => (answers[question.id]?.length ?? 0) > 0),
     [answers, questions],
@@ -31,32 +37,33 @@ export function PlanClarificationPanel({ questions, disabled = false, onSubmitAn
   if (!questions.length) return null;
 
   const toggleChoice = (question: CodeSpaceClarifyingQuestion, choice: string) => {
-    if (disabled) return;
-    setAnswers((current) => {
-      const existing = current[question.id] ?? [];
-      const selected = existing.includes(choice);
-      const nextChoices = question.allowMultiple
-        ? selected
-          ? existing.filter((item) => item !== choice)
-          : [...existing, choice]
-        : selected
-          ? []
-          : [choice];
-      return { ...current, [question.id]: nextChoices };
-    });
+    if (disabled || !onAnswersChange) return;
+    const existing = answers[question.id] ?? [];
+    const selected = existing.includes(choice);
+    const nextChoices = question.allowMultiple
+      ? selected
+        ? existing.filter((item) => item !== choice)
+        : [...existing, choice]
+      : selected
+        ? []
+        : [choice];
+    onAnswersChange((current) => ({ ...current, [question.id]: nextChoices }));
   };
 
   return (
     <section
       data-testid="plan-clarification-panel"
-      className="rounded border border-[#30363d] bg-[#0f141b] p-2"
+      className="flex h-full min-h-0 max-h-full flex-col rounded border border-[#30363d] bg-[#0f141b] p-2"
       aria-label="Plan clarifying questions"
     >
-      <div className="mb-2 flex items-center gap-2 text-[10px] uppercase tracking-wider text-[#8b949e]">
+      <div className="mb-2 flex shrink-0 items-center gap-2 text-[10px] uppercase tracking-wider text-[#8b949e]">
         <HelpCircle size={12} className="text-[#d2a8ff]" />
         <span>Clarify Plan</span>
       </div>
-      <div className="space-y-3">
+      <div
+        data-testid="plan-clarification-questions"
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-0.5 max-h-[min(55vh,32rem)]"
+      >
         {questions.map((question, index) => {
           const selectedChoices = answers[question.id] ?? [];
           return (
@@ -105,7 +112,7 @@ export function PlanClarificationPanel({ questions, disabled = false, onSubmitAn
         type="button"
         disabled={disabled || !allAnswered}
         onClick={() => onSubmitAnswers(formatAnswerPrompt(questions, answers))}
-        className="mt-3 flex w-full items-center justify-center gap-1 rounded bg-[#8957e5] px-2 py-1.5 text-[10px] text-white hover:bg-[#a371f7] disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-3 flex w-full shrink-0 items-center justify-center gap-1 rounded bg-[#8957e5] px-2 py-1.5 text-[10px] text-white hover:bg-[#a371f7] disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Send size={11} />
         Send answers

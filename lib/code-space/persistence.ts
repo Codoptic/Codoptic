@@ -79,6 +79,27 @@ async function putInStore<T>(storeName: string, value: T): Promise<void> {
   });
 }
 
+const sessionSaveQueues = new Map<string, Promise<void>>();
+
+/** Prefer the newest session snapshot when hydrating from IndexedDB. */
+export function mergeCodeSpaceSessions(
+  current: CodeSpaceAgentSession[],
+  incoming: CodeSpaceAgentSession[],
+): CodeSpaceAgentSession[] {
+  const byId = new Map<string, CodeSpaceAgentSession>();
+  for (const session of [...current, ...incoming]) {
+    const existing = byId.get(session.id);
+    if (!existing || session.updatedAt >= existing.updatedAt) {
+      byId.set(session.id, session);
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function flushCodeSpaceSessionWrites(): Promise<void> {
+  await Promise.all([...sessionSaveQueues.values()]);
+}
+
 export function readCodeSpacePreferences(): CodeSpaceLayoutPreferences {
   if (typeof window === 'undefined') return {};
   try {
@@ -125,6 +146,8 @@ export async function readCodeSpaceSessions(): Promise<CodeSpaceAgentSession[]> 
       ...session,
       mode: session.mode === 'fresh-start' ? 'fresh-start' : normalizeCodeSpaceAgentMode(session.mode),
       clarifyingQuestions: session.clarifyingQuestions ?? [],
+      clarifyingQuestionAnswers: session.clarifyingQuestionAnswers ?? {},
+      pendingPanelDiffs: session.pendingPanelDiffs ?? [],
       runFeed: session.runFeed ?? [],
       patchHistory: session.patchHistory ?? [],
     }))
@@ -132,7 +155,12 @@ export async function readCodeSpaceSessions(): Promise<CodeSpaceAgentSession[]> 
 }
 
 export async function saveCodeSpaceSession(session: CodeSpaceAgentSession): Promise<void> {
-  await putInStore(SESSION_STORE, session);
+  const previous = sessionSaveQueues.get(session.id) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => putInStore(SESSION_STORE, session));
+  sessionSaveQueues.set(session.id, next);
+  await next;
 }
 
 export async function deleteCodeSpaceSession(sessionId: string): Promise<void> {

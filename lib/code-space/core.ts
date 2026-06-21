@@ -188,6 +188,37 @@ export interface CodeSpaceClarifyingQuestion {
   options?: Array<{ label: string; description?: string }>;
 }
 
+/** Serializable pending diff stored on the agent session so review cards survive reload. */
+export interface CodeSpaceSessionPendingDiff {
+  diffId: string;
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+  deleted?: boolean;
+  explanation?: string;
+  unifiedDiff?: string;
+  hunks: Array<{
+    id: string;
+    index: number;
+    header: string;
+    oldStart: number;
+    oldCount: number;
+    newStart: number;
+    newCount: number;
+    lines: string[];
+  }>;
+  hunkStatus: Record<string, 'accepted' | 'rejected'>;
+}
+
+export interface CodeSpaceSessionDiffConfirmation {
+  sessionId: string;
+  runId: string;
+  files: Array<{ path: string; deleted: boolean; unifiedDiff: string }>;
+  unifiedDiff: string;
+  isGit: boolean;
+  summary: string;
+}
+
 export interface CodeSpaceChangesetFile {
   path: string;
   status: 'added' | 'modified' | 'deleted' | 'renamed';
@@ -218,6 +249,12 @@ export interface CodeSpaceAgentSession {
   toolCalls: CodeSpaceToolCall[];
   plan: string[];
   clarifyingQuestions: CodeSpaceClarifyingQuestion[];
+  /** In-progress MCQ selections keyed by question id — restored after refresh. */
+  clarifyingQuestionAnswers?: Record<string, string[]>;
+  /** Pending patch review cards shown in the agent panel. */
+  pendingPanelDiffs?: CodeSpaceSessionPendingDiff[];
+  /** Pre-validation diff gate awaiting user confirm/cancel. */
+  diffConfirmation?: CodeSpaceSessionDiffConfirmation;
   planMarkdown?: {
     filePath: string;
     content: string;
