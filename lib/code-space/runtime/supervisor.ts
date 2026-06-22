@@ -16,6 +16,8 @@ export interface SupervisorInput {
   validationRuns: ValidationRunResult[];
   unresolvedEditFailures: string;
   subagentResults?: SubagentResult[];
+  delegationRequired?: boolean;
+  delegationReconciled?: boolean;
   implementationContract?: ImplementationContract;
 }
 
@@ -59,6 +61,9 @@ export class Supervisor {
     const failedSubagents = (input.subagentResults ?? []).filter((result) => !result.success);
     if (failedSubagents.length) {
       blockers.push(`Subagent(s) reported failure: ${failedSubagents.map((result) => result.role).join(', ')}.`);
+    }
+    if (input.delegationRequired && !input.delegationReconciled) {
+      blockers.push('Automatic subagent delegation was required but not reconciled by the parent agent.');
     }
 
     blockers.push(...contractBlockers(input.implementationContract));

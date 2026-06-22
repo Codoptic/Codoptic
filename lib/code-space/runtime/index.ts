@@ -6,6 +6,8 @@ export * from './events';
 export * from './gitManager';
 export * from './ids';
 export * from './instructionLoader';
+export * from './delegationPlanner';
+export * from './memoryManager';
 export * from './permissionManager';
 export * from './planningEngine';
 export * from './projectManager';

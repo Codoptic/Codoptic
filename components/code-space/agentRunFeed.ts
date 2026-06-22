@@ -32,6 +32,73 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
     };
   }
   if (event.type === 'run_feed_entry') return event.entry;
+  if (event.type === 'structured_event') {
+    const structuredType = event.event.type;
+    const payload = event.event.payload as Record<string, unknown> | undefined;
+    if (structuredType === 'subagent.plan.created') {
+      const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+      return {
+        id: `feed:delegation:plan:${event.event.id}`,
+        kind: 'progress',
+        title: `Delegation plan created (${tasks.length} subagent${tasks.length === 1 ? '' : 's'})`,
+        detail: Array.isArray(payload?.reasons) ? payload.reasons.join('; ') : undefined,
+        status: 'running',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'subagent.started') {
+      return {
+        id: `feed:delegation:${event.event.id}`,
+        kind: 'progress',
+        title: `Subagent started: ${String(payload?.role ?? 'helper')}`,
+        detail: typeof payload?.task === 'string' ? payload.task.slice(0, 240) : undefined,
+        status: 'running',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'subagent.completed') {
+      const success = payload?.success !== false;
+      return {
+        id: `feed:delegation:${event.event.id}`,
+        kind: 'review',
+        title: `Subagent ${success ? 'completed' : 'failed'}: ${String(payload?.role ?? 'helper')}`,
+        detail: typeof payload?.summary === 'string' ? payload.summary : undefined,
+        status: success ? 'success' : 'warning',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'subagent.reconciled') {
+      const reconciled = payload?.reconciled !== false;
+      return {
+        id: `feed:delegation:reconciled:${event.event.id}`,
+        kind: 'review',
+        title: reconciled ? 'Delegation reconciled' : 'Delegation needs review',
+        status: reconciled ? 'success' : 'warning',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'memory.loaded') {
+      const paths = Array.isArray(payload?.paths) ? payload.paths : [];
+      return {
+        id: `feed:memory:loaded:${event.event.id}`,
+        kind: 'progress',
+        title: paths.length ? `Loaded ${paths.length} project memor${paths.length === 1 ? 'y' : 'ies'}` : 'No project memories loaded',
+        detail: paths.map(String).join(', '),
+        status: 'success',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'memory.update.proposed') {
+      return {
+        id: `feed:memory:update:${event.event.id}`,
+        kind: 'review',
+        title: `Memory update proposed: ${String(payload?.path ?? 'memory')}`,
+        detail: typeof payload?.reason === 'string' ? payload.reason : undefined,
+        status: 'pending',
+        createdAt: event.event.createdAt,
+      };
+    }
+  }
   if (event.type === 'tool_start') {
     return {
       id: `feed:tool:${event.toolCallId}`,
@@ -156,6 +223,9 @@ function describeTool(tool: string, input: unknown): string {
   if (tool === 'search_text') return 'Searching repository';
   if (tool === 'edit_file') return 'Preparing code patch';
   if (tool === 'run_command') return 'Running terminal command';
+  if (tool === 'list_memories') return 'Listing project memories';
+  if (tool === 'read_memory') return 'Reading project memory';
+  if (tool === 'propose_memory_update') return 'Proposing memory update';
   return tool.replace(/_/g, ' ');
 }
 

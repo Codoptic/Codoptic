@@ -54,6 +54,8 @@ import {
   createImplementationContract,
   summarizeContract,
 } from './implementationContract';
+import { MemoryManager, type MemoryContext } from './memoryManager';
+import { DelegationPlanner, toSubagentRequest, type DelegationReport } from './delegationPlanner';
 
 export const ResumeValidationRequestSchema = z.object({
   runId: z.string(),
@@ -107,6 +109,8 @@ export class AgentRuntime {
     private readonly validation = new ValidationRunner(),
     private readonly repairLoop = new RepairLoop(),
     private readonly events: EventStore = getEventStore(),
+    private readonly memories = new MemoryManager(),
+    private readonly delegation = new DelegationPlanner(),
   ) {}
 
   async run(request: AgentRuntimeRequest, emit: AgentRuntimeEmit, signal?: AbortSignal): Promise<void> {
@@ -144,12 +148,20 @@ export class AgentRuntime {
       const loadedInstructions = await emitTool(emit, emitRuntime, 'load_project_rules', { buildPlanPath }, async () =>
         this.instructions.loadProjectInstructions(root, buildPlanPath),
       );
+      const memoryContext = await emitTool(emit, emitRuntime, 'load_project_memories', { root: 'memories' }, async () =>
+        this.memories.collectRelevant(root, prompt),
+      );
+      await emitRuntime('memory.loaded', {
+        paths: memoryContext.entries.map((entry) => entry.path),
+        recommendedFiles: memoryContext.recommendedFiles,
+      });
 
       await setPhase('mapping_repository');
+      await this.ensureKnowledgeGraph(root, request.projectName, emit, emitRuntime);
       await setPhase('gathering_context');
       // Knowledge-graph context reuse: a previously built graph biases file selection toward the
-      // repository's architectural hubs (god nodes). First runs have no cache, so this is empty
-      // until the graph is built below; subsequent runs benefit automatically.
+      // repository's architectural hubs (god nodes). The project-level cache is refreshed before
+      // context gathering so subsequent sessions and modes all reuse the same current map.
       const cachedGraph = await loadKnowledgeGraph(root);
       const structuralSignals = cachedGraph ? knowledgeGraphSignals(cachedGraph) : undefined;
       const context = await emitTool(emit, emitRuntime, 'context_graph', { openTabs: request.openTabs, attachments: request.attachments, mode }, async () =>
@@ -186,11 +198,10 @@ export class AgentRuntime {
         return;
       }
       if (mode === 'plan') {
-        await this.ensureKnowledgeGraph(root, request.projectName, emit, emitRuntime);
-        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, signal);
+        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, signal);
         return;
       }
-      await this.finishCode(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, signal);
+      await this.finishCode(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, signal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await setPhase('failed', { message });
@@ -200,9 +211,9 @@ export class AgentRuntime {
   }
 
   /**
-   * Build the project knowledge graph on the first Plan run (cached and reused thereafter), then
+   * Build the project knowledge graph on the first run (cached and reused thereafter), then
    * emit a `knowledge_graph_ready` event so the UI can surface the "Knowledge graph" link + modal.
-   * The build uses the offline AST/regex pipeline; failures are non-fatal to the plan run.
+   * The build uses the offline AST/regex pipeline; failures are non-fatal to the agent run.
    */
   private async ensureKnowledgeGraph(
     root: string,
@@ -212,8 +223,8 @@ export class AgentRuntime {
   ): Promise<void> {
     try {
       let metadata: KnowledgeGraphMetadata | null = await knowledgeGraphMetadata(root);
-      if (!metadata) {
-        await emitRuntime('knowledge_graph.building', { root });
+      if (!metadata || metadata.stale) {
+        await emitRuntime('knowledge_graph.building', { root, stale: Boolean(metadata?.stale) });
         metadata = await buildKnowledgeGraph(root, { maxFiles: 4000, timeoutMs: 90_000 });
       }
       const viewUrl = `/api/code-space/knowledge-graph/view?root=${encodeURIComponent(root)}`;
@@ -235,6 +246,49 @@ export class AgentRuntime {
     } catch (error) {
       await emitRuntime('knowledge_graph.failed', { message: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  private async runAutomaticDelegation(params: {
+    prompt: string;
+    context: ContextGraphResult;
+    validationCommands: TerminalCommand[];
+    subagentRunner: SubagentRunner;
+    emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
+  }): Promise<DelegationReport> {
+    const plan = this.delegation.plan({
+      prompt: params.prompt,
+      context: params.context,
+      validationCommands: params.validationCommands,
+      mode: 'code',
+    });
+    const results: DelegationReport['results'] = [];
+    if (!plan.required) return { plan, results, reconciled: true };
+
+    await params.emitRuntime('subagent.plan.created', {
+      reasons: plan.reasons,
+      tasks: plan.tasks.map((task) => ({ id: task.id, role: task.role, reason: task.reason, readOnly: task.readOnly })),
+    });
+
+    for (const task of plan.tasks) {
+      try {
+        results.push(await params.subagentRunner.spawn(toSubagentRequest(task)));
+      } catch (error) {
+        results.push({
+          role: task.role,
+          summary: error instanceof Error ? error.message : String(error),
+          success: false,
+          toolCalls: 0,
+        });
+      }
+    }
+
+    const reconciled = results.length === plan.tasks.length;
+    await params.emitRuntime('subagent.reconciled', {
+      required: plan.required,
+      reconciled,
+      results: results.map((result) => ({ role: result.role, success: result.success, summary: result.summary })),
+    });
+    return { plan, results, reconciled };
   }
 
   private async finishAsk(
@@ -272,6 +326,7 @@ export class AgentRuntime {
     todos: string[],
     loadedInstructions: LoadedInstruction[],
     sufficiency: ContextSufficiencyReport,
+    memoryContext: MemoryContext,
     signal?: AbortSignal,
   ) {
     const credentials = await resolveProviderCredentials(root, request);
@@ -326,6 +381,7 @@ export class AgentRuntime {
         clarificationAnswers,
         request.model,
         ambiguity,
+        memoryContext,
       ),
     );
 
@@ -405,6 +461,7 @@ export class AgentRuntime {
     todos: string[],
     loadedInstructions: LoadedInstruction[],
     sufficiency: ContextSufficiencyReport,
+    memoryContext: MemoryContext,
     signal?: AbortSignal,
   ) {
     const credentials = await resolveProviderCredentials(root, request);
@@ -448,6 +505,7 @@ export class AgentRuntime {
       readFiles: new Set(context.files.map((file) => file.path)),
       artifacts: new Map(),
       checkpoints: [],
+      memoryUpdateProposals: [],
       registry: createDefaultToolRegistry(),
       permission: new PermissionManager(),
       terminal: new TerminalRunner(),
@@ -473,11 +531,27 @@ export class AgentRuntime {
 
     const subagentRunner = new SubagentRunner(ctx, session, request.projectName);
     ctx.spawnSubagent = (subRequest) => subagentRunner.spawn(subRequest);
+    const delegationReport = await this.runAutomaticDelegation({
+      prompt,
+      context,
+      validationCommands,
+      subagentRunner,
+      emitRuntime,
+    });
 
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
       buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path)),
-      await buildCodeSeedMessage(root, prompt, context, validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })), sufficiency, request.model),
+      await buildCodeSeedMessage(
+        root,
+        prompt,
+        context,
+        validationCommands.map((command) => ({ command: command.command, args: command.args, reason: command.reason })),
+        sufficiency,
+        request.model,
+        memoryContext,
+        delegationReport,
+      ),
     );
 
     let loopResult = await loop.run(ctx, loopOptions);
@@ -656,6 +730,7 @@ export class AgentRuntime {
       loop,
       loopOptions,
       subagentRunner,
+      delegationReport,
       loopSummary: tightenedGateSummary,
       emit,
       emitRuntime,
@@ -678,6 +753,7 @@ export class AgentRuntime {
     loop: CodeAgentLoop;
     loopOptions: CodeAgentLoopOptions;
     subagentRunner: SubagentRunner;
+    delegationReport?: DelegationReport;
     loopSummary?: string;
     emit: AgentRuntimeEmit;
     emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
@@ -739,7 +815,9 @@ export class AgentRuntime {
       coherence: finalCoherence.findings,
       validationRuns,
       unresolvedEditFailures: formatUnresolvedEditFailures(ctx),
-      subagentResults: testScripts.result ? [testScripts.result] : [],
+      subagentResults: [...(params.delegationReport?.results ?? []), ...(testScripts.result ? [testScripts.result] : [])],
+      delegationRequired: params.delegationReport?.plan.required,
+      delegationReconciled: params.delegationReport ? params.delegationReport.reconciled : true,
       implementationContract: ctx.implementationContract,
     });
     emit({ type: 'supervisor_verdict', status: verdict.status, blockers: verdict.blockers });

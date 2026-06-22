@@ -14,6 +14,7 @@ import {
   type PromptAmbiguityReport,
 } from './workflowPolicy';
 import { allocateContextBudget, formatEvidenceBody } from './contextWindowManager';
+import { formatMemoryContext, type MemoryContext } from './memoryManager';
 
 /** Terminal tools unique to Plan mode. They signal completion via CodeAgentContext fields. */
 const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
@@ -142,6 +143,7 @@ export async function buildPlanSeedMessage(
   clarificationAnswers?: string,
   model = '',
   ambiguity?: PromptAmbiguityReport,
+  memoryContext?: MemoryContext,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
@@ -168,6 +170,8 @@ export async function buildPlanSeedMessage(
     '',
     'Internal execution policy for the coding agent (do not copy this into the plan markdown):',
     formatWorkflowDodMarkdown(),
+    '',
+    memoryContext ? formatMemoryContext(memoryContext) : 'Project memories: not loaded.',
     '',
     'Validation commands detected in this repository:',
     validation,

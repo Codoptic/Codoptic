@@ -74,4 +74,17 @@ describe('Supervisor.reconcile', () => {
     expect(verdict.status).toBe('needs_review');
     expect(verdict.blockers.join(' ')).toMatch(/subagent/i);
   });
+
+  it('blocks when required delegation was not reconciled', () => {
+    const verdict = supervisor.reconcile({
+      ledgerSize: 1,
+      coherence: [],
+      validationRuns: [passing('x')],
+      unresolvedEditFailures: '',
+      delegationRequired: true,
+      delegationReconciled: false,
+    });
+    expect(verdict.status).toBe('needs_review');
+    expect(verdict.blockers.join(' ')).toMatch(/delegation/i);
+  });
 });

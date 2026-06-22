@@ -45,7 +45,9 @@ The mode selector in the agent panel mirrors this directly, so you choose how fa
 The runtime is intentionally structured rather than monolithic. In broad terms, a run does the following:
 
 - Collects project context from the selected repository and the open tabs.
+- Loads bounded durable project memories from `/memories/` when they exist.
 - Detects useful validation commands from the project stack.
+- Automatically delegates complex Code-mode runs to a small set of isolated read-only subagents.
 - Streams assistant output back into the UI as the run progresses.
 - Builds a visible plan and TODO list so the work can be tracked step by step.
 - Emits tool calls and patch proposals into the agent panel.
@@ -76,6 +78,23 @@ Two gates make the loop trustworthy:
 On the first Plan run for a project, Code Space builds a code knowledge graph (an offline AST/import-graph pipeline under [`tools/graphify/`](../tools/graphify)) and caches it in `.codoptic-cache/knowledge-graph/`. The graph is reused on later runs to bias context selection toward the repository's central modules ("god nodes").
 
 A **Knowledge graph** link above the chat opens an interactive vis.js map of the codebase. An optional Foundry semantic pass can annotate central files, but the code graph always works offline.
+
+## Automatic Delegation
+
+Complex Code-mode tasks now get an explicit delegation phase after context sufficiency is assessed and before the parent coding loop edits files. The runtime can spawn up to three isolated subagents for independent repo exploration, documentation/convention reading, and critique or validation-risk review.
+
+These automatic subagents are read-only. They share the workspace root and event stream, but they run with fresh context windows and cannot recursively spawn more subagents. Their findings are injected back into the parent agent's prompt, surfaced in the run feed, and reconciled before the supervisor can mark the run verified. The existing test-writer subagent still runs later in validation and is limited to `.agent/tests/<runId>/`.
+
+## Project Memories
+
+Durable project memory lives in `/memories/`, separate from derived caches such as `.codoptic-cache/knowledge-graph/`. Recommended files are:
+
+- `memories/user-preferences.md`
+- `memories/project-context.md`
+- `memories/research-notes.md`
+- `memories/decisions.md`
+
+At run start, Code Space loads a bounded, relevant subset of these files and cites their paths in the prompt. Agents can list and read memories with safe tools. Memory updates are proposed through `propose_memory_update`; the runtime records the proposal but does not silently write memory files.
 
 ## Why It Feels Different
 

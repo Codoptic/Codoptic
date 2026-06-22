@@ -19,6 +19,8 @@ import {
   type ContextSufficiencyReport,
 } from './workflowPolicy';
 import { allocateContextBudget, compressMessageHistory, formatEvidenceBody, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
+import { formatMemoryContext, type MemoryContext } from './memoryManager';
+import { formatDelegationReport, type DelegationReport } from './delegationPlanner';
 
 export interface CodeAgentLoopResult {
   /** attempt_completion was called (the model declared the task done). */
@@ -254,7 +256,7 @@ export class CodeAgentLoop {
           toolResults.push({
             toolCallId: call.id,
             isError: true,
-            content: `Cannot complete: a tool, validation, or verification step failed and is still recoverable. Replan from the output, edit the smallest affected area if needed, and retry the failed step before attempt_completion:\n${recoverableDetail}`,
+            content: `Cannot complete: a validation or verification command failed and is still recoverable. Replan from the output, edit the smallest affected area if needed, and retry the failed step before attempt_completion:\n${recoverableDetail}`,
           });
           continue;
         }
@@ -345,6 +347,7 @@ function recoverableFailureMap(ctx: CodeAgentContext): Map<string, RecoverableTo
 }
 
 function updateRecoverableToolFailures(ctx: CodeAgentContext, tool: string, result: ToolExecutionResult): void {
+  if (tool === 'edit_file') return;
   const failures = recoverableFailureMap(ctx);
   if (result.isError && result.recoverable) {
     const command = result.command || tool;
@@ -360,6 +363,9 @@ function updateRecoverableToolFailures(ctx: CodeAgentContext, tool: string, resu
 
   if (!result.isError && result.command) {
     failures.delete(result.command);
+  }
+  if (!result.isError && tool === 'edit_file') {
+    failures.delete('edit_file');
   }
   if (!result.isError && tool === 'run_validation_matrix') {
     failures.clear();
@@ -449,6 +455,8 @@ export async function buildCodeSeedMessage(
   validationCommands: Array<{ command: string; args: string[]; reason: string }>,
   sufficiency?: ContextSufficiencyReport,
   model = '',
+  memoryContext?: MemoryContext,
+  delegationReport?: DelegationReport,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
@@ -475,6 +483,10 @@ export async function buildCodeSeedMessage(
     '',
     'Definition of Done for this implementation run:',
     formatWorkflowDodMarkdown(),
+    '',
+    memoryContext ? formatMemoryContext(memoryContext) : 'Project memories: not loaded.',
+    '',
+    formatDelegationReport(delegationReport),
     '',
     'Completion gate before attempt_completion(success=true):',
     '- Re-read the Task above and verify the final diff satisfies the complete original request, not just the first obvious subtask.',

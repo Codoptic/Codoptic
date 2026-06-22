@@ -26,6 +26,7 @@ import { buildAgentTimeline, type AgentTimelineItem } from './agentTimeline';
 interface AgentPanelProps {
   session: CodeSpaceAgentSession | null;
   sessions: CodeSpaceAgentSession[];
+  projectKnowledgeGraph?: CodeSpaceAgentSession['knowledgeGraph'] | null;
   activeProjectName?: string;
   isRunning: boolean;
   toolBudget: number;
@@ -224,6 +225,7 @@ function modeContract(mode: CodeSpaceAgentMode) {
 export function AgentPanel({
   session,
   sessions,
+  projectKnowledgeGraph,
   activeProjectName,
   isRunning,
   pendingDiffs,
@@ -275,6 +277,7 @@ export function AgentPanel({
 
   const visiblePlanBuildStatus = session?.planMarkdown?.buildStatus ?? 'available';
   const hasClarifyingQuestions = (session?.clarifyingQuestions?.length ?? 0) > 0;
+  const visibleKnowledgeGraph = projectKnowledgeGraph ?? session?.knowledgeGraph ?? null;
   const agentTimeline = useMemo(
     () => buildAgentTimeline({ session, pendingDiffs, appliedDiffs }),
     [appliedDiffs, pendingDiffs, session],
@@ -535,11 +538,11 @@ export function AgentPanel({
             {activeProjectName}
           </span>
         ) : null}
-        {session?.knowledgeGraph ? (
+        {visibleKnowledgeGraph ? (
           <button
             type="button"
             onClick={onOpenKnowledgeGraph}
-            title={`${session.knowledgeGraph.nodeCount} files · ${session.knowledgeGraph.edgeCount} import edges`}
+            title={`${visibleKnowledgeGraph.nodeCount} files · ${visibleKnowledgeGraph.edgeCount} import edges`}
             className="inline-flex items-center gap-1 rounded-full border border-[#2ea04366] bg-[#2ea04322] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-[#56d364] hover:bg-[#2ea04333]"
           >
             <Share2 size={10} />

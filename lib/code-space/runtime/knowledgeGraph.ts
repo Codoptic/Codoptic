@@ -17,6 +17,55 @@ const execFileAsync = promisify(execFile);
 
 export const KNOWLEDGE_GRAPH_DIR = '.codoptic-cache/knowledge-graph';
 
+const SOURCE_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+  '.py',
+  '.go',
+  '.rs',
+  '.java',
+  '.rb',
+  '.php',
+  '.json',
+  '.jsonc',
+  '.yml',
+  '.yaml',
+  '.css',
+  '.scss',
+  '.sass',
+  '.less',
+  '.html',
+  '.md',
+  '.mdx',
+  '.rst',
+  '.txt',
+]);
+
+const IGNORE_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.codoptic-cache',
+  '__pycache__',
+  '.venv',
+  'venv',
+  'env',
+  '.turbo',
+  '.cache',
+  'vendor',
+  '.idea',
+  '.vscode',
+  'graphify-out',
+]);
+
 export interface KnowledgeGraphNode {
   id: string;
   path: string;
@@ -45,6 +94,7 @@ export interface KnowledgeGraphMetadata {
   edgeCount: number;
   communityCount: number;
   generatedAt: number;
+  stale?: boolean;
 }
 
 export interface BuildKnowledgeGraphOptions {
@@ -96,16 +146,69 @@ export async function knowledgeGraphMetadata(root: string): Promise<KnowledgeGra
     edgeCount: graph.metrics.edgeCount,
     communityCount: graph.metrics.communityCount,
     generatedAt: graph.generatedAt,
+    stale: await isKnowledgeGraphStale(root, graph.generatedAt),
   };
+}
+
+async function latestProjectSourceMtime(root: string, maxFiles = 6000): Promise<number> {
+  let latest = 0;
+  let scanned = 0;
+
+  async function walk(dir: string): Promise<void> {
+    if (scanned >= maxFiles) return;
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (scanned >= maxFiles) return;
+      if (entry.isDirectory()) {
+        if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        await walk(path.join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!SOURCE_EXTENSIONS.has(ext)) continue;
+      scanned += 1;
+      try {
+        const stat = await fs.stat(path.join(dir, entry.name));
+        latest = Math.max(latest, stat.mtimeMs);
+      } catch {
+        // Ignore files deleted while scanning.
+      }
+    }
+  }
+
+  await walk(root);
+  return latest;
+}
+
+export async function isKnowledgeGraphStale(root: string, generatedAt: number): Promise<boolean> {
+  const latestMtime = await latestProjectSourceMtime(root);
+  return latestMtime > generatedAt;
 }
 
 /**
  * Run the vendored Graphify pipeline as a subprocess. Code extraction is offline; the optional
  * semantic pass is enabled with `semantic` + Foundry credentials and is best-effort inside Python.
  */
-export async function buildKnowledgeGraph(root: string, options: BuildKnowledgeGraphOptions = {}): Promise<KnowledgeGraphMetadata> {
+export async function buildKnowledgeGraph(
+  root: string,
+  options: BuildKnowledgeGraphOptions = {},
+): Promise<KnowledgeGraphMetadata> {
   const { dir } = knowledgeGraphPaths(root);
-  const args = [builderScriptPath(), '--root', root, '--out', dir, '--max-files', String(options.maxFiles ?? 4000)];
+  const args = [
+    builderScriptPath(),
+    '--root',
+    root,
+    '--out',
+    dir,
+    '--max-files',
+    String(options.maxFiles ?? 4000),
+  ];
   if (options.semantic) args.push('--semantic');
   const env = { ...process.env };
   if (options.foundry?.apiKey) env.FOUNDRY_API_KEY = options.foundry.apiKey;
@@ -119,8 +222,15 @@ export async function buildKnowledgeGraph(root: string, options: BuildKnowledgeG
     maxBuffer: 1024 * 1024 * 32,
   });
   const lastLine = stdout.trim().split(/\r?\n/).pop() ?? '{}';
-  const result = JSON.parse(lastLine) as { ok?: boolean; error?: string; nodeCount?: number; edgeCount?: number; communityCount?: number };
-  if (!result.ok) throw new Error(`Knowledge graph build failed: ${result.error ?? 'unknown error'}`);
+  const result = JSON.parse(lastLine) as {
+    ok?: boolean;
+    error?: string;
+    nodeCount?: number;
+    edgeCount?: number;
+    communityCount?: number;
+  };
+  if (!result.ok)
+    throw new Error(`Knowledge graph build failed: ${result.error ?? 'unknown error'}`);
   return {
     nodeCount: result.nodeCount ?? 0,
     edgeCount: result.edgeCount ?? 0,
@@ -133,7 +243,9 @@ export async function buildKnowledgeGraph(root: string, options: BuildKnowledgeG
  * Convert a cached knowledge graph into context structural signals (same shape the context engine
  * consumes). God nodes and high-degree hubs get the strongest, capped boost.
  */
-export function knowledgeGraphSignals(graph: KnowledgeGraph): Array<{ path: string; weight: number; reason: string }> {
+export function knowledgeGraphSignals(
+  graph: KnowledgeGraph,
+): Array<{ path: string; weight: number; reason: string }> {
   const maxDegree = graph.nodes.reduce((max, node) => Math.max(max, node.degree), 0) || 1;
   const signals: Array<{ path: string; weight: number; reason: string }> = [];
   for (const node of graph.nodes) {
@@ -144,7 +256,9 @@ export function knowledgeGraphSignals(graph: KnowledgeGraph): Array<{ path: stri
     signals.push({
       path: node.path,
       weight,
-      reason: node.isGod ? `knowledge-graph god node (degree ${node.degree})` : `knowledge-graph hub (degree ${node.degree})`,
+      reason: node.isGod
+        ? `knowledge-graph god node (degree ${node.degree})`
+        : `knowledge-graph hub (degree ${node.degree})`,
     });
   }
   return signals.sort((a, b) => b.weight - a.weight || a.path.localeCompare(b.path)).slice(0, 40);

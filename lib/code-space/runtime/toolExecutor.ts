@@ -31,6 +31,7 @@ import { traceDependencyEdges } from './dependencyTrace';
 import { listRepositoryFiles, normalizeContextPath, safeReadTextFile } from './repoMap';
 import { hashContent } from './patchReview';
 import { addPatchCoverage } from './implementationContract';
+import { MemoryManager, normalizeMemoryPath } from './memoryManager';
 
 export interface LedgerEntry {
   beforeContent: string;
@@ -102,6 +103,8 @@ export interface CodeAgentContext {
   planArtifactRequest?: { planMarkdown: string; summary: string; inspectedFiles: string[]; status: 'ready' | 'needs_review' };
   /** Code mode: spawn an isolated subagent (wired by the runtime). Absent in subagent contexts. */
   spawnSubagent?: (request: SubagentSpawnRequest) => Promise<SubagentResult>;
+  /** Durable memory update proposals captured during this run; never written directly. */
+  memoryUpdateProposals?: Array<{ path: string; content: string; reason: string }>;
   registry: ToolRegistry;
   permission: PermissionManager;
   terminal: TerminalRunner;
@@ -213,6 +216,21 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
     name: 'grep_artifact',
     description: 'Search inside a stored artifact by artifactId without loading it fully into context.',
     inputSchema: { type: 'object', properties: { artifactId: { type: 'string' }, pattern: { type: 'string' }, contextLines: { type: 'number' } }, required: ['artifactId', 'pattern'] },
+  },
+  {
+    name: 'list_memories',
+    description: 'List durable project memory files under /memories. These store user preferences, project context, research notes, and decisions across conversations.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'read_memory',
+    description: 'Read one durable project memory file from /memories.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  },
+  {
+    name: 'propose_memory_update',
+    description: 'Propose a durable memory update. This records an approval-gated proposal and never writes memory files directly.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, reason: { type: 'string' } }, required: ['path', 'content', 'reason'] },
   },
   {
     name: 'edit_file',
@@ -481,6 +499,12 @@ export class ToolExecutor {
           return await this.readArtifact(call, ctx);
         case 'grep_artifact':
           return await this.grepArtifactTool(call, ctx);
+        case 'list_memories':
+          return await this.listMemories(ctx);
+        case 'read_memory':
+          return await this.readMemory(call, ctx);
+        case 'propose_memory_update':
+          return await this.proposeMemoryUpdate(call, ctx);
         case 'edit_file':
           return await this.editFile(call, ctx);
         case 'run_command':
@@ -746,6 +770,32 @@ export class ToolExecutor {
     const result = await grepArtifact(artifact.path, pattern, typeof call.input.contextLines === 'number' ? call.input.contextLines : 3);
     const rendered = result.matches.map((match) => `L${match.line}: ${match.text}`).join('\n');
     return { content: clip(rendered || `No matches for "${pattern}" in ${artifact.artifactId}.`) };
+  }
+
+  private async listMemories(ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const memories = await new MemoryManager().list(ctx.root);
+    return { content: memories.length ? memories.join('\n') : 'No project memories found under /memories.' };
+  }
+
+  private async readMemory(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const normalized = normalizeMemoryPath(str(call.input.path));
+    if (!normalized) return { content: 'read_memory requires a path under /memories with extension .md, .txt, or .json.', isError: true, recoverable: true };
+    const entry = await new MemoryManager().read(ctx.root, normalized);
+    if (!entry) return { content: `Memory not found or unreadable: ${normalized}`, isError: true, recoverable: true };
+    await ctx.emitRuntime('memory.read', { path: entry.path });
+    return { content: clip(`--- MEMORY ${entry.path} (${entry.title}) ---\n${entry.content}${entry.truncated ? '\n[TRUNCATED]' : ''}`) };
+  }
+
+  private async proposeMemoryUpdate(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const normalized = normalizeMemoryPath(str(call.input.path));
+    const content = str(call.input.content).trim();
+    const reason = str(call.input.reason).trim();
+    if (!normalized) return { content: 'propose_memory_update requires a path under /memories with extension .md, .txt, or .json.', isError: true, recoverable: true };
+    if (!content) return { content: 'propose_memory_update requires non-empty content.', isError: true, recoverable: true };
+    ctx.memoryUpdateProposals ??= [];
+    ctx.memoryUpdateProposals.push({ path: normalized, content, reason });
+    await ctx.emitRuntime('memory.update.proposed', { path: normalized, reason });
+    return { content: `Proposed memory update for ${normalized}. No files were written; the parent/user approval gate must apply it later.` };
   }
 
   private async editFile(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {

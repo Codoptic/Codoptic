@@ -38,6 +38,9 @@ CODE_EXTS = {
     ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
     ".mjs": "javascript", ".cjs": "javascript", ".py": "python", ".go": "go",
     ".rs": "rust", ".java": "java", ".rb": "ruby", ".php": "php",
+    ".json": "json", ".jsonc": "json", ".yml": "yaml", ".yaml": "yaml",
+    ".css": "css", ".scss": "css", ".sass": "css", ".less": "css",
+    ".html": "html",
 }
 DOC_EXTS = {".md": "markdown", ".mdx": "markdown", ".rst": "doc", ".txt": "doc"}
 MAX_FILE_BYTES = 400_000
@@ -254,22 +257,57 @@ def report(root, nodes, edges, god_nodes, communities_count):
 def render_html(graph):
     """Stage 7 — export: standalone vis.js interactive graph (Graphify-style)."""
     palette = [
-        "#5b8ff9", "#61ddaa", "#65789b", "#f6bd16", "#7262fd", "#78d3f8",
-        "#9661bc", "#f6903d", "#008685", "#f08bb4",
+        "#00e5ff", "#76ff03", "#ffea00", "#ff4081", "#b388ff", "#40c4ff",
+        "#00e676", "#ff9100", "#e040fb", "#1de9b6", "#ff80ab", "#82b1ff",
     ]
+    by_id = {node["id"]: node for node in graph["nodes"]}
     vis_nodes = []
     for node in graph["nodes"]:
         color = palette[node["community"] % len(palette)]
-        size = 10 + min(40, node["degree"] * 4)
+        connected = node["degree"] > 0
+        size = (16 if connected else 7) + min(56, node["degree"] * 5)
         vis_nodes.append({
             "id": node["id"],
             "label": node["path"].split("/")[-1],
             "title": f"{node['path']} — degree {node['degree']} (community {node['community']})",
             "value": size,
-            "color": {"background": color, "border": "#1f2937" if not node["isGod"] else "#ef4444"},
-            "borderWidth": 4 if node["isGod"] else 1,
+            "mass": 2 + min(10, node["degree"]),
+            "color": {
+                "background": color if connected else "#1e293b",
+                "border": "#fff7ad" if node["isGod"] else ("#e0f2fe" if connected else "#475569"),
+                "highlight": {"background": "#ffffff", "border": color},
+                "hover": {"background": color, "border": "#f8fafc"},
+            },
+            "borderWidth": 6 if node["isGod"] else (3 if connected else 1),
+            "font": {
+                "color": "#f8fafc" if connected else "#94a3b8",
+                "size": 16 if connected else 11,
+                "strokeWidth": 7 if connected else 4,
+                "strokeColor": "#020617",
+            },
+            "shadow": {
+                "enabled": connected,
+                "color": f"{color}cc",
+                "size": 26 if node["isGod"] else 16,
+                "x": 0,
+                "y": 0,
+            },
         })
-    vis_edges = [{"from": e["from"], "to": e["to"], "arrows": "to"} for e in graph["edges"]]
+    vis_edges = [
+        {
+            "from": e["from"],
+            "to": e["to"],
+            "arrows": "to",
+            "width": 2.4 + min(7.5, (by_id.get(e["from"], {}).get("outgoing", 0) + by_id.get(e["to"], {}).get("incoming", 0)) ** 0.5),
+            "color": {
+                "color": f"{palette[by_id.get(e['from'], {'community': 0})['community'] % len(palette)]}d9",
+                "highlight": "#ffffff",
+                "hover": "#ffffff",
+            },
+            "shadow": {"enabled": True, "color": "#67e8f9aa", "size": 12, "x": 0, "y": 0},
+        }
+        for e in graph["edges"]
+    ]
     data = json.dumps({"nodes": vis_nodes, "edges": vis_edges})
     metrics = graph["metrics"]
     return """<!doctype html>
@@ -277,22 +315,33 @@ def render_html(graph):
 <title>Codoptic Knowledge Graph</title>
 <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
-  html,body{margin:0;height:100%;background:#0f1115;color:#e6edf3;font-family:ui-sans-serif,system-ui,sans-serif}
-  #bar{padding:8px 12px;font-size:12px;border-bottom:1px solid #222;background:#11151c}
+  html,body{margin:0;height:100%;background:#00040d;color:#f8fbff;font-family:ui-sans-serif,system-ui,sans-serif}
+  body:before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 20% 18%,#06b6d440,transparent 28%),radial-gradient(circle at 84% 12%,#a855f733,transparent 27%),linear-gradient(#17255470 1px,transparent 1px),linear-gradient(90deg,#17255470 1px,transparent 1px);background-size:auto,auto,44px 44px,44px 44px}
+  #bar{position:relative;z-index:1;padding:12px 16px;font-size:12px;border-bottom:1px solid #22d3ee;background:#000814f2;box-shadow:0 18px 42px #000c}
   #graph{width:100%;height:calc(100% - 38px)}
-  b{color:#9ecbff}
+  b{color:#a7f3d0}
 </style></head>
 <body>
-  <div id="bar">Knowledge Graph — <b>__FILES__</b> files · <b>__EDGES__</b> imports · <b>__COMMUNITIES__</b> communities · red border = central module</div>
+  <div id="bar">Knowledge Graph — <b>__FILES__</b> project files · <b>__EDGES__</b> import edges · <b>__COMMUNITIES__</b> communities · bright halo = central module</div>
   <div id="graph"></div>
   <script>
     var graph = __DATA__;
     var container = document.getElementById('graph');
     var data = { nodes: new vis.DataSet(graph.nodes), edges: new vis.DataSet(graph.edges) };
     var options = {
-      nodes: { shape: 'dot', scaling: { min: 8, max: 50 }, font: { color: '#c9d1d9', size: 12 } },
-      edges: { color: { color: '#3a4250', highlight: '#9ecbff' }, smooth: { type: 'continuous' }, width: 0.6 },
-      physics: { stabilization: { iterations: 180 }, barnesHut: { gravitationalConstant: -8000, springLength: 120 } },
+      nodes: {
+        shape: 'dot',
+        scaling: { min: 8, max: 64 },
+        font: { color: '#f8fafc', size: 14, strokeWidth: 7, strokeColor: '#020617' }
+      },
+      edges: {
+        color: { color: '#67e8f9d9', highlight: '#ffffff', hover: '#ffffff' },
+        smooth: { type: 'continuous' },
+        width: 2.4,
+        arrows: { to: { enabled: true, scaleFactor: 0.55 } },
+        shadow: { enabled: true, color: '#22d3eeaa', size: 12, x: 0, y: 0 }
+      },
+      physics: { stabilization: { iterations: 260 }, barnesHut: { gravitationalConstant: -6200, springLength: 95, avoidOverlap: 0.55 } },
       interaction: { hover: true, tooltipDelay: 120 }
     };
     new vis.Network(container, data, options);

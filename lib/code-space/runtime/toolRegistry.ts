@@ -327,6 +327,36 @@ export function createDefaultToolRegistry(): ToolRegistry {
   );
   registry.register(
     baseTool({
+      name: 'list_memories',
+      description: 'List durable project memory files under /memories. Memory files store user preferences, project context, research notes, and decisions across conversations.',
+      inputSchema: objectSchema({}),
+      riskLevel: 'safe',
+      permission: 'auto',
+      observationCompression: 'none',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'read_memory',
+      description: 'Read a durable project memory file from /memories without loading unrelated repository files.',
+      inputSchema: objectSchema({ path: { type: 'string' } }, ['path']),
+      riskLevel: 'safe',
+      permission: 'auto',
+      observationCompression: 'none',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'propose_memory_update',
+      description: 'Record a proposed durable memory update. This does not write files; it emits an approval-gated proposal for the user/parent workflow.',
+      inputSchema: objectSchema({ path: { type: 'string' }, content: { type: 'string' }, reason: { type: 'string' } }, ['path', 'content', 'reason']),
+      riskLevel: 'safe',
+      permission: 'auto',
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
       name: 'spawn_subagent',
       description: 'Spawn an isolated temporary subagent with a blank context window for explorer, critic, docs-reader, test-writer, or verifier roles.',
       inputSchema: objectSchema(

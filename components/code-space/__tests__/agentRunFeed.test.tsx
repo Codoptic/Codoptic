@@ -52,4 +52,31 @@ describe('agentRunFeed', () => {
     });
     expect(feed[0]?.detail).not.toContain('File not found');
   });
+
+  it('projects structured delegation and memory events into feed entries', () => {
+    const feed = [
+      {
+        type: 'structured_event',
+        event: {
+          id: 'event-1',
+          type: 'subagent.plan.created',
+          payload: { reasons: ['large context set'], tasks: [{ role: 'explorer' }] },
+          createdAt: 1,
+        },
+      },
+      {
+        type: 'structured_event',
+        event: {
+          id: 'event-2',
+          type: 'memory.loaded',
+          payload: { paths: ['memories/project-context.md'] },
+          createdAt: 2,
+        },
+      },
+    ].reduce<AgentRunFeedEntry[]>((current, event) => appendRunFeedEvent(current, event as AgentSSEEvent), []);
+
+    expect(feed).toHaveLength(2);
+    expect(feed[0]?.title).toMatch(/Delegation plan/);
+    expect(feed[1]?.title).toMatch(/Loaded 1 project memory/);
+  });
 });

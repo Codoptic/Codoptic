@@ -57,14 +57,19 @@ export type AgentEventType =
   | 'review.started'
   | 'review.comment.created'
   | 'review.completed'
+  | 'subagent.plan.created'
   | 'subagent.started'
   | 'subagent.message'
   | 'subagent.completed'
+  | 'subagent.reconciled'
   | 'integration.reviewed'
   | 'supervisor.verdict'
   | 'knowledge_graph.building'
   | 'knowledge_graph.ready'
   | 'knowledge_graph.failed'
+  | 'memory.loaded'
+  | 'memory.read'
+  | 'memory.update.proposed'
   | 'artifact.created';
 
 export interface AgentEvent<TPayload = unknown> {

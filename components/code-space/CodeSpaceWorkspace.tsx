@@ -125,6 +125,8 @@ interface FolderBrowserResponse {
   error?: string;
 }
 
+type KnowledgeGraphSummary = NonNullable<CodeSpaceAgentSession['knowledgeGraph']>;
+
 function statusForRuntimePhase(
   phase: string | undefined,
   fallback: CodeSpaceAgentSession['status'],
@@ -464,6 +466,7 @@ export function CodeSpaceWorkspace() {
     isGit: boolean;
     summary: string;
   } | null>(null);
+  const [activeProjectKnowledgeGraph, setActiveProjectKnowledgeGraph] = useState<KnowledgeGraphSummary | null>(null);
   const [knowledgeGraphModalOpen, setKnowledgeGraphModalOpen] = useState(false);
   const agentAbortRef = useRef<AbortController | null>(null);
   const runningSessionIdRef = useRef<string | null>(null);
@@ -489,6 +492,43 @@ export function CodeSpaceWorkspace() {
   useEffect(() => {
     setProjectNameInput(activeProject?.name ?? '');
   }, [activeProject?.name]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setActiveProjectKnowledgeGraph(null);
+    if (!activeProject?.rootPath) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const root = activeProject.rootPath;
+    const projectId = activeProject.id;
+    void fetch(`/api/code-space/knowledge-graph?root=${encodeURIComponent(root)}`)
+      .then(async (res) => {
+        if (cancelled || res.status === 404) return;
+        const data = (await res.json()) as {
+          exists?: boolean;
+          metadata?: { nodeCount: number; edgeCount: number; generatedAt: number };
+        };
+        if (!res.ok || !data.exists || !data.metadata) return;
+        setActiveProjectKnowledgeGraph({
+          projectId,
+          nodeCount: data.metadata.nodeCount,
+          edgeCount: data.metadata.edgeCount,
+          viewUrl: `/api/code-space/knowledge-graph/view?root=${encodeURIComponent(root)}`,
+          reportPath: '.codoptic-cache/knowledge-graph/GRAPH_REPORT.md',
+          createdAt: data.metadata.generatedAt,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setActiveProjectKnowledgeGraph(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProject?.id, activeProject?.rootPath]);
 
   useEffect(() => {
     if (!activeSession || activeSession.mode === 'fresh-start') return;
@@ -2319,16 +2359,18 @@ export function CodeSpaceWorkspace() {
                 summary: event.summary,
               });
             } else if (event.type === 'knowledge_graph_ready') {
+              const graph: KnowledgeGraphSummary = {
+                projectId: activeProject?.id ?? event.projectId,
+                nodeCount: event.nodeCount,
+                edgeCount: event.edgeCount,
+                viewUrl: event.viewUrl,
+                reportPath: event.reportPath,
+                createdAt: Date.now(),
+              };
+              setActiveProjectKnowledgeGraph(graph);
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
-                knowledgeGraph: {
-                  projectId: event.projectId,
-                  nodeCount: event.nodeCount,
-                  edgeCount: event.edgeCount,
-                  viewUrl: event.viewUrl,
-                  reportPath: event.reportPath,
-                  createdAt: Date.now(),
-                },
+                knowledgeGraph: graph,
                 updatedAt: Date.now(),
               }));
             } else if (event.type === 'terminal_chunk') {
@@ -2621,16 +2663,18 @@ export function CodeSpaceWorkspace() {
                 summary: event.summary,
               });
             } else if (event.type === 'knowledge_graph_ready') {
+              const graph: KnowledgeGraphSummary = {
+                projectId: activeProject?.id ?? event.projectId,
+                nodeCount: event.nodeCount,
+                edgeCount: event.edgeCount,
+                viewUrl: event.viewUrl,
+                reportPath: event.reportPath,
+                createdAt: Date.now(),
+              };
+              setActiveProjectKnowledgeGraph(graph);
               patchSession(sessionWithPrompt.id, (current) => ({
                 ...current,
-                knowledgeGraph: {
-                  projectId: event.projectId,
-                  nodeCount: event.nodeCount,
-                  edgeCount: event.edgeCount,
-                  viewUrl: event.viewUrl,
-                  reportPath: event.reportPath,
-                  createdAt: Date.now(),
-                },
+                knowledgeGraph: graph,
                 updatedAt: Date.now(),
               }));
             } else if (event.type === 'terminal_chunk') {
@@ -3733,6 +3777,7 @@ export function CodeSpaceWorkspace() {
           <AgentPanel
             session={activeSession}
             sessions={sessions.filter((session) => !session.projectId || session.projectId === activeProjectId)}
+            projectKnowledgeGraph={activeProjectKnowledgeGraph}
             activeProjectName={activeProject?.name}
             isRunning={agentRunning}
             toolBudget={activeSession?.toolBudget ?? 50}
@@ -3853,7 +3898,7 @@ export function CodeSpaceWorkspace() {
         </div>
       )}
 
-      {knowledgeGraphModalOpen && activeSession?.knowledgeGraph && (
+      {knowledgeGraphModalOpen && (activeProjectKnowledgeGraph ?? activeSession?.knowledgeGraph) && (
         <div
           role="dialog"
           aria-modal="true"
@@ -3867,8 +3912,8 @@ export function CodeSpaceWorkspace() {
               <div>
                 <h2 className="text-lg font-semibold">Knowledge graph</h2>
                 <p className="mt-1 text-[12px] text-[#8b8b8b]">
-                  {activeSession.knowledgeGraph.nodeCount} files · {activeSession.knowledgeGraph.edgeCount} import edges · interactive
-                  Graphify map of this project. Red-bordered nodes are central modules.
+                  {(activeProjectKnowledgeGraph ?? activeSession?.knowledgeGraph)!.nodeCount} files · {(activeProjectKnowledgeGraph ?? activeSession?.knowledgeGraph)!.edgeCount} import edges · interactive
+                  Graphify map of this project. Bright halo nodes are central modules.
                 </p>
               </div>
               <button
@@ -3881,7 +3926,7 @@ export function CodeSpaceWorkspace() {
             </div>
             <iframe
               title="Knowledge graph"
-              src={activeSession.knowledgeGraph.viewUrl}
+              src={(activeProjectKnowledgeGraph ?? activeSession?.knowledgeGraph)!.viewUrl}
               className="min-h-0 flex-1 rounded-b-xl border-0 bg-[#0f1115]"
               sandbox="allow-scripts allow-same-origin"
             />
