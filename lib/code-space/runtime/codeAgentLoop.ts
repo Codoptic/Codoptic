@@ -1,5 +1,6 @@
 import type { AssistantTurn, ChatMessage, ProviderSession, ToolSpec } from '@/lib/agent/providers';
 import { chatTurnWithToolsStream } from '@/lib/agent/providers';
+import type { AutonomyLevel } from '@/lib/code-space/domain';
 import type { ContextGraphResult } from './contextGraphEngine';
 import { listRepositoryFiles } from './repoMap';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
@@ -18,6 +19,7 @@ import {
   formatWorkflowDodMarkdown,
   type ContextSufficiencyReport,
 } from './workflowPolicy';
+import { formatAutonomyToolGuidance } from './autonomyPolicy';
 import { allocateContextBudget, compressMessageHistory, formatEvidenceBody, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
 import { formatMemoryContext, type MemoryContext } from './memoryManager';
 import { formatDelegationReport, type DelegationReport } from './delegationPlanner';
@@ -395,10 +397,13 @@ function buildRecoverableFailureDirective(ctx: CodeAgentContext): string {
   ].join('\n');
 }
 
-export function buildCodeSystemPrompt(projectName: string, instructionFiles: string[]): string {
+export function buildCodeSystemPrompt(projectName: string, instructionFiles: string[], autonomy?: AutonomyLevel): string {
+  const autonomyGuidance = autonomy ? formatAutonomyToolGuidance(autonomy) : '';
   return [
     buildWorkflowKernelPrompt('code'),
     '',
+    autonomyGuidance,
+    autonomyGuidance ? '' : undefined,
     `You are Code Space, an autonomous software engineer working in the "${projectName}" repository.`,
     'Operate like a senior engineer pairing in a real editor: investigate first, then make precise edits, then prove they work.',
     '',
@@ -406,8 +411,12 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '1. Understand the task. Read relevant files with read_file and search the repo with search_text before editing.',
     '2. Make focused edits with edit_file using exact SEARCH/REPLACE blocks. If edit_file returns a diagnostic, re-read the failing region, use a smaller SEARCH, and try a corrected edit.',
     '3. Use external helpers only when they materially improve the result: research_web with queries/URLs for current docs and OSS examples, harness_context before large unfamiliar changes, and scan_code_quality for refactors, reviews, duplication, secret, or bug-hunting work.',
-    '4. After editing, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
-    '5. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
+    autonomy === 'suggest_only'
+      ? '4. Propose source edits with edit_file only — do not run run_command, terminal tools, or run_validation_matrix; validation happens after the user accepts patches.'
+      : '4. After editing, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
+    autonomy === 'suggest_only'
+      ? '5. If a tool is blocked by autonomy policy, do not retry it; use read-only inspection tools and edit_file instead.'
+      : '5. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
     '6. Before completion, compare the cumulative diff, validation output, and files touched against the original Task and Definition of Done. Finish every requested item, including nearby tests/docs/config updates implied by the request.',
     '7. When the work is done, call attempt_completion with success=true, completedOriginalRequest=true, and a concise summary of what changed.',
     '',
@@ -458,6 +467,7 @@ export async function buildCodeSeedMessage(
   memoryContext?: MemoryContext,
   delegationReport?: DelegationReport,
   contextLedgerSummary?: string,
+  autonomy?: AutonomyLevel,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
@@ -469,17 +479,23 @@ export async function buildCodeSeedMessage(
 
   const repositoryFiles = await listRepositoryFiles(root);
   const fileIndex = repositoryFiles.slice(0, budget.maxIndexEntries).join('\n');
-  const validation = validationCommands.length
-    ? validationCommands.map((command) => `- ${[command.command, ...command.args].join(' ')} (${command.reason})`).join('\n')
-    : '- No validation command auto-detected. After editing, call run_validation_matrix and then choose any targeted check with run_command if needed.';
+  const validation =
+    autonomy === 'suggest_only'
+      ? '- Confirm mode: do not run validation commands in this run. Propose edits with edit_file; validation runs after the user accepts patches.'
+      : validationCommands.length
+        ? validationCommands.map((command) => `- ${[command.command, ...command.args].join(' ')} (${command.reason})`).join('\n')
+        : '- No validation command auto-detected. After editing, call run_validation_matrix and then choose any targeted check with run_command if needed.';
   const sufficiencyBlock = sufficiency
     ? ['Context sufficiency gate:', formatContextSufficiencyMarkdown(sufficiency)].join('\n')
     : 'Context sufficiency gate: not provided; treat the initial evidence as incomplete until verified.';
+  const autonomyGuidance = autonomy ? formatAutonomyToolGuidance(autonomy) : '';
 
   return [
     'Task:',
     prompt,
     '',
+    autonomyGuidance,
+    autonomyGuidance ? '' : undefined,
     sufficiencyBlock,
     '',
     'Definition of Done for this implementation run:',

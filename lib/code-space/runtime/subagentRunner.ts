@@ -5,7 +5,7 @@ import { CODE_MODE_TOOL_SPECS, ToolExecutor, type CodeAgentContext, type LedgerE
 import { createDefaultToolRegistry } from './toolRegistry';
 import { PermissionManager } from './permissionManager';
 import { TerminalRunner } from './terminalRunner';
-import { ToolBudget, isReadOnlyTool } from './toolBudget';
+import { formatAutonomyToolGuidance } from './autonomyPolicy';
 
 export type SubagentRole =
   | 'explorer'
@@ -83,8 +83,10 @@ function buildSubagentSystemPrompt(role: SubagentRole, projectName: string): str
   return [
     `You are a ${role} subagent collaborating on the "${projectName}" repository with an isolated, fresh context window.`,
     roleBrief[role],
+    readOnly ? formatAutonomyToolGuidance('suggest_only') : '',
+    readOnly ? '' : undefined,
     'Work efficiently within your tool budget. When finished, call attempt_completion with a concise, factual summary (success=false only if blocked).',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function buildSubagentSeedMessage(task: string): string {

@@ -582,7 +582,7 @@ export class AgentRuntime {
 
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
-      buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path)),
+      buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path), request.autonomy),
       await buildCodeSeedMessage(
         root,
         prompt,
@@ -593,6 +593,7 @@ export class AgentRuntime {
         memoryContext,
         delegationReport,
         contextLedger.summarize(),
+        request.autonomy,
       ),
     );
 

@@ -24,6 +24,11 @@ import {
   type FileCheckpoint,
 } from './checkpointManager';
 import { PermissionManager } from './permissionManager';
+import {
+  formatAutonomyBlockedToolMessage,
+  isAutonomyPolicyFailureRecoverable,
+  isSuggestOnlySelectiveWritePath,
+} from './autonomyPolicy';
 import { createDefaultToolRegistry, ToolRegistry } from './toolRegistry';
 import { TerminalRunner } from './terminalRunner';
 import { isRiskyTerminalCommand, type TerminalCommand } from './terminalPolicy';
@@ -748,7 +753,11 @@ export class ToolExecutor {
     const decision = this.decide(registryToolName, ctx.autonomy);
     if (decision.permission !== 'auto') {
       await ctx.emitRuntime('tool.approval.required', { tool: registryToolName, command: [command.command, ...command.args].join(' '), reason: decision.reason });
-      return { content: `${registryToolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true, recoverable: true };
+      return {
+        content: formatAutonomyBlockedToolMessage(registryToolName, ctx.autonomy, decision.reason),
+        isError: true,
+        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+      };
     }
     const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
     const artifact = await writeAgentArtifact({
@@ -944,7 +953,7 @@ export class ToolExecutor {
       const patch = createPatchHistoryEntry(ctx, {
         filePath: normalized,
         mode: writeThisMode(applyToDisk, normalized),
-        status: applyToDisk || normalized.startsWith('.agent/tests/') ? 'applied' : 'pending',
+        status: applyToDisk || isSuggestOnlySelectiveWritePath(normalized) ? 'applied' : 'pending',
         diff: preview.unifiedDiff,
         explanation: preview.explanation,
         added: stats.added,
@@ -953,7 +962,7 @@ export class ToolExecutor {
       });
       // The verifier/test-writer may always write ephemeral test scripts under .agent/tests/, even
       // under suggest_only — they are throwaway artifacts, never user source files.
-      const writeThisFile = applyToDisk || normalized.startsWith('.agent/tests/');
+      const writeThisFile = applyToDisk || isSuggestOnlySelectiveWritePath(normalized);
       if (!writeThisFile) {
         await recordPatchHistory(ctx, patch);
         // suggest_only / approval_required → propose, do not write. Keep one cumulative proposal per
@@ -1059,7 +1068,7 @@ export class ToolExecutor {
     }
 
     if (!applied.length) {
-      return { content: `Proposed ${grouped.previews.length} edit(s) for review (autonomy "${ctx.autonomy}" does not auto-apply). Not written to disk.` };
+      return { content: `Proposed ${grouped.previews.length} edit(s) for review (autonomy "${ctx.autonomy}" does not auto-apply source files). Not written to disk — use read_file to see pending proposed content.` };
     }
     const diffSummary = grouped.previews.map((preview) => preview.unifiedDiff).join('\n');
     return { content: clip(`Applied edits to: ${applied.join(', ')}\n\n${diffSummary}`) };
@@ -1081,7 +1090,11 @@ export class ToolExecutor {
     const decision = this.decide('run_command', ctx.autonomy);
     if (decision.permission !== 'auto') {
       await ctx.emitRuntime('tool.approval.required', { tool: 'run_command', command: `${commandName} ${args.join(' ')}`, reason: decision.reason });
-      return { content: `Command not run: autonomy "${ctx.autonomy}" requires approval for "${commandName}". ${decision.reason}`, isError: true };
+      return {
+        content: formatAutonomyBlockedToolMessage('run_command', ctx.autonomy, decision.reason),
+        isError: true,
+        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+      };
     }
     if (ctx.autonomy !== 'full_access_local' && isRiskyTerminalCommand(command)) {
       return { content: `Command "${commandName} ${args.join(' ')}" is gated by terminal policy and requires explicit approval. It was not run.`, isError: true };
@@ -1103,7 +1116,13 @@ export class ToolExecutor {
 
   private ensureTerminalDecision(toolName: string, ctx: CodeAgentContext): ToolExecutionResult | null {
     const decision = this.decide(toolName, ctx.autonomy);
-    if (decision.permission !== 'auto') return { content: `${toolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true };
+    if (decision.permission !== 'auto') {
+      return {
+        content: formatAutonomyBlockedToolMessage(toolName, ctx.autonomy, decision.reason),
+        isError: true,
+        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+      };
+    }
     return null;
   }
 
@@ -1276,7 +1295,11 @@ export class ToolExecutor {
     const decision = this.decide('restore_checkpoint', ctx.autonomy);
     if (decision.permission !== 'auto') {
       await ctx.emitRuntime('tool.approval.required', { tool: 'restore_checkpoint', checkpointRef: ref, reason: decision.reason });
-      return { content: `Checkpoint restore requires approval under autonomy "${ctx.autonomy}".`, isError: true };
+      return {
+        content: formatAutonomyBlockedToolMessage('restore_checkpoint', ctx.autonomy, decision.reason),
+        isError: true,
+        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+      };
     }
     const loaded = await loadFileCheckpoint(checkpoint.snapshotRef);
     const files = await restoreFileCheckpoint(ctx.root, loaded);

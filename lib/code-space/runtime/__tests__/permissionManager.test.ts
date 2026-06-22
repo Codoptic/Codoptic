@@ -17,11 +17,23 @@ describe('PermissionManager', () => {
     });
   });
 
-  it('blocks all tool execution in suggest-only mode', () => {
+  it('allows safe read-only tools but blocks mutating tools in suggest-only mode', () => {
     const permissions = new PermissionManager();
     const registry = createDefaultToolRegistry();
 
     expect(permissions.decide(registry.get('read_file')!, 'suggest_only')).toMatchObject({
+      permission: 'auto',
+      approvalRequired: false,
+    });
+    expect(permissions.decide(registry.get('harness_context')!, 'suggest_only')).toMatchObject({
+      permission: 'auto',
+      approvalRequired: false,
+    });
+    expect(permissions.decide(registry.get('propose_edit_blocks')!, 'suggest_only')).toMatchObject({
+      permission: 'approval_required',
+      approvalRequired: true,
+    });
+    expect(permissions.decide(registry.get('run_command')!, 'suggest_only')).toMatchObject({
       permission: 'blocked',
       approvalRequired: false,
     });

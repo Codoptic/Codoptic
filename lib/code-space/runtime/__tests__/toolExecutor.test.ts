@@ -283,6 +283,32 @@ describe('ToolExecutor external agent tools', () => {
     expect(ctx.artifacts.size).toBe(1);
   });
 
+  it('allows harness_context under suggest_only autonomy', async () => {
+    await writeFile(path.join(tmpDir, 'AGENTS.md'), '# Rules\n', 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(call('harness_context', { mode: 'audit' }), ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).not.toMatch(/forbids tool execution/i);
+    expect(ctx.artifacts.size).toBe(1);
+  });
+
+  it('blocks run_command under suggest_only with a non-recoverable redirect', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(call('run_command', { command: 'npm', args: ['test'], reason: 'validate' }), ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.recoverable).toBe(false);
+    expect(result.content).toMatch(/do not retry/i);
+    expect(result.content).toMatch(/edit_file/i);
+  });
+
   it('returns graceful missing-binary guidance from scan_code_quality', async () => {
     const events: AgentSSEEvent[] = [];
     const ctx = makeContext(events);
