@@ -8,6 +8,14 @@ export type AgentTimelineItem =
   | { id: string; kind: 'status_summary'; text: string; status?: AgentRunFeedEntry['status']; createdAt: number }
   | {
       id: string;
+      kind: 'exploration_summary';
+      text: string;
+      filePaths: string[];
+      searches: Array<{ query: string; glob?: string }>;
+      createdAt: number;
+    }
+  | {
+      id: string;
       kind: 'patch_card';
       diffId: string;
       filePath: string;
@@ -106,24 +114,35 @@ export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: Buil
 }
 
 function summarizeExploration(session: CodeSpaceAgentSession): AgentTimelineItem | null {
-  const readFiles = new Set<string>();
-  let searches = 0;
+  const readFileSet = new Set<string>();
+  const filePaths: string[] = [];
+  const searches: Array<{ query: string; glob?: string }> = [];
   let latest = 0;
   for (const call of session.toolCalls) {
     if (call.name === 'read_file' && call.input && typeof call.input === 'object') {
       const path = (call.input as { path?: unknown }).path;
-      if (typeof path === 'string' && path.trim()) readFiles.add(path.trim());
+      if (typeof path === 'string' && path.trim() && !readFileSet.has(path.trim())) {
+        readFileSet.add(path.trim());
+        filePaths.push(path.trim());
+      }
     }
-    if (call.name === 'search_text') searches += 1;
+    if (call.name === 'search_text') {
+      const input = call.input && typeof call.input === 'object' ? call.input as { query?: unknown; glob?: unknown } : null;
+      const query = typeof input?.query === 'string' && input.query.trim() ? input.query.trim() : 'Search query unavailable';
+      const glob = typeof input?.glob === 'string' && input.glob.trim() ? input.glob.trim() : undefined;
+      searches.push(glob ? { query, glob } : { query });
+    }
     if (call.name === 'read_file' || call.name === 'search_text') latest = Math.max(latest, call.updatedAt ?? call.createdAt);
   }
-  if (!readFiles.size && !searches) return null;
-  const filesLabel = `${readFiles.size} file${readFiles.size === 1 ? '' : 's'}`;
-  const searchLabel = `${searches} search${searches === 1 ? '' : 'es'}`;
+  if (!filePaths.length && !searches.length) return null;
+  const filesLabel = `${filePaths.length} file${filePaths.length === 1 ? '' : 's'}`;
+  const searchLabel = `${searches.length} search${searches.length === 1 ? '' : 'es'}`;
   return {
-    id: `exploration:${session.id}:${readFiles.size}:${searches}`,
-    kind: 'status_summary',
+    id: `exploration:${session.id}:${filePaths.length}:${searches.length}`,
+    kind: 'exploration_summary',
     text: `Explored ${filesLabel}, ${searchLabel}`,
+    filePaths,
+    searches,
     createdAt: latest || session.updatedAt,
   };
 }
@@ -198,6 +217,7 @@ function orderRank(kind: AgentTimelineItem['kind']): number {
     case 'assistant_text':
       return 1;
     case 'status_summary':
+    case 'exploration_summary':
       return 2;
     case 'patch_card':
       return 3;

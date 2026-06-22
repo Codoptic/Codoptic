@@ -78,13 +78,15 @@ describe('buildAgentTimeline', () => {
     expect(items.map((item) => item.kind)).toEqual([
       'user_prompt',
       'assistant_text',
-      'status_summary',
+      'exploration_summary',
       'patch_card',
       'review_gate',
       'validation_summary',
     ]);
-    expect(items.find((item) => item.kind === 'status_summary')).toMatchObject({
+    expect(items.find((item) => item.kind === 'exploration_summary')).toMatchObject({
       text: 'Explored 1 file, 1 search',
+      filePaths: ['backend/reset.py'],
+      searches: [{ query: 'proposal state' }],
     });
     expect(items.find((item) => item.kind === 'patch_card')).toMatchObject({
       title: 'reset.py',
@@ -122,7 +124,7 @@ describe('buildAgentTimeline', () => {
         name: 'search_text',
         status: 'success',
         summary: 'Completed',
-        input: { query: 'clear all versions' },
+        input: { query: 'clear all versions', glob: '*.py' },
         output: 'ok',
         createdAt: session.updatedAt + 3,
         updatedAt: session.updatedAt + 3,
@@ -130,8 +132,10 @@ describe('buildAgentTimeline', () => {
     );
 
     const items = buildAgentTimeline({ session, pendingDiffs: [], appliedDiffs: [] });
-    expect(items.find((item) => item.kind === 'status_summary')).toMatchObject({
+    expect(items.find((item) => item.kind === 'exploration_summary')).toMatchObject({
       text: 'Explored 2 files, 2 searches',
+      filePaths: ['backend/reset.py', 'backend/jobs.py'],
+      searches: [{ query: 'proposal state' }, { query: 'clear all versions', glob: '*.py' }],
     });
   });
 

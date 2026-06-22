@@ -147,24 +147,24 @@ const COMPACT_MARKDOWN_COMPONENTS = {
     <h1 className="mb-2 mt-1 text-[15px] font-semibold leading-6 text-inherit">{children}</h1>
   ),
   h2: ({ children }: { children?: React.ReactNode }) => (
-    <h2 className="mb-2 mt-2 text-[14px] font-semibold leading-6 text-inherit">{children}</h2>
+    <h2 className="mb-1 mt-1.5 text-[14px] font-semibold leading-6 text-inherit">{children}</h2>
   ),
   h3: ({ children }: { children?: React.ReactNode }) => (
-    <h3 className="mb-1.5 mt-2 text-[13px] font-semibold leading-5 text-inherit">{children}</h3>
+    <h3 className="mb-0.5 mt-1.5 text-[13px] font-semibold leading-5 text-inherit">{children}</h3>
   ),
   h4: ({ children }: { children?: React.ReactNode }) => (
-    <h4 className="mb-1 mt-2 text-[12px] font-medium leading-5 text-inherit">{children}</h4>
+    <h4 className="mb-0.5 mt-1 text-[12px] font-medium leading-5 text-inherit">{children}</h4>
   ),
   p: ({ children }: { children?: React.ReactNode }) => (
-    <p className="my-1.5 break-words leading-5 text-inherit">{children}</p>
+    <p className="my-0 break-words leading-5 text-inherit">{children}</p>
   ),
   ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="my-1.5 list-disc space-y-1 pl-4 text-inherit">{children}</ul>
+    <ul className="my-0.5 list-disc space-y-0 pl-4 text-inherit">{children}</ul>
   ),
   ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="my-1.5 list-decimal space-y-1 pl-4 text-inherit">{children}</ol>
+    <ol className="my-0.5 list-decimal space-y-0 pl-4 text-inherit">{children}</ol>
   ),
-  li: ({ children }: { children?: React.ReactNode }) => <li className="pl-1 leading-5">{children}</li>,
+  li: ({ children }: { children?: React.ReactNode }) => <li className="pl-1 leading-5 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 [&>p]:my-0">{children}</li>,
   pre: ({ children }: { children?: React.ReactNode }) => (
     <pre className="my-2 max-h-40 max-w-full overflow-auto rounded-md border border-[#30363d] bg-[#0b1017] p-2 font-mono text-[11px] leading-5 text-[#c9d1d9]">
       {children}
@@ -220,6 +220,81 @@ function modeContract(mode: CodeSpaceAgentMode) {
   if (mode === 'ask') return 'Read-only answers from repository evidence';
   if (mode === 'plan') return 'Writes an executable plan artifact';
   return 'Reviewable patches with validation gates';
+}
+
+function mentionForPath(filePath: string): SelectedMention {
+  const normalizedPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const basename = normalizedPath.split('/').filter(Boolean).pop() ?? normalizedPath;
+  return {
+    id: `mention:exploration:${normalizedPath}`,
+    type: normalizedPath.endsWith('/') ? 'folder' : 'file',
+    basename,
+    displayName: normalizedPath,
+    relativePath: normalizedPath,
+  };
+}
+
+function ExplorationSummary({
+  item,
+  onOpenFile,
+}: {
+  item: Extract<AgentTimelineItem, { kind: 'exploration_summary' }>;
+  onOpenFile?: (filePath: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="min-w-0 max-w-full font-sans text-[12px] font-medium leading-5 text-[#8e8e93]">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex min-w-0 items-center gap-1 rounded px-1 py-0.5 text-left hover:bg-[#161b22] hover:text-[#d6d6d6]"
+      >
+        <span aria-hidden="true" className="text-[11px] leading-none">{open ? 'Δ' : '∇'}</span>
+        <span className="truncate">{item.text}</span>
+      </button>
+      {open ? (
+        <div className="mt-1.5 space-y-1.5 rounded-lg border border-[#242424] bg-[#101419] px-2.5 py-2 text-[11px] font-normal leading-5 text-[#8e8e93]">
+          {item.filePaths.length ? (
+            <div className="space-y-1">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#6e7681]">Files</div>
+              <div className="flex flex-wrap gap-1">
+                {item.filePaths.map((filePath) => {
+                  const mention = mentionForPath(filePath);
+                  if (!onOpenFile) return <MentionChip key={filePath} mention={mention} />;
+                  return (
+                    <button
+                      key={filePath}
+                      type="button"
+                      onClick={() => onOpenFile(filePath)}
+                      className="min-w-0 rounded hover:ring-1 hover:ring-[#30363d]"
+                      title={`Open ${filePath}`}
+                    >
+                      <MentionChip mention={mention} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          {item.searches.length ? (
+            <div className="space-y-1">
+              <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[#6e7681]">Searches</div>
+              <div className="space-y-1">
+                {item.searches.map((search, index) => (
+                  <div key={`${index}:${search.query}`} className="min-w-0 break-words rounded border border-[#242424] bg-[#0b1017] px-2 py-1 font-mono text-[10.5px] leading-4 text-[#9ecbff]">
+                    {search.query}
+                    {search.glob ? <span className="text-[#6e7681]"> · {search.glob}</span> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function AgentPanel({
@@ -413,10 +488,14 @@ export function AgentPanel({
           key={item.id}
           markdown={item.content}
           className="min-w-0 max-w-full overflow-hidden text-[#d6d6d6]"
-          contentClassName="whitespace-pre-wrap break-words font-sans text-[13px] font-normal leading-6"
+          contentClassName="break-words font-sans text-[13px] font-normal leading-5 [&>*+*]:mt-1.5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
           componentsOverride={{ ...COMPACT_MARKDOWN_COMPONENTS, a: ({ children, href = '' }) => renderMessageLink(children, href) }}
         />
       );
+    }
+
+    if (item.kind === 'exploration_summary') {
+      return <ExplorationSummary key={item.id} item={item} onOpenFile={onOpenDiffFile} />;
     }
 
     if (item.kind === 'status_summary') {
@@ -606,7 +685,7 @@ export function AgentPanel({
           {agentTimeline.length === 0 ? (
             <p className="mt-6 text-center text-[13px] text-[#6e7681]">Describe a task to get started</p>
           ) : (
-            <div className="min-w-0 space-y-5">
+            <div className="min-w-0 space-y-3">
               {agentTimeline.map(renderTimelineItem)}
               <PlanLink
                 filePath={session?.planMarkdown?.filePath}

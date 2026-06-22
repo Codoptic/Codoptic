@@ -250,7 +250,7 @@ describe('AgentPanel', () => {
     expect(container.textContent).toContain('Applied change');
   });
 
-  it('shows a cursor-style exploration summary without individual tool cards', () => {
+  it('shows a collapsible cursor-style exploration summary without individual tool cards', () => {
     const session = createSession();
     session.toolCalls = [
       {
@@ -278,8 +278,34 @@ describe('AgentPanel', () => {
     const { container } = renderPanel(vi.fn(), { session, sessions: [session] });
 
     expect(container.textContent).toContain('Explored 1 file, 1 search');
+    expect(container.textContent).toContain('∇');
+    expect(container.textContent).not.toContain('components/code-space/BottomPanel.tsx');
+    expect(container.textContent).not.toContain('Explored x files, y searches');
     expect(container.textContent).not.toContain('Read BottomPanel.tsx L1-80');
     expect(container.textContent).not.toContain('Searched Explored x files, y searches');
+
+    const explorationButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Explored 1 file, 1 search'),
+    );
+    expect(explorationButton?.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => {
+      explorationButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(explorationButton?.getAttribute('aria-expanded')).toBe('true');
+    expect(container.textContent).toContain('Δ');
+    expect(container.textContent).toContain('components/code-space/BottomPanel.tsx');
+    expect(container.textContent).toContain('Explored x files, y searches');
+    expect(container.textContent).toContain('*.tsx');
+
+    act(() => {
+      explorationButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(explorationButton?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.textContent).not.toContain('components/code-space/BottomPanel.tsx');
+    expect(container.textContent).not.toContain('Explored x files, y searches');
   });
 
   it('keeps raw tool JSON out of the session subtitle', () => {
