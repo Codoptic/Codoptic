@@ -3,6 +3,7 @@ import type { AgentEventType } from './events';
 import type { ValidationRunResult } from './validationRunner';
 import type { CodeAgentLoop, CodeAgentLoopOptions } from './codeAgentLoop';
 import type { CodeAgentContext } from './toolExecutor';
+import { RepairStateMachine } from './repairStateMachine';
 
 export interface RepairRunResult {
   /** Validation results after the final repair attempt (or the initial run if none needed). */
@@ -21,6 +22,8 @@ export interface RepairRunParams {
   emit: (event: AgentSSEEvent) => void | Promise<void>;
   emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
   runId: string;
+  maxAttempts?: number;
+  repeatedFailureLimit?: number;
 }
 
 const MAX_FEEDBACK_OUTPUT = 4000;
@@ -40,13 +43,29 @@ export class RepairLoop {
   async run(params: RepairRunParams): Promise<RepairRunResult> {
     let results = params.initialResults;
     let attempts = 0;
+    const maxAttempts = params.maxAttempts ?? this.maxAttempts;
+    const state = new RepairStateMachine(params.repeatedFailureLimit ?? 3);
 
-    while (this.shouldRepair(results) && attempts < this.maxAttempts) {
+    while (this.shouldRepair(results) && attempts < maxAttempts) {
       if (params.loopOptions.signal?.aborted) break;
       if (params.loopOptions.budget.turnsExhausted() || params.loopOptions.budget.mutationBudgetExhausted()) break;
       attempts += 1;
 
       const failures = results.filter((result) => result.status === 'failed');
+      const decisions = failures.map((failure) => state.observe(failure));
+      const blocker = decisions.find((decision) => decision.blocker)?.blocker;
+      for (const decision of decisions) {
+        params.ctx.contextLedger?.add({
+          kind: 'repair',
+          command: decision.fingerprint.command,
+          summary: `${decision.fingerprint.category} failure fingerprint ${decision.fingerprint.hash} seen ${decision.count} time(s): ${decision.fingerprint.anchor}`,
+          status: decision.blocker ? 'failed' : 'pending',
+        });
+      }
+      if (blocker) {
+        await params.emitRuntime('review.completed', { attempts, repaired: false, stillFailing: failures.map((result) => result.command), blocker });
+        break;
+      }
       await params.emitRuntime('review.started', { attempt: attempts, failedCommands: failures.map((result) => result.command) });
 
       for (const failure of failures) {

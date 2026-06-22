@@ -35,8 +35,9 @@ describe('DelegationPlanner', () => {
     expect(plan.tasks).toHaveLength(0);
   });
 
-  it('delegates complex workflow review tasks with bounded read-only helpers', () => {
-    const plan = new DelegationPlanner().plan({
+  it('delegates complex workflow review tasks with profile-bounded helpers', () => {
+    const plan = new DelegationPlanner('deep').plan({
+      runId: 'run:test',
       mode: 'code',
       prompt: 'Comprehensively review the agent workflow, subagent delegation, memory, docs, and validation risks',
       context: context({
@@ -48,9 +49,26 @@ describe('DelegationPlanner', () => {
     });
 
     expect(plan.required).toBe(true);
-    expect(plan.tasks.length).toBeLessThanOrEqual(3);
+    expect(plan.tasks.length).toBeGreaterThan(3);
+    expect(plan.tasks.length).toBeLessThanOrEqual(plan.workGraph?.limits.maxAutomaticSubagents ?? 0);
     expect(plan.tasks.map((task) => task.role)).toContain('explorer');
     expect(plan.tasks.every((task) => task.readOnly)).toBe(true);
-    expect(plan.reasons.join(' ')).toMatch(/large context|docs|complex|ambiguous/i);
+    expect(plan.reasons.join(' ')).toMatch(/repository|documentation|review|security/i);
+  });
+
+  it('keeps standard profile near the legacy helper size', () => {
+    const plan = new DelegationPlanner('standard').plan({
+      runId: 'run:test',
+      mode: 'code',
+      prompt: 'Comprehensively review the agent workflow, subagent delegation, memory, docs, and validation risks',
+      context: context({
+        selectedFiles: Array.from({ length: 24 }, (_, index) => `src/file-${index}.ts`),
+        missingContextWarnings: ['Possible omitted integration surface.'],
+      }),
+      validationCommands: validation,
+    });
+
+    expect(plan.required).toBe(true);
+    expect(plan.tasks.length).toBeLessThanOrEqual(3);
   });
 });

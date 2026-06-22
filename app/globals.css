@@ -195,6 +195,7 @@ textarea {
 
 .mode-route-rail {
   isolation: isolate;
+  --mode-route-segment-width: 150px;
 }
 
 .mode-route-thumb {
@@ -247,6 +248,21 @@ textarea {
   text-transform: none;
 }
 
+@media (max-width: 1280px) {
+  .mode-route-rail {
+    --mode-route-segment-width: 64px;
+  }
+
+  .mode-route-tab {
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .mode-route-label {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mode-route-thumb,
   .mode-route-tab,
@@ -281,8 +297,7 @@ textarea {
   background:
     radial-gradient(circle at 50% 8%, var(--canvas-vignette), transparent 32rem),
     linear-gradient(var(--canvas-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px),
-    rgb(var(--ink-950));
+    linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px), rgb(var(--ink-950));
   background-size:
     auto,
     32px 32px,
@@ -503,7 +518,6 @@ textarea {
   color: #6e7681;
   pointer-events: none;
 }
-
 
 .code-space-diff-added-line {
   background: rgba(63, 185, 80, 0.16);

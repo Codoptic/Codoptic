@@ -37,7 +37,13 @@ export class PermissionManager {
         reason: tool.riskLevel === 'high' ? 'High-risk actions still require approval.' : 'Sandbox autonomy allows this tool.',
       };
     }
+    if (autonomy === 'full_access_local') {
+      return {
+        permission: 'auto',
+        approvalRequired: false,
+        reason: 'Full local access allows this trusted-workspace tool.',
+      };
+    }
     return { permission: tool.permission, approvalRequired: tool.permission === 'approval_required', reason: 'Organization policy defers to tool metadata.' };
   }
 }
-

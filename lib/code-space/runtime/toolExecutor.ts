@@ -27,11 +27,22 @@ import { PermissionManager } from './permissionManager';
 import { createDefaultToolRegistry, ToolRegistry } from './toolRegistry';
 import { TerminalRunner } from './terminalRunner';
 import { isRiskyTerminalCommand, type TerminalCommand } from './terminalPolicy';
+import {
+  createPtySession,
+  disposePtySession,
+  readPtySession,
+  signalPtySession,
+  waitForPtySession,
+  writePtySession,
+} from './ptySessionManager';
 import { traceDependencyEdges } from './dependencyTrace';
 import { listRepositoryFiles, normalizeContextPath, safeReadTextFile } from './repoMap';
 import { hashContent } from './patchReview';
 import { addPatchCoverage } from './implementationContract';
 import { MemoryManager, normalizeMemoryPath } from './memoryManager';
+import { BrowserController } from './browserController';
+import type { ContextLedger } from './contextLedger';
+import type { RuntimeScaleProfile } from './scaleProfile';
 
 export interface LedgerEntry {
   beforeContent: string;
@@ -105,6 +116,9 @@ export interface CodeAgentContext {
   spawnSubagent?: (request: SubagentSpawnRequest) => Promise<SubagentResult>;
   /** Durable memory update proposals captured during this run; never written directly. */
   memoryUpdateProposals?: Array<{ path: string; content: string; reason: string }>;
+  contextLedger?: ContextLedger;
+  scaleProfile?: RuntimeScaleProfile;
+  browser?: BrowserController;
   registry: ToolRegistry;
   permission: PermissionManager;
   terminal: TerminalRunner;
@@ -255,6 +269,21 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
     description: 'Run a workspace command (tests, typecheck, build, lint, grep, ls, etc.) and capture output. Destructive or network-mutating commands are gated and require approval.',
     inputSchema: { type: 'object', properties: { command: { type: 'string' }, args: { type: 'array', items: { type: 'string' } }, cwd: { type: 'string' }, reason: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['command', 'reason'] },
   },
+  { name: 'terminal_start', description: 'Start an interactive PTY terminal session in the workspace.', inputSchema: { type: 'object', properties: { cwd: { type: 'string' }, cols: { type: 'number' }, rows: { type: 'number' } } } },
+  { name: 'terminal_write', description: 'Write stdin bytes to an interactive terminal session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, data: { type: 'string' } }, required: ['sessionId', 'data'] } },
+  { name: 'terminal_read', description: 'Read buffered output from an interactive terminal session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, maxChars: { type: 'number' }, clear: { type: 'boolean' } }, required: ['sessionId'] } },
+  { name: 'terminal_wait', description: 'Wait for an interactive terminal session to exit or match a regex pattern.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, pattern: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['sessionId'] } },
+  { name: 'terminal_signal', description: 'Send SIGINT, SIGTERM, or SIGKILL to an interactive terminal session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, signal: { type: 'string' } }, required: ['sessionId'] } },
+  { name: 'terminal_close', description: 'Close an interactive terminal session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] } },
+  { name: 'browser_preview_check', description: 'Open a Playwright browser preview, collect console/network output, and capture a screenshot artifact.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, scenario: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' } }, required: ['url', 'scenario'] } },
+  { name: 'browser_open', description: 'Open a Playwright browser session for a URL and capture a screenshot.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' } }, required: ['url'] } },
+  { name: 'browser_click', description: 'Click an element in a browser session by selector.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, selector: { type: 'string' } }, required: ['sessionId', 'selector'] } },
+  { name: 'browser_type', description: 'Fill an input element in a browser session by selector.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' } }, required: ['sessionId', 'selector', 'text'] } },
+  { name: 'browser_scroll', description: 'Scroll a browser session by pixel delta.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } }, required: ['sessionId'] } },
+  { name: 'browser_screenshot', description: 'Capture and persist a screenshot artifact from a browser session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, label: { type: 'string' } }, required: ['sessionId'] } },
+  { name: 'browser_eval', description: 'Evaluate a bounded JavaScript expression in the page context.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, expression: { type: 'string' } }, required: ['sessionId', 'expression'] } },
+  { name: 'browser_console', description: 'Read collected console messages and network errors from a browser session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] } },
+  { name: 'browser_close', description: 'Close a browser session.', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] } },
   {
     name: 'restore_checkpoint',
     description: 'Revert all files captured by a previously created checkpoint (checkpointRef is the checkpoint id returned by an earlier edit_file).',
@@ -509,6 +538,35 @@ export class ToolExecutor {
           return await this.editFile(call, ctx);
         case 'run_command':
           return await this.runCommand(call, ctx);
+        case 'terminal_start':
+          return await this.terminalStart(call, ctx);
+        case 'terminal_write':
+          return await this.terminalWrite(call, ctx);
+        case 'terminal_read':
+          return await this.terminalRead(call, ctx);
+        case 'terminal_wait':
+          return await this.terminalWait(call, ctx);
+        case 'terminal_signal':
+          return await this.terminalSignal(call, ctx);
+        case 'terminal_close':
+          return await this.terminalClose(call, ctx);
+        case 'browser_preview_check':
+        case 'browser_open':
+          return await this.browserOpen(call, ctx);
+        case 'browser_click':
+          return await this.browserClick(call, ctx);
+        case 'browser_type':
+          return await this.browserType(call, ctx);
+        case 'browser_scroll':
+          return await this.browserScroll(call, ctx);
+        case 'browser_screenshot':
+          return await this.browserScreenshot(call, ctx);
+        case 'browser_eval':
+          return await this.browserEval(call, ctx);
+        case 'browser_console':
+          return await this.browserConsole(call, ctx);
+        case 'browser_close':
+          return await this.browserClose(call, ctx);
         case 'restore_checkpoint':
           return await this.restoreCheckpoint(call, ctx);
         case 'spawn_subagent':
@@ -538,6 +596,7 @@ export class ToolExecutor {
     ctx.readFiles.add(normalized);
     await ctx.emitRuntime('file.read', { path: target });
     const lines = content.split('\n');
+    ctx.contextLedger?.add({ kind: 'file_read', path: normalized, summary: `Read ${normalized} (${lines.length} lines)`, status: 'completed' });
     const start = typeof call.input.startLine === 'number' ? Math.max(1, Math.floor(call.input.startLine)) : 1;
     const end = typeof call.input.endLine === 'number' ? Math.min(lines.length, Math.floor(call.input.endLine)) : lines.length;
     const slice = lines.slice(start - 1, end);
@@ -1024,13 +1083,14 @@ export class ToolExecutor {
       await ctx.emitRuntime('tool.approval.required', { tool: 'run_command', command: `${commandName} ${args.join(' ')}`, reason: decision.reason });
       return { content: `Command not run: autonomy "${ctx.autonomy}" requires approval for "${commandName}". ${decision.reason}`, isError: true };
     }
-    if (isRiskyTerminalCommand(command)) {
+    if (ctx.autonomy !== 'full_access_local' && isRiskyTerminalCommand(command)) {
       return { content: `Command "${commandName} ${args.join(' ')}" is gated by terminal policy and requires explicit approval. It was not run.`, isError: true };
     }
 
-    const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
+    const result = await ctx.terminal.run(command, ctx.root, ctx.signal, { allowRisky: ctx.autonomy === 'full_access_local' });
     const artifact = await writeAgentArtifact({ projectRoot: ctx.root, runId: ctx.runId, kind: 'terminal_log', content: result.output, summary: `${result.command}: ${result.status}` });
     ctx.artifacts.set(artifact.artifactId, artifact);
+    ctx.contextLedger?.addArtifact('terminal', artifact, `${result.command}: ${result.status}`);
     const preview = result.output.length > MAX_TOOL_OUTPUT ? `${result.output.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; read full output via read_artifact id=${artifact.artifactId}]` : result.output;
     return {
       content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`,
@@ -1039,6 +1099,174 @@ export class ToolExecutor {
       command: result.command,
       artifactId: artifact.artifactId,
     };
+  }
+
+  private ensureTerminalDecision(toolName: string, ctx: CodeAgentContext): ToolExecutionResult | null {
+    const decision = this.decide(toolName, ctx.autonomy);
+    if (decision.permission !== 'auto') return { content: `${toolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true };
+    return null;
+  }
+
+  private async terminalStart(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.ensureTerminalDecision('terminal_start', ctx);
+    if (gated) return gated;
+    const cwdInput = str(call.input.cwd);
+    const cwd = cwdInput ? path.resolve(ctx.root, cwdInput) : ctx.root;
+    if (cwd !== ctx.root && !cwd.startsWith(`${ctx.root}${path.sep}`) && ctx.autonomy !== 'full_access_local') {
+      return { content: 'terminal_start cwd escapes workspace root; use full_access_local for trusted broader access.', isError: true };
+    }
+    const session = createPtySession(cwd, Number(call.input.cols) || 100, Number(call.input.rows) || 30);
+    await ctx.emitRuntime('terminal.started', { sessionId: session.id, cwd, shell: session.pty.process });
+    ctx.contextLedger?.add({ kind: 'terminal', summary: `Started PTY session ${session.id}`, status: 'pending' });
+    return { content: `Started terminal session ${session.id} (${session.pty.process}) in ${cwd}. Use terminal_write, terminal_read, terminal_wait, terminal_signal, and terminal_close.` };
+  }
+
+  private async terminalWrite(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.ensureTerminalDecision('terminal_write', ctx);
+    if (gated) return gated;
+    const sessionId = str(call.input.sessionId);
+    const data = str(call.input.data);
+    if (!writePtySession(sessionId, data)) return { content: `Unknown terminal session: ${sessionId}`, isError: true, recoverable: true };
+    await ctx.emitRuntime('terminal.output', { sessionId, stream: 'stdin', chunk: data });
+    return { content: `Wrote ${data.length} byte(s) to ${sessionId}.` };
+  }
+
+  private async terminalRead(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const sessionId = str(call.input.sessionId);
+    const snapshot = readPtySession(sessionId, Number(call.input.maxChars) || MAX_TOOL_OUTPUT, call.input.clear === true);
+    if (!snapshot) return { content: `Unknown terminal session: ${sessionId}`, isError: true, recoverable: true };
+    const artifact = await writeAgentArtifact({ projectRoot: ctx.root, runId: ctx.runId, kind: 'terminal_log', content: snapshot.output, summary: `PTY ${sessionId}: ${snapshot.exited ? 'exited' : 'running'}` });
+    ctx.artifacts.set(artifact.artifactId, artifact);
+    ctx.contextLedger?.addArtifact('terminal', artifact);
+    return { content: clip(`sessionId: ${sessionId}\nstatus: ${snapshot.exited ? `exited (${snapshot.exitCode ?? 'unknown'})` : 'running'}\nartifactId: ${artifact.artifactId}\n\n${snapshot.output || '(no output yet)'}`) };
+  }
+
+  private async terminalWait(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const sessionId = str(call.input.sessionId);
+    const snapshot = await waitForPtySession(sessionId, {
+      pattern: str(call.input.pattern) || undefined,
+      timeoutMs: typeof call.input.timeoutMs === 'number' ? Math.max(250, Math.min(600_000, call.input.timeoutMs)) : 30_000,
+    });
+    if (!snapshot) return { content: `Unknown terminal session: ${sessionId}`, isError: true, recoverable: true };
+    const artifact = await writeAgentArtifact({ projectRoot: ctx.root, runId: ctx.runId, kind: 'terminal_log', content: snapshot.output, summary: `PTY wait ${sessionId}: ${snapshot.matched ? 'matched' : snapshot.exited ? 'exited' : 'timeout'}` });
+    ctx.artifacts.set(artifact.artifactId, artifact);
+    ctx.contextLedger?.addArtifact('terminal', artifact);
+    return { content: clip(`sessionId: ${sessionId}\nmatched: ${snapshot.matched}\nexited: ${snapshot.exited}\nexitCode: ${snapshot.exitCode ?? 'n/a'}\nartifactId: ${artifact.artifactId}\n\n${snapshot.output || '(no output)'}`), isError: !snapshot.matched && !snapshot.exited, recoverable: true };
+  }
+
+  private async terminalSignal(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.ensureTerminalDecision('terminal_signal', ctx);
+    if (gated) return gated;
+    const sessionId = str(call.input.sessionId);
+    const signal = ['SIGINT', 'SIGTERM', 'SIGKILL'].includes(str(call.input.signal)) ? (str(call.input.signal) as 'SIGINT' | 'SIGTERM' | 'SIGKILL') : 'SIGTERM';
+    if (!signalPtySession(sessionId, signal)) return { content: `Unknown terminal session: ${sessionId}`, isError: true, recoverable: true };
+    return { content: `Sent ${signal} to ${sessionId}.` };
+  }
+
+  private async terminalClose(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const sessionId = str(call.input.sessionId);
+    disposePtySession(sessionId);
+    await ctx.emitRuntime('terminal.exited', { sessionId, closedByAgent: true });
+    return { content: `Closed terminal session ${sessionId}.` };
+  }
+
+  private browser(ctx: CodeAgentContext): BrowserController {
+    if (!ctx.browser) ctx.browser = new BrowserController();
+    return ctx.browser;
+  }
+
+  private browserDecision(toolName: string, ctx: CodeAgentContext): ToolExecutionResult | null {
+    const decision = this.decide(toolName, ctx.autonomy);
+    if (decision.permission !== 'auto') return { content: `${toolName} requires approval under autonomy "${ctx.autonomy}". ${decision.reason}`, isError: true };
+    return null;
+  }
+
+  private async browserOpen(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const toolName = call.name === 'browser_preview_check' ? 'browser_preview_check' : 'browser_open';
+    const gated = this.browserDecision(toolName, ctx);
+    if (gated) return gated;
+    const url = str(call.input.url);
+    if (!url) return { content: `${toolName} requires url.`, isError: true, recoverable: true };
+    await ctx.emitRuntime('browser.preview.started', { url, scenario: str(call.input.scenario) });
+    const snapshot = await this.browser(ctx).open({
+      root: ctx.root,
+      runId: ctx.runId,
+      url,
+      viewport: {
+        width: Number(call.input.width) || 1440,
+        height: Number(call.input.height) || 1000,
+      },
+    });
+    if (snapshot.screenshotArtifact) {
+      ctx.artifacts.set(snapshot.screenshotArtifact.artifactId, snapshot.screenshotArtifact);
+      ctx.contextLedger?.addArtifact('browser', snapshot.screenshotArtifact);
+      await ctx.emitRuntime('browser.screenshot.created', { artifact: snapshot.screenshotArtifact, url: snapshot.url, title: snapshot.title });
+    }
+    return { content: this.formatBrowserSnapshot(snapshot) };
+  }
+
+  private async browserClick(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.browserDecision('browser_click', ctx);
+    if (gated) return gated;
+    const snapshot = await this.browser(ctx).click(str(call.input.sessionId), str(call.input.selector));
+    return snapshot ? { content: this.formatBrowserSnapshot(snapshot) } : { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+  }
+
+  private async browserType(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.browserDecision('browser_type', ctx);
+    if (gated) return gated;
+    const snapshot = await this.browser(ctx).type(str(call.input.sessionId), str(call.input.selector), str(call.input.text));
+    return snapshot ? { content: this.formatBrowserSnapshot(snapshot) } : { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+  }
+
+  private async browserScroll(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.browserDecision('browser_scroll', ctx);
+    if (gated) return gated;
+    const snapshot = await this.browser(ctx).scroll(str(call.input.sessionId), Number(call.input.x) || 0, Number(call.input.y) || 600);
+    return snapshot ? { content: this.formatBrowserSnapshot(snapshot) } : { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+  }
+
+  private async browserScreenshot(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.browserDecision('browser_screenshot', ctx);
+    if (gated) return gated;
+    const snapshot = await this.browser(ctx).screenshot(ctx.root, ctx.runId, str(call.input.sessionId), str(call.input.label) || 'screenshot');
+    if (!snapshot) return { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+    if (snapshot.screenshotArtifact) {
+      ctx.artifacts.set(snapshot.screenshotArtifact.artifactId, snapshot.screenshotArtifact);
+      ctx.contextLedger?.addArtifact('browser', snapshot.screenshotArtifact);
+      await ctx.emitRuntime('browser.screenshot.created', { artifact: snapshot.screenshotArtifact, url: snapshot.url, title: snapshot.title });
+    }
+    return { content: this.formatBrowserSnapshot(snapshot) };
+  }
+
+  private async browserEval(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const gated = this.browserDecision('browser_eval', ctx);
+    if (gated) return gated;
+    const output = await this.browser(ctx).eval(str(call.input.sessionId), str(call.input.expression));
+    return output == null ? { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true } : { content: clip(output) };
+  }
+
+  private async browserConsole(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const snapshot = this.browser(ctx).console(str(call.input.sessionId));
+    if (!snapshot) return { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+    for (const message of snapshot.consoleMessages.slice(-20)) await ctx.emitRuntime('browser.console.message', { message });
+    for (const message of snapshot.networkErrors.slice(-20)) await ctx.emitRuntime('browser.network.error', { message });
+    return { content: clip(formatBrowserDiagnostics(snapshot.consoleMessages, snapshot.networkErrors)) };
+  }
+
+  private async browserClose(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const ok = await this.browser(ctx).close(str(call.input.sessionId));
+    return ok ? { content: `Closed browser session ${str(call.input.sessionId)}.` } : { content: `Unknown browser session: ${str(call.input.sessionId)}`, isError: true, recoverable: true };
+  }
+
+  private formatBrowserSnapshot(snapshot: { sessionId: string; url: string; title: string; consoleMessages: string[]; networkErrors: string[]; screenshotArtifact?: AgentArtifact }): string {
+    return clip([
+      `browserSessionId: ${snapshot.sessionId}`,
+      `title: ${snapshot.title || '(untitled)'}`,
+      `url: ${snapshot.url}`,
+      snapshot.screenshotArtifact ? `screenshotArtifactId: ${snapshot.screenshotArtifact.artifactId}` : '',
+      formatBrowserDiagnostics(snapshot.consoleMessages, snapshot.networkErrors),
+    ].filter(Boolean).join('\n'));
   }
 
   private async restoreCheckpoint(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -1210,6 +1438,15 @@ function isValidationLikeCommand(command: string, output: string): boolean {
     /\b(?:error|warning)\s+['"`]?[^'"`\n]+['"`]?\s+(?:is\s+)?(?:defined|assigned|never|not|missing|unexpected|invalid)/i.test(combined) ||
     /\b(?:prefer-const|no-unused-vars|@typescript-eslint\/|TS\d{4}|SyntaxError|TypeError|AssertionError)\b/i.test(combined)
   );
+}
+
+function formatBrowserDiagnostics(consoleMessages: string[], networkErrors: string[]): string {
+  return [
+    `consoleMessages: ${consoleMessages.length}`,
+    ...consoleMessages.slice(-10).map((message) => `console: ${message}`),
+    `networkErrors: ${networkErrors.length}`,
+    ...networkErrors.slice(-10).map((message) => `network: ${message}`),
+  ].join('\n');
 }
 
 function matchesGlob(file: string, glob: string): boolean {

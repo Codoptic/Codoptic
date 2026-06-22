@@ -457,6 +457,7 @@ export async function buildCodeSeedMessage(
   model = '',
   memoryContext?: MemoryContext,
   delegationReport?: DelegationReport,
+  contextLedgerSummary?: string,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
   const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
@@ -485,6 +486,8 @@ export async function buildCodeSeedMessage(
     formatWorkflowDodMarkdown(),
     '',
     memoryContext ? formatMemoryContext(memoryContext) : 'Project memories: not loaded.',
+    '',
+    contextLedgerSummary || 'Context ledger: not initialized.',
     '',
     formatDelegationReport(delegationReport),
     '',

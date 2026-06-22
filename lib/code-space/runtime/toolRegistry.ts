@@ -305,6 +305,48 @@ export function createDefaultToolRegistry(): ToolRegistry {
       logPolicy: 'redacted',
     }),
   );
+  for (const tool of [
+    {
+      name: 'terminal_start',
+      description: 'Start an interactive PTY terminal session in the workspace for REPLs, dev servers, prompts, and long-running commands.',
+      inputSchema: objectSchema({ cwd: { type: 'string' }, cols: { type: 'number' }, rows: { type: 'number' } }),
+    },
+    {
+      name: 'terminal_write',
+      description: 'Write stdin bytes to an existing interactive terminal session.',
+      inputSchema: objectSchema({ sessionId: { type: 'string' }, data: { type: 'string' } }, ['sessionId', 'data']),
+    },
+    {
+      name: 'terminal_read',
+      description: 'Read buffered output from an interactive terminal session without closing it.',
+      inputSchema: objectSchema({ sessionId: { type: 'string' }, maxChars: { type: 'number' }, clear: { type: 'boolean' } }, ['sessionId']),
+    },
+    {
+      name: 'terminal_wait',
+      description: 'Wait until a terminal session exits or its output matches a regex pattern.',
+      inputSchema: objectSchema({ sessionId: { type: 'string' }, pattern: { type: 'string' }, timeoutMs: { type: 'number' } }, ['sessionId']),
+    },
+    {
+      name: 'terminal_signal',
+      description: 'Send SIGINT, SIGTERM, or SIGKILL to an interactive terminal session.',
+      inputSchema: objectSchema({ sessionId: { type: 'string' }, signal: { type: 'string' } }, ['sessionId']),
+    },
+    {
+      name: 'terminal_close',
+      description: 'Close an interactive terminal session and release the PTY.',
+      inputSchema: objectSchema({ sessionId: { type: 'string' } }, ['sessionId']),
+    },
+  ]) {
+    registry.register(
+      baseTool({
+        ...tool,
+        riskLevel: 'medium',
+        permission: 'approval_required',
+        timeoutMs: 120_000,
+        logPolicy: 'redacted',
+      }),
+    );
+  }
   registry.register(
     baseTool({
       name: 'read_artifact',
@@ -378,14 +420,36 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(
     baseTool({
       name: 'browser_preview_check',
-      description: 'Record a manual or automated preview/browser validation requirement for UI changes. Execution remains approval-gated.',
-      inputSchema: objectSchema({ url: { type: 'string' }, scenario: { type: 'string' } }, ['scenario']),
+      description: 'Open a browser preview with Playwright, capture console/network output, and persist an initial screenshot artifact for UI validation.',
+      inputSchema: objectSchema({ url: { type: 'string' }, scenario: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' } }, ['url', 'scenario']),
       riskLevel: 'medium',
       permission: 'approval_required',
       timeoutMs: 120_000,
       observationCompression: 'summarize',
     }),
   );
+  for (const tool of [
+    ['browser_open', 'Open a Playwright browser session for a URL and capture an initial screenshot.', { url: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' } }, ['url']],
+    ['browser_click', 'Click an element in a browser session by selector.', { sessionId: { type: 'string' }, selector: { type: 'string' } }, ['sessionId', 'selector']],
+    ['browser_type', 'Fill an input element in a browser session by selector.', { sessionId: { type: 'string' }, selector: { type: 'string' }, text: { type: 'string' } }, ['sessionId', 'selector', 'text']],
+    ['browser_scroll', 'Scroll a browser session by pixel delta.', { sessionId: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } }, ['sessionId']],
+    ['browser_screenshot', 'Capture and persist a screenshot artifact from a browser session.', { sessionId: { type: 'string' }, label: { type: 'string' } }, ['sessionId']],
+    ['browser_eval', 'Evaluate a bounded JavaScript expression in the page context and return the stringified result.', { sessionId: { type: 'string' }, expression: { type: 'string' } }, ['sessionId', 'expression']],
+    ['browser_console', 'Read collected console messages and network errors from a browser session.', { sessionId: { type: 'string' } }, ['sessionId']],
+    ['browser_close', 'Close a browser session.', { sessionId: { type: 'string' } }, ['sessionId']],
+  ] as const) {
+    registry.register(
+      baseTool({
+        name: tool[0],
+        description: tool[1],
+        inputSchema: objectSchema(tool[2], [...tool[3]]),
+        riskLevel: 'medium',
+        permission: 'approval_required',
+        timeoutMs: 120_000,
+        observationCompression: 'summarize',
+      }),
+    );
+  }
 
   return registry;
 }

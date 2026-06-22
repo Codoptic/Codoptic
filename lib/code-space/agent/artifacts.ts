@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { guardPath } from '@/lib/security/pathGuard';
 
-export type AgentArtifactKind = 'terminal_log' | 'grep_result' | 'test_report' | 'lsp_trace' | 'docs_page' | 'large_file' | 'validation_report';
+export type AgentArtifactKind = 'terminal_log' | 'grep_result' | 'test_report' | 'lsp_trace' | 'docs_page' | 'large_file' | 'validation_report' | 'browser_screenshot';
 
 export interface AgentArtifact {
   artifactId: string;

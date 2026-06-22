@@ -33,13 +33,15 @@ export class IntegrationVerifier {
     const command: TerminalCommand = { kind: 'explore', command: 'git', args: ['diff'], cwd: ctx.root, reason: 'Integration review of the cumulative diff.', timeoutMs: 30_000 };
     const gitResult = await ctx.terminal.run(command, ctx.root, ctx.signal);
     const diff = gitResult.status === 'failed' ? '' : gitResult.output;
-    const diffUsable = Boolean(diff.trim());
 
     for (const [path, entry] of ctx.ledger) {
       if (entry.deleted) continue;
       if (path.startsWith('.agent/tests/')) continue;
       // Only assert presence-in-diff when git produced a usable diff (else we'd false-positive).
-      if (diffUsable && !diff.includes(path)) {
+      const pathCommand: TerminalCommand = { kind: 'explore', command: 'git', args: ['diff', '--', path], cwd: ctx.root, reason: `Integration review of ${path}.`, timeoutMs: 30_000 };
+      const pathDiffResult = await ctx.terminal.run(pathCommand, ctx.root, ctx.signal);
+      const pathDiff = pathDiffResult.status === 'failed' ? '' : pathDiffResult.output;
+      if (pathDiff.trim() && !pathDiff.includes(path)) {
         findings.push({ path, kind: 'missing_in_diff', message: `Edited file ${path} is not present in the git diff — the change may be partial or out of sync with disk.` });
       }
       for (const diagnostic of validateSyntaxLightweight(path, entry.afterContent)) {

@@ -8,6 +8,7 @@ export const AutonomyLevelSchema = z.enum([
   'approval_required',
   'auto_safe_tools',
   'sandbox_autonomy',
+  'full_access_local',
   'organization_policy',
 ]);
 export const RunStatusSchema = z.enum(['queued', 'running', 'paused', 'cancelled', 'completed', 'failed', 'blocked']);

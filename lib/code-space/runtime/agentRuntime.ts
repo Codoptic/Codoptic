@@ -56,6 +56,10 @@ import {
 } from './implementationContract';
 import { MemoryManager, type MemoryContext } from './memoryManager';
 import { DelegationPlanner, toSubagentRequest, type DelegationReport } from './delegationPlanner';
+import { AgentOrchestrator } from './agentOrchestrator';
+import { ContextLedger } from './contextLedger';
+import { BrowserController } from './browserController';
+import { normalizeRuntimeScaleProfile, runtimeScaleLimits } from './scaleProfile';
 
 export const ResumeValidationRequestSchema = z.object({
   runId: z.string(),
@@ -95,6 +99,7 @@ export const AgentRuntimeRequestSchema = z.object({
   mode: z.enum(['ask', 'plan', 'code']).optional().default('code'),
   toolBudget: z.number().default(50),
   autonomy: AutonomyLevelSchema.optional().default('auto_safe_tools'),
+  scaleProfile: z.enum(['standard', 'deep', 'massive', 'full_access_local']).optional(),
   attachments: z.array(RuntimeAttachmentSchema).optional().default([]),
 });
 
@@ -136,7 +141,8 @@ export class AgentRuntime {
       await emitRuntime('plan.updated', { phase, state, ...payload });
     };
 
-    await emitRuntime('run.created', { mode, toolBudget: request.toolBudget });
+    const scaleProfile = normalizeRuntimeScaleProfile(request.scaleProfile, mode);
+    await emitRuntime('run.created', { mode, toolBudget: request.toolBudget, scaleProfile });
     await emitRuntime('run.started', { projectName: request.projectName });
 
     try {
@@ -249,17 +255,23 @@ export class AgentRuntime {
   }
 
   private async runAutomaticDelegation(params: {
+    runId: string;
     prompt: string;
     context: ContextGraphResult;
     validationCommands: TerminalCommand[];
     subagentRunner: SubagentRunner;
+    scaleProfile: ReturnType<typeof normalizeRuntimeScaleProfile>;
+    contextLedger?: ContextLedger;
     emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>;
   }): Promise<DelegationReport> {
-    const plan = this.delegation.plan({
+    const planner = new DelegationPlanner(params.scaleProfile);
+    const plan = planner.plan({
+      runId: params.runId,
       prompt: params.prompt,
       context: params.context,
       validationCommands: params.validationCommands,
       mode: 'code',
+      scaleProfile: params.scaleProfile,
     });
     const results: DelegationReport['results'] = [];
     if (!plan.required) return { plan, results, reconciled: true };
@@ -267,18 +279,38 @@ export class AgentRuntime {
     await params.emitRuntime('subagent.plan.created', {
       reasons: plan.reasons,
       tasks: plan.tasks.map((task) => ({ id: task.id, role: task.role, reason: task.reason, readOnly: task.readOnly })),
+      scaleProfile: params.scaleProfile,
+      limits: plan.workGraph?.limits,
     });
 
-    for (const task of plan.tasks) {
-      try {
-        results.push(await params.subagentRunner.spawn(toSubagentRequest(task)));
-      } catch (error) {
-        results.push({
-          role: task.role,
-          summary: error instanceof Error ? error.message : String(error),
-          success: false,
-          toolCalls: 0,
-        });
+    const limits = plan.workGraph?.limits ?? runtimeScaleLimits(params.scaleProfile, 'code');
+    const queue = [...plan.tasks];
+    for (let offset = 0; offset < queue.length; offset += limits.maxSubagentConcurrency) {
+      const batch = queue.slice(offset, offset + limits.maxSubagentConcurrency);
+      const batchResults = await Promise.all(
+        batch.map(async (task) => {
+          try {
+            return await params.subagentRunner.spawn(toSubagentRequest(task));
+          } catch (error) {
+            return {
+              role: task.role,
+              summary: error instanceof Error ? error.message : String(error),
+              success: false,
+              toolCalls: 0,
+            };
+          }
+        }),
+      );
+      results.push(...batchResults);
+      for (const result of batchResults) {
+        params.contextLedger?.add({ kind: 'subagent', summary: `${result.role}: ${result.summary}`, status: result.success ? 'completed' : 'failed' });
+      }
+    }
+
+    if (plan.workGraph) {
+      const reconciliation = new AgentOrchestrator(params.scaleProfile).reconcile(plan.workGraph, results);
+      if (reconciliation.continuationNeeded) {
+        params.contextLedger?.markContinuation(reconciliation.continuationReason ?? 'Subagent work remains queued.', plan.workGraph.packages.slice(results.length).map((pkg) => pkg.id));
       }
     }
 
@@ -475,6 +507,9 @@ export class AgentRuntime {
 
     await emitRuntime('plan.updated', { phase: 'proposing_patch' });
     const buildPlanPath = extractBuildPlanPath(prompt);
+    const scaleProfile = normalizeRuntimeScaleProfile(request.scaleProfile, 'code');
+    const limits = runtimeScaleLimits(scaleProfile, 'code');
+    const contextLedger = new ContextLedger(runId, scaleProfile);
     const store = getCodeSpaceStore();
     const ledger = new Map<string, LedgerEntry>();
     const persistCheckpoint = async (checkpoint: FileCheckpoint) => {
@@ -506,6 +541,9 @@ export class AgentRuntime {
       artifacts: new Map(),
       checkpoints: [],
       memoryUpdateProposals: [],
+      contextLedger,
+      scaleProfile,
+      browser: new BrowserController(),
       registry: createDefaultToolRegistry(),
       permission: new PermissionManager(),
       terminal: new TerminalRunner(),
@@ -525,17 +563,20 @@ export class AgentRuntime {
       },
     });
 
-    const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
+    const budget = new ToolBudget(Math.max(request.toolBudget, limits.maxSpendUnits), resolveMaxTurns(Math.max(request.toolBudget, limits.maxSpendUnits)));
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
     const loopOptions: CodeAgentLoopOptions = { session, budget, signal };
 
     const subagentRunner = new SubagentRunner(ctx, session, request.projectName);
     ctx.spawnSubagent = (subRequest) => subagentRunner.spawn(subRequest);
     const delegationReport = await this.runAutomaticDelegation({
+      runId,
       prompt,
       context,
       validationCommands,
       subagentRunner,
+      scaleProfile,
+      contextLedger,
       emitRuntime,
     });
 
@@ -551,6 +592,7 @@ export class AgentRuntime {
         request.model,
         memoryContext,
         delegationReport,
+        contextLedger.summarize(),
       ),
     );
 
@@ -797,6 +839,8 @@ export class AgentRuntime {
         emit,
         emitRuntime,
         runId,
+        maxAttempts: ctx.scaleProfile ? runtimeScaleLimits(ctx.scaleProfile, 'code').maxRepairAttempts : undefined,
+        repeatedFailureLimit: ctx.scaleProfile ? runtimeScaleLimits(ctx.scaleProfile, 'code').repeatedFailureLimit : undefined,
       });
       validationRuns = repair.results;
     }
@@ -819,6 +863,8 @@ export class AgentRuntime {
       delegationRequired: params.delegationReport?.plan.required,
       delegationReconciled: params.delegationReport ? params.delegationReport.reconciled : true,
       implementationContract: ctx.implementationContract,
+      browserEvidenceRequired: requiresBrowserEvidence(prompt, filesChanged),
+      browserEvidenceCount: ctx.contextLedger?.list('browser').length ?? 0,
     });
     emit({ type: 'supervisor_verdict', status: verdict.status, blockers: verdict.blockers });
     await emitRuntime('supervisor.verdict', { status: verdict.status, blockers: verdict.blockers });
@@ -919,6 +965,9 @@ export class AgentRuntime {
       readFiles: new Set(context.files.map((file) => file.path)),
       artifacts: new Map(),
       checkpoints: [],
+      contextLedger: new ContextLedger(runId, normalizeRuntimeScaleProfile(request.toolBudget >= 600 ? 'massive' : 'deep', 'code')),
+      scaleProfile: normalizeRuntimeScaleProfile(request.toolBudget >= 600 ? 'massive' : 'deep', 'code'),
+      browser: new BrowserController(),
       registry: createDefaultToolRegistry(),
       permission: new PermissionManager(),
       terminal: new TerminalRunner(),
@@ -1012,6 +1061,7 @@ export class AgentRuntime {
     for (const result of validationRuns) {
       if (ctx) {
         ctx.implementationContract = addValidationCoverage(ctx.implementationContract, result);
+        if (result.artifact) ctx.contextLedger?.addArtifact('validation', result.artifact, `${result.command}: ${result.status}`);
         if (ctx.implementationContract) emit({ type: 'coverage_updated', contract: ctx.implementationContract });
       }
       emit({
@@ -1065,6 +1115,11 @@ function describeModeContract(mode: CodeSpaceAgentMode): string {
   if (mode === 'ask') return 'Ask mode is read-only: inspect, trace, and answer without patches or checkpoints.';
   if (mode === 'plan') return 'Plan mode is read-only except for .agent/plans artifacts; it must score context sufficiency and produce an implementation-grade artifact before Build.';
   return 'Code mode must read before edit, recall missing evidence autonomously, apply or propose concrete diffs, checkpoint through the unified apply path, validate honestly, and never claim implementation success with zero changed files.';
+}
+
+function requiresBrowserEvidence(prompt: string, filesChanged: string[]): boolean {
+  const haystack = `${prompt}\n${filesChanged.join('\n')}`;
+  return /\b(ui|ux|browser|preview|layout|responsive|click|scroll|screenshot|website|web app|frontend|css|tsx|jsx|page|component)\b/i.test(haystack);
 }
 
 async function resolveProviderCredentials(root: string, request: AgentRuntimeRequest): Promise<{ apiKey: string; endpoint?: string }> {

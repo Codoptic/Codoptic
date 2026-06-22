@@ -7,10 +7,21 @@ import { PermissionManager } from './permissionManager';
 import { TerminalRunner } from './terminalRunner';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
 
-export type SubagentRole = 'explorer' | 'critic' | 'docs-reader' | 'test-writer' | 'verifier';
+export type SubagentRole =
+  | 'explorer'
+  | 'critic'
+  | 'docs-reader'
+  | 'test-writer'
+  | 'verifier'
+  | 'planner'
+  | 'implementer'
+  | 'refactorer'
+  | 'ui-reviewer'
+  | 'security-reviewer'
+  | 'integration-owner';
 
-const READ_ONLY_ROLES: SubagentRole[] = ['explorer', 'critic', 'docs-reader'];
-const KNOWN_ROLES: SubagentRole[] = ['explorer', 'critic', 'docs-reader', 'test-writer', 'verifier'];
+const READ_ONLY_ROLES: SubagentRole[] = ['explorer', 'critic', 'docs-reader', 'planner', 'refactorer', 'ui-reviewer', 'security-reviewer', 'integration-owner'];
+const KNOWN_ROLES: SubagentRole[] = ['explorer', 'critic', 'docs-reader', 'test-writer', 'verifier', 'planner', 'implementer', 'refactorer', 'ui-reviewer', 'security-reviewer', 'integration-owner'];
 
 export interface SubagentSpawnRequest {
   role: string;
@@ -41,7 +52,7 @@ function resolveRoleTools(role: SubagentRole, readOnly: boolean, allowedTools?: 
   const readSpecs = CODE_MODE_TOOL_SPECS.filter((spec) => isReadOnlyTool(spec.name));
   const completion = specByName('attempt_completion');
   const specs: ToolSpec[] = [...readSpecs];
-  if (!readOnly && (role === 'test-writer' || role === 'verifier')) {
+  if (!readOnly && (role === 'test-writer' || role === 'verifier' || role === 'implementer')) {
     for (const name of ['edit_file', 'run_command']) {
       const spec = specByName(name);
       if (spec) specs.push(spec);
@@ -62,6 +73,12 @@ function buildSubagentSystemPrompt(role: SubagentRole, projectName: string): str
     'docs-reader': 'Read documentation, READMEs, and comments and report the conventions and constraints that apply. Do not edit anything.',
     'test-writer': 'Write focused, runnable test scripts under the .agent/tests/ folder for the changes, run them, and report results honestly. Do not modify source files.',
     verifier: 'Verify the changes by running validation commands and inspecting output. Report exact failures. Do not modify source files outside .agent/tests/.',
+    planner: 'Decompose large work into clear implementation packages, dependencies, risks, and validation gates. Do not edit anything.',
+    implementer: 'Implement a tightly scoped package only when explicitly allowed tools include edit_file. Report every changed file and validation needed.',
+    refactorer: 'Analyze refactor blast radius, call sites, imports, and compatibility risks. Do not edit anything unless explicitly allowed.',
+    'ui-reviewer': 'Review frontend/browser impact, preview scenarios, responsive risks, and screenshot requirements. Do not edit anything.',
+    'security-reviewer': 'Review permissions, sandboxing, terminal commands, secrets, network access, and destructive-action risks. Do not edit anything.',
+    'integration-owner': 'Reconcile cross-package integration risks, ordering, shared contracts, and final verification gates. Do not edit anything.',
   };
   return [
     `You are a ${role} subagent collaborating on the "${projectName}" repository with an isolated, fresh context window.`,
@@ -90,7 +107,7 @@ export class SubagentRunner {
     const role = normalizeRole(request.role);
     const readOnly = request.readOnly ?? READ_ONLY_ROLES.includes(role);
     const tools = resolveRoleTools(role, readOnly, request.allowedTools);
-    const maxToolCalls = Math.max(1, Math.min(40, request.maxToolCalls ?? 14));
+    const maxToolCalls = Math.max(1, Math.min(160, request.maxToolCalls ?? 14));
     const autonomy: AutonomyLevel = readOnly ? 'suggest_only' : 'auto_safe_tools';
 
     const childCtx: CodeAgentContext = {

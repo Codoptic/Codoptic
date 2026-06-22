@@ -8,6 +8,9 @@ export interface PtySession {
   pty: pty.IPty;
   createdAt: number;
   lastActiveAt: number;
+  outputBuffer: string[];
+  exitCode?: number;
+  exitedAt?: number;
 }
 
 const MAX_SESSIONS = 16;
@@ -82,7 +85,20 @@ export function createPtySession(rootPath: string, cols = 80, rows = 24): PtySes
     pty: ptyProcess,
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
+    outputBuffer: [],
   };
+  ptyProcess.onData((chunk) => {
+    session.outputBuffer.push(chunk);
+    if (session.outputBuffer.join('').length > 512_000) {
+      session.outputBuffer = [session.outputBuffer.join('').slice(-512_000)];
+    }
+    session.lastActiveAt = Date.now();
+  });
+  ptyProcess.onExit((event) => {
+    session.exitCode = event.exitCode;
+    session.exitedAt = Date.now();
+    session.lastActiveAt = Date.now();
+  });
   map.set(id, session);
   return session;
 }
@@ -109,6 +125,41 @@ export function writePtySession(sessionId: string, data: string): boolean {
   const session = getPtySession(sessionId);
   if (!session) return false;
   session.pty.write(data);
+  return true;
+}
+
+export function readPtySession(sessionId: string, maxChars = 12_000, clear = false): { output: string; exitCode?: number; exited: boolean } | null {
+  const session = getPtySession(sessionId);
+  if (!session) return null;
+  const output = session.outputBuffer.join('').slice(-Math.max(1, maxChars));
+  if (clear) session.outputBuffer = [];
+  return { output, exitCode: session.exitCode, exited: session.exitedAt !== undefined };
+}
+
+export async function waitForPtySession(
+  sessionId: string,
+  options: { pattern?: string; timeoutMs?: number; pollMs?: number } = {},
+): Promise<{ output: string; matched: boolean; exited: boolean; exitCode?: number } | null> {
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const pollMs = options.pollMs ?? 250;
+  const pattern = options.pattern ? new RegExp(options.pattern, 'i') : null;
+  while (Date.now() - startedAt < timeoutMs) {
+    const snapshot = readPtySession(sessionId, 24_000);
+    if (!snapshot) return null;
+    const matched = pattern ? pattern.test(snapshot.output) : snapshot.exited;
+    if (matched || snapshot.exited) return { ...snapshot, matched };
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  const snapshot = readPtySession(sessionId, 24_000);
+  return snapshot ? { ...snapshot, matched: false } : null;
+}
+
+export function signalPtySession(sessionId: string, signal: 'SIGINT' | 'SIGTERM' | 'SIGKILL' = 'SIGTERM'): boolean {
+  const session = getPtySession(sessionId);
+  if (!session) return false;
+  if (signal === 'SIGINT') session.pty.write('\x03');
+  else session.pty.kill(signal);
   return true;
 }
 

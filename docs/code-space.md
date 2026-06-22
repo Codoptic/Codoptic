@@ -55,6 +55,17 @@ The runtime is intentionally structured rather than monolithic. In broad terms, 
 
 The current runtime is conservative by design. It creates a visible plan, surfaces the relevant files and commands, and keeps patch application approval-gated so the user stays in control of repository changes.
 
+## Runtime Scale Profiles
+
+Code Space supports four runtime scale profiles:
+
+- **Standard** keeps the legacy-style small helper set for straightforward tasks.
+- **Deep** is the Code-mode default and expands delegation, repair attempts, and context-ledger usage for larger tasks.
+- **Massive** decomposes broad refactors into a larger work graph with higher subagent concurrency and resumable continuation markers.
+- **Full Access** is for trusted local projects only. It lets Auto mode use broader terminal autonomy while retaining audit logs, secret redaction, and circuit breakers for root/home destructive commands.
+
+Large tasks are not treated as literally infinite. They are decomposed into work packages, run through a profile-bounded subagent pool, summarized into the context ledger, and reconciled before the parent agent can claim completion.
+
 ## Review And Validation
 
 The right-hand agent panel is where the review loop lives:
@@ -81,9 +92,17 @@ A **Knowledge graph** link above the chat opens an interactive vis.js map of the
 
 ## Automatic Delegation
 
-Complex Code-mode tasks now get an explicit delegation phase after context sufficiency is assessed and before the parent coding loop edits files. The runtime can spawn up to three isolated subagents for independent repo exploration, documentation/convention reading, and critique or validation-risk review.
+Complex Code-mode tasks now get an explicit delegation phase after context sufficiency is assessed and before the parent coding loop edits files. The runtime builds a work graph and runs isolated subagents according to the selected runtime scale profile for independent repo exploration, documentation/convention reading, critique, validation-risk review, UI review, security review, and integration ownership.
 
-These automatic subagents are read-only. They share the workspace root and event stream, but they run with fresh context windows and cannot recursively spawn more subagents. Their findings are injected back into the parent agent's prompt, surfaced in the run feed, and reconciled before the supervisor can mark the run verified. The existing test-writer subagent still runs later in validation and is limited to `.agent/tests/<runId>/`.
+Most automatic subagents are read-only. They share the workspace root and event stream, but they run with fresh context windows and cannot recursively spawn more subagents. Their findings are written to the context ledger, injected back into the parent agent's prompt, surfaced in the run feed, and reconciled before the supervisor can mark the run verified. The existing test-writer subagent still runs later in validation and is limited to `.agent/tests/<runId>/`.
+
+## Terminal And Browser QA
+
+Agents can still run one-shot validation commands, but they also have PTY-backed terminal tools for interactive shells, dev servers, prompts, REPLs, and long-running watchers. Terminal output is stored as artifacts and summarized back into context through line-range and grep reads.
+
+For website and frontend work, Code Space can use Playwright browser tools to open a preview URL, click, type, scroll, evaluate page state, inspect console/network failures, and persist screenshots under `.agent/artifacts/<runId>/browser/`. UI-affecting Code runs require browser evidence before the supervisor can mark the run verified.
+
+Repeated validation failures are fingerprinted by command, failure category, and stack/file anchor. If the same failure repeats past the profile limit, the repair loop stops cycling and reports the exact blocker with artifact references.
 
 ## Project Memories
 

@@ -18,9 +18,14 @@ export interface TerminalCommand {
 }
 
 const RISKY_COMMAND_PATTERN = /\b(rm\s+-rf|git\s+push|npm\s+install|pnpm\s+add|yarn\s+add|bun\s+add|prisma\s+migrate|drop\s+database|curl\s+.*\|\s*sh)\b/i;
+const CIRCUIT_BREAKER_PATTERN = /\b(rm\s+-rf\s+(?:\/|~|"\$HOME"|\$HOME|\*))|:\(\)\s*\{\s*:\|\:&\s*\}/i;
 
 export function isRiskyTerminalCommand(command: TerminalCommand): boolean {
   return RISKY_COMMAND_PATTERN.test([command.command, ...command.args].join(' '));
+}
+
+export function isCircuitBreakerTerminalCommand(command: TerminalCommand): boolean {
+  return CIRCUIT_BREAKER_PATTERN.test([command.command, ...command.args].join(' '));
 }
 
 export function redactTerminalOutput(output: string): string {

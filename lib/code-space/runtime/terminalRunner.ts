@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { formatCommand, isRiskyTerminalCommand, redactTerminalOutput, type TerminalCommand } from './terminalPolicy';
+import { formatCommand, isCircuitBreakerTerminalCommand, isRiskyTerminalCommand, redactTerminalOutput, type TerminalCommand } from './terminalPolicy';
 
 export interface TerminalRunResult {
   command: string;
@@ -15,8 +15,8 @@ export interface TerminalChunk {
 }
 
 export class TerminalRunner {
-  async run(command: TerminalCommand, root: string, signal?: AbortSignal): Promise<TerminalRunResult> {
-    return this.runStreaming(command, root, undefined, signal);
+  async run(command: TerminalCommand, root: string, signal?: AbortSignal, options: { allowRisky?: boolean } = {}): Promise<TerminalRunResult> {
+    return this.runStreaming(command, root, undefined, signal, options);
   }
 
   async runStreaming(
@@ -24,10 +24,19 @@ export class TerminalRunner {
     root: string,
     onChunk?: (chunk: TerminalChunk) => void | Promise<void>,
     signal?: AbortSignal,
+    options: { allowRisky?: boolean } = {},
   ): Promise<TerminalRunResult> {
     const startedAt = Date.now();
     const displayCommand = formatCommand(command);
-    if (isRiskyTerminalCommand(command)) {
+    if (isCircuitBreakerTerminalCommand(command)) {
+      return {
+        command: displayCommand,
+        status: 'skipped',
+        output: `Command blocked by terminal circuit breaker: ${displayCommand}`,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    if (!options.allowRisky && isRiskyTerminalCommand(command)) {
       return {
         command: displayCommand,
         status: 'skipped',

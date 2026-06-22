@@ -10,6 +10,7 @@ import { getCodeSpaceExecutionPolicyMeta, type CodeSpaceExecutionPolicy } from '
 import { buildPlanImplementationPrompt, type CodeSpacePromptOptions } from '@/lib/code-space/planBuild';
 import { AgentModeSelector } from './AgentModeSelector';
 import { ExecutionPolicySelector } from './ExecutionPolicySelector';
+import { ScaleProfileSelector } from './ScaleProfileSelector';
 import { SessionListSection } from './SessionListSection';
 import { FileMentionInput } from './FileMentionInput';
 import { PlanClarificationPanel } from './PlanClarificationPanel';
@@ -22,6 +23,8 @@ import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionInd
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
 import { MentionChip } from './mentions/MentionChip';
 import { buildAgentTimeline, type AgentTimelineItem } from './agentTimeline';
+
+export type RuntimeScaleProfile = 'standard' | 'deep' | 'massive' | 'full_access_local';
 
 interface AgentPanelProps {
   session: CodeSpaceAgentSession | null;
@@ -41,11 +44,13 @@ interface AgentPanelProps {
   providerSummary: string;
   agentMode: CodeSpaceAgentMode;
   executionPolicy: CodeSpaceExecutionPolicy;
+  scaleProfile?: RuntimeScaleProfile;
   onOpenModelConfig: () => void;
   onGenerateDiagram: () => void;
   onOpenAppPlanner: () => void;
   onAgentModeChange: (mode: CodeSpaceAgentMode) => void;
   onExecutionPolicyChange: (policy: CodeSpaceExecutionPolicy) => void;
+  onScaleProfileChange?: (profile: RuntimeScaleProfile) => void;
   canGenerateDiagram: boolean;
   onSelectSession: (sessionId: string | null) => void;
   onRenameSession: (session: CodeSpaceAgentSession) => void;
@@ -308,11 +313,13 @@ export function AgentPanel({
   providerSummary,
   agentMode,
   executionPolicy,
+  scaleProfile = 'deep',
   onOpenModelConfig,
   onGenerateDiagram,
   onOpenAppPlanner,
   onAgentModeChange,
   onExecutionPolicyChange,
+  onScaleProfileChange = () => undefined,
   canGenerateDiagram,
   onSelectSession,
   onRenameSession,
@@ -713,6 +720,7 @@ export function AgentPanel({
             <div className="flex shrink-0 items-center gap-1">
               <ExecutionPolicySelector policy={executionPolicy} disabled={isRunning} onChange={onExecutionPolicyChange} />
               <AgentModeSelector mode={agentMode} disabled={isRunning} onChange={onAgentModeChange} />
+              <ScaleProfileSelector profile={scaleProfile} disabled={isRunning} onChange={onScaleProfileChange} />
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-0.5">
             <TokenUsageSpinbar />

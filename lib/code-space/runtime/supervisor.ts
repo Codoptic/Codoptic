@@ -19,6 +19,8 @@ export interface SupervisorInput {
   delegationRequired?: boolean;
   delegationReconciled?: boolean;
   implementationContract?: ImplementationContract;
+  browserEvidenceRequired?: boolean;
+  browserEvidenceCount?: number;
 }
 
 /**
@@ -64,6 +66,9 @@ export class Supervisor {
     }
     if (input.delegationRequired && !input.delegationReconciled) {
       blockers.push('Automatic subagent delegation was required but not reconciled by the parent agent.');
+    }
+    if (input.browserEvidenceRequired && !input.browserEvidenceCount) {
+      blockers.push('Browser/UI work requires preview evidence: at least one screenshot plus console/network inspection.');
     }
 
     blockers.push(...contractBlockers(input.implementationContract));

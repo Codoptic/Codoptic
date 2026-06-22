@@ -80,7 +80,7 @@ import {
 } from '@/lib/code-space/persistence';
 import { registerDslLanguage } from '@/components/editor/dslLanguage';
 import { ProviderConfig } from '@/components/agent/ProviderConfig';
-import { AgentPanel } from '@/components/code-space/AgentPanel';
+import { AgentPanel, type RuntimeScaleProfile } from '@/components/code-space/AgentPanel';
 import { CodeSpaceWorkspaceEnhancements } from '@/components/code-space/CodeSpaceWorkspaceEnhancements';
 import { InlinePatchReview } from '@/components/code-space/InlinePatchReview';
 import {
@@ -450,6 +450,7 @@ export function CodeSpaceWorkspace() {
   const [agentRunning, setAgentRunning] = useState(false);
   const [pendingDiffs, setPendingDiffs] = useState<CodeSpacePendingDiff[]>([]);
   const [executionPolicy, setExecutionPolicy] = useState<CodeSpaceExecutionPolicy>(DEFAULT_CODE_SPACE_EXECUTION_POLICY);
+  const [scaleProfile, setScaleProfile] = useState<RuntimeScaleProfile>('deep');
   const [terminalStream, setTerminalStream] = useState('');
   const [agentChangesets, setAgentChangesets] = useState<Array<{
     filePath: string;
@@ -473,6 +474,7 @@ export function CodeSpaceWorkspace() {
   const activeRunTokenRef = useRef<string | null>(null);
   const applyingDiffIdsRef = useRef<Set<string>>(new Set());
   const executionPolicyRef = useRef<CodeSpaceExecutionPolicy>(executionPolicy);
+  const scaleProfileRef = useRef<RuntimeScaleProfile>(scaleProfile);
   const diffDecorationIdsRef = useRef<string[]>([]);
   const panelRestoreSessionIdRef = useRef<string | null>(null);
   const skipPanelPersistRef = useRef(false);
@@ -488,6 +490,10 @@ export function CodeSpaceWorkspace() {
   useEffect(() => {
     executionPolicyRef.current = executionPolicy;
   }, [executionPolicy]);
+
+  useEffect(() => {
+    scaleProfileRef.current = scaleProfile;
+  }, [scaleProfile]);
 
   useEffect(() => {
     setProjectNameInput(activeProject?.name ?? '');
@@ -2219,10 +2225,15 @@ export function CodeSpaceWorkspace() {
           openTabs,
           mode: requestedMode,
           toolBudget: sessionWithPrompt.toolBudget,
+          scaleProfile: scaleProfileRef.current,
           // Confirm mode must always surface the accept/reject diff panel and never write to disk on
           // its own, so it runs the loop in suggest_only autonomy (edits become pending diff_proposed
           // events). Auto mode applies edits during the loop with checkpoints.
-          autonomy: executionPolicyRef.current === 'auto' ? 'auto_safe_tools' : 'suggest_only',
+          autonomy: scaleProfileRef.current === 'full_access_local' && executionPolicyRef.current === 'auto'
+            ? 'full_access_local'
+            : executionPolicyRef.current === 'auto'
+              ? 'auto_safe_tools'
+              : 'suggest_only',
           enableThinking,
           attachments: attachments.map((mention) => ({
             kind: mention.type,
@@ -3790,7 +3801,9 @@ export function CodeSpaceWorkspace() {
             }`}
             agentMode={agentMode}
             executionPolicy={executionPolicy}
+            scaleProfile={scaleProfile}
             onExecutionPolicyChange={handleExecutionPolicyChange}
+            onScaleProfileChange={setScaleProfile}
             onOpenModelConfig={() => setProviderConfigOpen(true)}
             onGenerateDiagram={routeToSystemDiagram}
             onOpenAppPlanner={() => setMode('custom-prompt')}
