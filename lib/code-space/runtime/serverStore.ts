@@ -3,15 +3,20 @@ import os from 'node:os';
 import path from 'node:path';
 import type {
   CheckpointRecord,
+  ContextLedgerRecord,
+  CoworkingRunRecord,
   MemoryRecord,
   MessageRecord,
   PatchRecord,
   ProjectRecord,
   ReviewCommentRecord,
   RunRecord,
+  ScheduledWorkRecordType,
   SessionRecord,
+  SubagentDeliverableRecordType,
   TodoRecord,
   ToolCallRecord,
+  WorkGraphRecord,
 } from '@/lib/code-space/domain';
 
 export interface CodeSpaceServerData {
@@ -25,6 +30,11 @@ export interface CodeSpaceServerData {
   todos: TodoRecord[];
   reviewComments: ReviewCommentRecord[];
   memories: MemoryRecord[];
+  coworkingRuns: CoworkingRunRecord[];
+  workGraphs: WorkGraphRecord[];
+  contextLedgerEntries: ContextLedgerRecord[];
+  subagentDeliverables: SubagentDeliverableRecordType[];
+  scheduledWork: ScheduledWorkRecordType[];
 }
 
 const EMPTY_DATA: CodeSpaceServerData = {
@@ -38,6 +48,11 @@ const EMPTY_DATA: CodeSpaceServerData = {
   todos: [],
   reviewComments: [],
   memories: [],
+  coworkingRuns: [],
+  workGraphs: [],
+  contextLedgerEntries: [],
+  subagentDeliverables: [],
+  scheduledWork: [],
 };
 
 function dataPath(): string {
@@ -86,4 +101,3 @@ export function getCodeSpaceStore(): JsonCodeSpaceStore {
   globalStore.__codeSpaceServerStore ??= new JsonCodeSpaceStore();
   return globalStore.__codeSpaceServerStore;
 }
-

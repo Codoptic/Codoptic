@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import type { AgentEvent, AgentEventType } from '@/lib/code-space/runtime/events';
 import type { ToolRiskLevel } from '@/lib/code-space/runtime/toolRegistry';
+import type {
+  CoworkingRun,
+  PersistedContextLedgerEntry,
+  PersistedWorkGraph,
+  ScheduledWorkRecord,
+  SubagentDeliverableRecord,
+} from '@/lib/code-space/runtime/coworkingTypes';
 
 export const AgentModeSchema = z.enum(['ask', 'plan', 'code', 'edit', 'debug', 'review', 'agent']);
 export const AutonomyLevelSchema = z.enum([
@@ -146,6 +153,12 @@ export interface MemoryRecord {
   createdAt: number;
   updatedAt: number;
 }
+
+export type CoworkingRunRecord = CoworkingRun;
+export type WorkGraphRecord = PersistedWorkGraph;
+export type ContextLedgerRecord = PersistedContextLedgerEntry;
+export type SubagentDeliverableRecordType = SubagentDeliverableRecord;
+export type ScheduledWorkRecordType = ScheduledWorkRecord;
 
 export interface StoredAgentEvent<TPayload = unknown> extends AgentEvent<TPayload> {
   sequence: number;

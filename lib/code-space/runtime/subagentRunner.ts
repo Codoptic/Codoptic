@@ -6,6 +6,7 @@ import { createDefaultToolRegistry } from './toolRegistry';
 import { PermissionManager } from './permissionManager';
 import { TerminalRunner } from './terminalRunner';
 import { formatAutonomyToolGuidance } from './autonomyPolicy';
+import { ToolBudget, isReadOnlyTool } from './toolBudget';
 
 export type SubagentRole =
   | 'explorer'
@@ -66,7 +67,7 @@ function resolveRoleTools(role: SubagentRole, readOnly: boolean, allowedTools?: 
   return specs;
 }
 
-function buildSubagentSystemPrompt(role: SubagentRole, projectName: string): string {
+function buildSubagentSystemPrompt(role: SubagentRole, projectName: string, readOnly: boolean): string {
   const roleBrief: Record<SubagentRole, string> = {
     explorer: 'Investigate the repository and report concrete findings (files, symbols, call sites). Do not edit anything.',
     critic: 'Critically review the current changes/approach and report risks, gaps, and concrete improvement suggestions. Do not edit anything.',
@@ -84,7 +85,6 @@ function buildSubagentSystemPrompt(role: SubagentRole, projectName: string): str
     `You are a ${role} subagent collaborating on the "${projectName}" repository with an isolated, fresh context window.`,
     roleBrief[role],
     readOnly ? formatAutonomyToolGuidance('suggest_only') : '',
-    readOnly ? '' : undefined,
     'Work efficiently within your tool budget. When finished, call attempt_completion with a concise, factual summary (success=false only if blocked).',
   ].filter(Boolean).join('\n');
 }
@@ -139,7 +139,7 @@ export class SubagentRunner {
 
     const budget = new ToolBudget(maxToolCalls, maxToolCalls * 2 + 4);
     const loop = new CodeAgentLoop(new ToolExecutor(childCtx.registry, childCtx.permission));
-    loop.seed(buildSubagentSystemPrompt(role, this.projectName), buildSubagentSeedMessage(request.task));
+    loop.seed(buildSubagentSystemPrompt(role, this.projectName, readOnly), buildSubagentSeedMessage(request.task));
 
     await this.parentCtx.emitRuntime('subagent.started', { role, task: request.task, readOnly });
     const result = await loop.run(childCtx, { session: this.session, budget, signal: this.parentCtx.signal, tools });
