@@ -119,6 +119,20 @@ describe('project tab loading', () => {
     expect(state.activeLayer).toBe('overview');
   });
 
+  it('activates and renders a newly generated project atomically', () => {
+    const projectId = useDiagramStore
+      .getState()
+      .addGeneratedProject('Generated Repo', 'generated overview dsl', sampleMultiLayer, 'guide');
+
+    const state = useDiagramStore.getState();
+    expect(state.activeProjectId).toBe(projectId);
+    expect(state.dslText).toBe('generated overview dsl');
+    expect(state.generatedProjects[0]?.id).toBe(projectId);
+    expect(state.multiLayer).toEqual(sampleMultiLayer);
+    expect(state.activeLayer).toBe('overview');
+    expect(state.instructionMarkdown).toBe('guide');
+  });
+
   it('hydrates the active project DSL instead of stale editor scratch text', () => {
     const project = addStoredProject('Huge Repo', 'Frontend\nBackend\nFrontend > Backend');
     writeActiveProjectId(project.id);

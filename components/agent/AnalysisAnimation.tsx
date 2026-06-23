@@ -40,6 +40,7 @@ export function AnalysisAnimation({ retryNotice, counters, onCancel, onDismiss, 
   const activeIdx = stages.findIndex((s) => s.id === stage);
   const isTerminal = terminalState !== null && terminalState !== undefined;
   const estimatedTokens = (() => {
+    if (typeof counters?.estimatedTokens === 'number') return counters.estimatedTokens;
     if (stage === 'scan') {
       const files = counters?.files ?? 0;
       return files > 0 ? Math.round(files * 120) : 0;
@@ -51,9 +52,26 @@ export function AnalysisAnimation({ retryNotice, counters, onCancel, onDismiss, 
       const avgPerFile = 1_300;
       return Math.round(Math.max(done, 1) * avgPerFile);
     }
-    if (stage === 'plan' || stage === 'subsystem' || stage === 'compile') {
+    if (stage === 'plan' || stage === 'subsystem' || stage === 'layers' || stage === 'compile' || stage === 'validate-dsl') {
       const selected = counters?.selected ?? counters?.total ?? 0;
       return selected > 0 ? Math.round(selected * 350) : 0;
+    }
+    if (stage === 'overview') {
+      const selected = counters?.selected ?? counters?.total ?? 0;
+      const layers = counters?.layers ?? 1;
+      return Math.round((selected * 180) + (layers * 900));
+    }
+    if (stage === 'sub-plans' || stage === 'layer-plan') {
+      const selected = counters?.selected ?? counters?.total ?? 0;
+      const layers = Math.max(1, counters?.layers ?? 1);
+      return Math.round((selected * 300) + (layers * 2_200));
+    }
+    if (stage === 'instruction') {
+      const selected = counters?.selected ?? counters?.total ?? counters?.done ?? 0;
+      const batches = counters?.instructionBatches ?? 1;
+      const completedBatches = counters?.instructionDone ?? 0;
+      const completedRatio = batches > 0 ? Math.max(1, completedBatches) / batches : 1;
+      return Math.round((selected * 950 * completedRatio) + (batches * 2_500));
     }
     return 0;
   })();
@@ -134,6 +152,9 @@ export function AnalysisAnimation({ retryNotice, counters, onCancel, onDismiss, 
           {counters?.layers !== undefined && <div>🧱 {counters.layers} layers</div>}
           {counters?.done !== undefined && counters?.total !== undefined && (
             <div>✓ {counters.done}/{counters.total} summarized</div>
+          )}
+          {counters?.instructionDone !== undefined && counters?.instructionBatches !== undefined && (
+            <div>Guide {counters.instructionDone}/{counters.instructionBatches} sections</div>
           )}
           {estimatedTokens > 0 && <div>🧠 ≈ {estimatedTokens.toLocaleString()} tokens</div>}
         </div>

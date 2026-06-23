@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useDiagramStore, type MultiLayerOutput } from '@/lib/state/store';
 import { ProviderConfig } from '@/components/agent/ProviderConfig';
 import { RepoInput } from '@/components/agent/RepoInput';
@@ -20,7 +21,6 @@ export function MultiLayerPanel() {
   const setInstructionMode = useDiagramStore((s) => s.setInstructionMode);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const setMode = useDiagramStore((s) => s.setMode);
-  const setDsl = useDiagramStore((s) => s.setDsl);
   const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
   const setMultiLayer = useDiagramStore((s) => s.setMultiLayer);
   const setActiveLayer = useDiagramStore((s) => s.setActiveLayer);
@@ -30,6 +30,7 @@ export function MultiLayerPanel() {
   const stopAgent = useDiagramStore((s) => s.stopAgent);
   const agentRunning = useDiagramStore((s) => s.agentRunning);
   const clearOverrides = useDiagramStore((s) => s.clearOverrides);
+  const router = useRouter();
 
   const [rootPath, setRootPath] = useState('');
   const [ignoredFolders, setIgnoredFolders] = useState<string[]>([]);
@@ -133,10 +134,10 @@ export function MultiLayerPanel() {
         setMultiLayer(out);
         clearOverrides();
         setActiveLayer('overview');
-        setDsl(out.overview.dsl);
         const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
         addGeneratedProject(projectName, out.overview.dsl, out, instructionMarkdown);
         setMode('editor');
+        router.push('/diagram');
       } else if (ev.type === 'done') {
         setAgentStage(null);
       }

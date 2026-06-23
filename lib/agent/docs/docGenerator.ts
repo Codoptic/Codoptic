@@ -96,7 +96,7 @@ export interface DocGenInput {
 export interface DocGenOptions {
   signal?: AbortSignal;
   onRetry?: RetryListener;
-  onProgress?: (message: string) => void;
+  onProgress?: (message: string, counters?: Record<string, number>) => void;
 }
 
 interface ModuleReferenceBatch {
@@ -530,7 +530,10 @@ async function generateModuleReferenceBatches(
   const batches = splitModuleReferenceBatches(input.summaries);
   const limit = pLimit(MODULE_REF_CONCURRENCY);
   const architectureAnchor = compactArchitectureAnchor(pass1);
-  opts.onProgress?.(`Module reference split into ${batches.length} bounded sections`);
+  opts.onProgress?.(`Module reference split into ${batches.length} bounded sections`, {
+    instructionBatches: batches.length,
+    instructionDone: 0,
+  });
 
   // Root Cause vs Logic: one enormous module-reference prompt can trigger provider
   // context/output failures that surface as retryable 429/5xx responses, leaving
@@ -539,7 +542,10 @@ async function generateModuleReferenceBatches(
   const sections = await Promise.all(
     batches.map((batch) =>
       limit(async () => {
-        opts.onProgress?.(`Writing module reference ${batch.index}/${batch.total} (${batch.summaries.length} files: ${batch.label})`);
+        opts.onProgress?.(`Writing module reference ${batch.index}/${batch.total} (${batch.summaries.length} files: ${batch.label})`, {
+          instructionBatches: batch.total,
+          instructionDone: batch.index - 1,
+        });
         const pass2Context = buildModuleRefBatchContext(input, batch, architectureAnchor);
         const pass2UserMsg = [
           pass2Context,
@@ -556,7 +562,10 @@ async function generateModuleReferenceBatches(
           ],
           { signal: opts.signal, onRetry: opts.onRetry },
         );
-        opts.onProgress?.(`Finished module reference ${batch.index}/${batch.total}`);
+        opts.onProgress?.(`Finished module reference ${batch.index}/${batch.total}`, {
+          instructionBatches: batch.total,
+          instructionDone: batch.index,
+        });
         return {
           index: batch.index,
           label: batch.label,

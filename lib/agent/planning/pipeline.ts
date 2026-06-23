@@ -15,6 +15,7 @@
 import { AGENT_FILE_ALLOWLIST } from '../repo/repoScanner';
 import { classifyRelevance, type DiagramKind } from '../analysis/classifier';
 import { generateTechnicalDocumentation } from '../docs/docGenerator';
+import { instructionTimeoutMarkdown, withInstructionTimeout } from './instructionTimeout';
 import { generatePlan } from './planner';
 import { planToDsl } from './dslCompiler';
 import { tryRepair } from './repair';
@@ -273,26 +274,38 @@ export async function runPipeline(
           ? `Writing deep technical reference (${summaries.length} files, two-pass mode)…`
           : `Writing deep technical reference (${summaries.length} files)…`,
       });
-      instructionMarkdown = await generateTechnicalDocumentation(
-        input.session,
-        {
-          repoMap,
-          summaries,
-          importGraph,
-          docs,
-          repoContext,
-          analysisDigest: analysis.digest,
-          diagramStyle: 'single',
-          diagramTitle: plan.title,
-          focus: input.focus,
-          planGroups: plan.groups.map((g) => ({ name: g.name, children: g.children })),
-        },
-        {
-          signal: input.signal,
-          onRetry: onRetry('instruction'),
-          onProgress: (message) => send({ type: 'log', stage: 'instruction', level: 'info', message }),
-        },
-      );
+      try {
+        instructionMarkdown = await withInstructionTimeout(input.signal, (signal) =>
+          generateTechnicalDocumentation(
+            input.session,
+            {
+              repoMap,
+              summaries,
+              importGraph,
+              docs,
+              repoContext,
+              analysisDigest: analysis.digest,
+              diagramStyle: 'single',
+              diagramTitle: plan.title,
+              focus: input.focus,
+              planGroups: plan.groups.map((g) => ({ name: g.name, children: g.children })),
+            },
+            {
+              signal,
+              onRetry: onRetry('instruction'),
+              onProgress: (message, counters) => {
+                send({ type: 'log', stage: 'instruction', level: 'info', message });
+                if (counters) send({ type: 'stage', stage: 'instruction', status: 'progress', message, counters });
+              },
+            },
+          ),
+        );
+      } catch (err) {
+        if (input.signal?.aborted) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        send({ type: 'log', stage: 'instruction', level: 'warn', message });
+        instructionMarkdown = instructionTimeoutMarkdown();
+      }
       send({
         type: 'stage',
         stage: 'instruction',

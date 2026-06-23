@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useDiagramStore } from '@/lib/state/store';
 import { ProviderConfig } from './ProviderConfig';
 import { RepoInput } from './RepoInput';
@@ -27,13 +28,13 @@ export function AgentPanel() {
   const setInstructionMode = useDiagramStore((s) => s.setInstructionMode);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const setMode = useDiagramStore((s) => s.setMode);
-  const setDsl = useDiagramStore((s) => s.setDsl);
   const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
   const setAgentStage = useDiagramStore((s) => s.setAgentStage);
   const pushLog = useDiagramStore((s) => s.pushAgentLog);
   const startAgent = useDiagramStore((s) => s.startAgent);
   const stopAgent = useDiagramStore((s) => s.stopAgent);
   const agentRunning = useDiagramStore((s) => s.agentRunning);
+  const router = useRouter();
 
   const [rootPath, setRootPath] = useState<string>('');
   const [ignoredFolders, setIgnoredFolders] = useState<string[]>([]);
@@ -136,10 +137,10 @@ export function AgentPanel() {
         sawResult = true;
         const instructionMarkdown = ev.instructionMarkdown ?? '';
         setInstructionMarkdown(instructionMarkdown);
-        setDsl(ev.dsl);
         const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
         addGeneratedProject(projectName, ev.dsl, undefined, instructionMarkdown);
         setMode('editor');
+        router.push('/diagram');
       } else if (ev.type === 'done') {
         setAgentStage(null);
       }

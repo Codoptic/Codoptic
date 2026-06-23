@@ -249,7 +249,7 @@ interface State {
     dsl: string,
     multiLayer?: MultiLayerOutput,
     instructionMarkdown?: string,
-  ) => void;
+  ) => string;
   openProject: (project: {
     id: string;
     dsl: string;
@@ -573,14 +573,20 @@ export const useDiagramStore = create<State>()(
       addGeneratedProject: (name, dsl, multiLayer?, instructionMarkdown?) => {
         const project = addStoredProject(name, dsl, multiLayer, instructionMarkdown);
         writeActiveProjectId(project.id);
-        if (instructionMarkdown !== undefined)
-          writeUiPreference('instructionMarkdown', instructionMarkdown);
+        writeUiPreference('dslText', dsl);
+        writeUiPreference('activeLayer', 'overview');
+        writeUiPreference('instructionMarkdown', instructionMarkdown ?? '');
         set((state) => ({
+          dslText: dsl,
           generatedProjects: [project, ...state.generatedProjects],
           activeProjectId: project.id,
           instructionMarkdown: instructionMarkdown ?? '',
-          ...(multiLayer ? { multiLayer, activeLayer: 'overview' } : {}),
+          multiLayer: multiLayer ?? null,
+          activeLayer: 'overview',
+          overrides: { nodes: {}, groups: {}, edges: {} },
         }));
+        scheduleDraftSave();
+        return project.id;
       },
       openProject: (project) => {
         writeUiPreference('dslText', project.dsl);

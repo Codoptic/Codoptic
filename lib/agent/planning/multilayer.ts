@@ -23,6 +23,7 @@ import { tryRepair } from './repair';
 import { compile } from '../../dsl/compiler';
 import { validateWithRetry, type ProviderSession } from '../providers';
 import { generateTechnicalDocumentation } from '../docs/docGenerator';
+import { instructionTimeoutMarkdown, withInstructionTimeout } from './instructionTimeout';
 import type { SseEvent } from '../../util/stream';
 import { extractImportGraph } from '../repo/importGraph';
 import { readDocPriors } from '../docs/docReader';
@@ -374,26 +375,38 @@ export async function runMultiLayerPipeline(
           ? `Writing deep technical reference (${summaries.length} files, two-pass mode)…`
           : `Writing deep technical reference (${summaries.length} files)…`,
       });
-      instructionMarkdown = await generateTechnicalDocumentation(
-        input.session,
-        {
-          repoMap,
-          summaries,
-          importGraph,
-          docs,
-          repoContext,
-          analysisDigest: analysis.digest,
-          diagramStyle: 'multi-layer',
-          diagramTitle: `${result.overview.name} — ${result.overview.description}`,
-          focus: input.focus,
-          layers: result.layers.map((l) => ({ name: l.name, description: l.description })),
-        },
-        {
-          signal: input.signal,
-          onRetry: onRetry('instruction'),
-          onProgress: (message) => send({ type: 'log', stage: 'instruction', level: 'info', message }),
-        },
-      );
+      try {
+        instructionMarkdown = await withInstructionTimeout(input.signal, (signal) =>
+          generateTechnicalDocumentation(
+            input.session,
+            {
+              repoMap,
+              summaries,
+              importGraph,
+              docs,
+              repoContext,
+              analysisDigest: analysis.digest,
+              diagramStyle: 'multi-layer',
+              diagramTitle: `${result.overview.name} — ${result.overview.description}`,
+              focus: input.focus,
+              layers: result.layers.map((l) => ({ name: l.name, description: l.description })),
+            },
+            {
+              signal,
+              onRetry: onRetry('instruction'),
+              onProgress: (message, counters) => {
+                send({ type: 'log', stage: 'instruction', level: 'info', message });
+                if (counters) send({ type: 'stage', stage: 'instruction', status: 'progress', message, counters });
+              },
+            },
+          ),
+        );
+      } catch (err) {
+        if (input.signal?.aborted) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        send({ type: 'log', stage: 'instruction', level: 'warn', message });
+        instructionMarkdown = instructionTimeoutMarkdown();
+      }
       send({
         type: 'stage',
         stage: 'instruction',

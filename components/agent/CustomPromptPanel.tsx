@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { BookOpenText, Layers3, Sparkles, SquareIcon } from 'lucide-react';
 import { useDiagramStore, type MultiLayerOutput } from '@/lib/state/store';
 import { ProviderConfig } from './ProviderConfig';
@@ -78,12 +79,12 @@ function loadCustomPromptState(): PersistedCustomPromptState | null {
 export function CustomPromptPanel() {
   const provider = useDiagramStore((s) => s.provider);
   const setMode = useDiagramStore((s) => s.setMode);
-  const setDsl = useDiagramStore((s) => s.setDsl);
   const setMultiLayer = useDiagramStore((s) => s.setMultiLayer);
   const setActiveLayer = useDiagramStore((s) => s.setActiveLayer);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const clearOverrides = useDiagramStore((s) => s.clearOverrides);
   const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
+  const renameGeneratedProject = useDiagramStore((s) => s.renameGeneratedProject);
   const setAgentStage = useDiagramStore((s) => s.setAgentStage);
   const pushLog = useDiagramStore((s) => s.pushAgentLog);
   const startAgent = useDiagramStore((s) => s.startAgent);
@@ -102,6 +103,7 @@ export function CustomPromptPanel() {
   const [activeStages, setActiveStages] = useState(CLARIFY_STAGES);
   const [animTitle, setAnimTitle] = useState('Generating questions…');
   const abortRef = useRef<AbortController | null>(null);
+  const router = useRouter();
   const summaryUsesCustomModel =
     provider.provider === 'foundry' || provider.provider === 'deepseek' || provider.provider === 'nvidia' || provider.provider === 'openrouter';
   const summaryModel = summaryUsesCustomModel ? provider.customModel ?? '?' : provider.model;
@@ -343,14 +345,7 @@ export function CustomPromptPanel() {
         setStep('questions');
         return;
       }
-      // Capture result data from the stream so we can await naming after the stream ends.
-      // The `as` cast is needed because TypeScript's control-flow analysis cannot see
-      // that the synchronous callback inside readAgentStream mutates this variable.
-      type CapturedResult =
-        | { kind: 'single'; dsl: string; instructionMarkdown: string }
-        | { kind: 'multi'; out: MultiLayerOutput; instructionMarkdown: string };
-      // eslint-disable-next-line prefer-const
-      let capturedResult = null as CapturedResult | null;
+      let createdProjectId: string | null = null;
 
       await readAgentStream(res.body, (ev: AgentStreamEvent) => {
         if (ev.type === 'stage') {
@@ -367,14 +362,13 @@ export function CustomPromptPanel() {
           setTerminalState({ status: 'failed', message: ev.message });
           pushLog({ stage: ev.stage, level: 'error', message: ev.message });
         } else if (ev.type === 'result') {
-          // Single-layer result — capture for async naming after stream ends
           sawResult = true;
           const instructionMarkdown = ev.instructionMarkdown ?? '';
           setInstructionMarkdown(instructionMarkdown);
-          setDsl(ev.dsl);
-          capturedResult = { kind: 'single', dsl: ev.dsl, instructionMarkdown };
+          createdProjectId = addGeneratedProject(projectName, ev.dsl, undefined, instructionMarkdown);
+          setMode('editor');
+          router.push('/diagram');
         } else if (ev.type === 'result-multilayer') {
-          // Multi-layer result — capture for async naming after stream ends
           sawResult = true;
           const instructionMarkdown = ev.instructionMarkdown ?? '';
           setInstructionMarkdown(instructionMarkdown);
@@ -382,16 +376,17 @@ export function CustomPromptPanel() {
           setMultiLayer(out);
           clearOverrides();
           setActiveLayer('overview');
-          setDsl(out.overview.dsl);
-          capturedResult = { kind: 'multi', out, instructionMarkdown };
+          createdProjectId = addGeneratedProject(projectName, out.overview.dsl, out, instructionMarkdown);
+          setMode('editor');
+          router.push('/diagram');
         } else if (ev.type === 'done') {
           setAgentStage(null);
         }
       });
 
-      // After the stream ends, resolve the project name and call addGeneratedProject.
-      const result = capturedResult;
-      if (result !== null) {
+      // The project is saved as soon as the diagram arrives. Naming is a best-effort follow-up
+      // so an optional title call cannot block rendering or tab creation.
+      if (createdProjectId !== null) {
         try {
           const nameRes = await fetch('/api/code-space/name-session', {
             method: 'POST',
@@ -404,20 +399,15 @@ export function CustomPromptPanel() {
               endpoint: genEndpoint,
               mode: 'app-planner',
             }),
+            signal: AbortSignal.timeout(8000),
           });
           if (nameRes.ok) {
             const { name } = await nameRes.json() as { name: string };
-            if (name) projectName = name;
+            if (name) renameGeneratedProject(createdProjectId, name);
           }
         } catch {
           // fallback already set
         }
-        if (result.kind === 'single') {
-          addGeneratedProject(projectName, result.dsl, undefined, result.instructionMarkdown);
-        } else {
-          addGeneratedProject(projectName, result.out.overview.dsl, result.out, result.instructionMarkdown);
-        }
-        setMode('editor');
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
