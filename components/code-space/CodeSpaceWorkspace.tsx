@@ -1073,22 +1073,6 @@ export function CodeSpaceWorkspace() {
     });
   }, []);
 
-  // Root Cause vs Logic: Helpers used in multiple callbacks must exist before those closures run; define this before `verifyAndDeleteEmptyProject` so the TDZ never fires.
-  const deleteProjectDirectory = useCallback(async (project: CodeSpaceProject) => {
-    if (!project.rootPath) throw new Error('Unable to delete a project without a root path');
-    const parent = parentPath(project.rootPath);
-    if (!parent) throw new Error('Unable to delete the root folder');
-    const targetFolder = basename(project.rootPath);
-    const res = await fetch('/api/code-space/files', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete', rootPath: parent, path: targetFolder }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? 'Delete failed');
-    return data;
-  }, []);
-
   // Root Cause vs Logic: `loadTree` depends on this helper via its dependency array, so declare it before `loadTree` to avoid the temporal dead zone that caused the ReferenceError.
   // Motivation vs Logic: A sidebar entry that resolves to an empty directory (or to a path that no
   // longer exists on disk) is dead weight—e.g. a half-finished `git clone` that produced just a
@@ -1438,7 +1422,6 @@ export function CodeSpaceWorkspace() {
     setIsDeletingProject(true);
     setError(null);
     try {
-      await deleteProjectDirectory(projectToDelete);
       finalizeProjectRemoval(projectToDelete.id);
       await deleteCodeSpaceProject(projectToDelete.id);
       setProjectToDelete(null);
@@ -1447,7 +1430,7 @@ export function CodeSpaceWorkspace() {
     } finally {
       setIsDeletingProject(false);
     }
-  }, [deleteProjectDirectory, finalizeProjectRemoval, projectToDelete]);
+  }, [finalizeProjectRemoval, projectToDelete]);
 
   // Motivation vs Logic: markdown preview is a tab-level state, not a one-off render choice, so the opener restores preview by default for new markdown tabs and preserves an explicit user override when reopening an existing tab.
   const openFile = useCallback(
@@ -4120,7 +4103,7 @@ export function CodeSpaceWorkspace() {
               <div>
                 <h2 className="text-lg font-semibold">Delete project</h2>
                 <p className="mt-1 text-sm text-[#8b8b8b]">
-                  This removes <span className="font-semibold text-[#d4d4d4]">{projectToDelete.name}</span> from disk permanently.
+                  This removes <span className="font-semibold text-[#d4d4d4]">{projectToDelete.name}</span> from Code Space only. Files at the project root stay on disk.
                 </p>
               </div>
               <button type="button" onClick={() => setProjectToDelete(null)} className="rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]">

@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@xterm/xterm', '@xterm/addon-fit'],
   experimental: {
     serverActions: { bodySizeLimit: '32mb' },
     serverComponentsExternalPackages: ['@lydell/node-pty'],

@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import {
   AlertCircle,
@@ -11,7 +12,10 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { CodeSpaceAgentSession, CodeSpaceBottomTab } from '@/lib/code-space/core';
-import { CodeSpaceTerminal } from '@/components/code-space/CodeSpaceTerminal';
+const CodeSpaceTerminal = dynamic(
+  () => import('@/components/code-space/CodeSpaceTerminal').then((mod) => mod.CodeSpaceTerminal),
+  { ssr: false },
+);
 
 interface BottomPanelProps {
   activeSession: CodeSpaceAgentSession | null;
