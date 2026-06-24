@@ -36,6 +36,7 @@ export type AgentEventType =
   | 'patch.failed'
   | 'file.read'
   | 'file.created'
+  | 'directory.created'
   | 'file.updated'
   | 'file.deleted'
   | 'file.reverted'

@@ -21,6 +21,14 @@ describe('Code Space core helpers', () => {
     expect(isCodeSpaceHiddenPath('src/components/Button.tsx')).toBe(false);
   });
 
+  it('shows docs folders and document files in the explorer by default', () => {
+    expect(isCodeSpaceHiddenPath('docs', true)).toBe(false);
+    expect(isCodeSpaceHiddenPath('docs/guide.pdf')).toBe(false);
+    expect(isCodeSpaceHiddenPath('docs/spec.docx')).toBe(false);
+    expect(isCodeSpaceHiddenPath('docs/notes.md')).toBe(false);
+    expect(isCodeSpaceHiddenPath('documentation/readme.md')).toBe(false);
+  });
+
   it('classifies prompts into workflow intents', () => {
     expect(classifyCodeSpaceIntent('fix the failing build and run tests')).toEqual(
       expect.arrayContaining(['bug_fix', 'debugging/log_analysis', 'validation']),

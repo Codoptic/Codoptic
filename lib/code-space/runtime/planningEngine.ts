@@ -19,6 +19,7 @@ const REQUIRED_PLAN_SECTIONS = [
   'Intent, Scope, and Non-Goals',
   'Repository Evidence Reviewed',
   'Implementation Milestones',
+  'New Implementations',
   'File-Level Change Plan',
   'Validation Plan',
 ];
@@ -151,6 +152,17 @@ function milestoneLines(files: ContextGraphFile[], validationCommands: TerminalC
   ];
 }
 
+function newFileDirectoryLines(prompt: string): string[] {
+  const lower = prompt.toLowerCase();
+  if (/\b(new file|new files|create file|create files|folder|directory|scratch|from scratch|scaffold|build (an?|the)? ?(app|project|site|tool)|generate (an?|the)? ?(app|project|site|tool))\b/.test(lower)) {
+    return [
+      '- Code mode must create a concrete manifest before editing: list every new file/directory, its purpose, and whether it uses `create_files` or `create_directory`.',
+      '- Use `create_files` for source/config/test/doc scaffold files and `create_directory` only for intentionally empty directories.',
+    ];
+  }
+  return ['- No new files/directories planned unless implementation-time evidence proves one is required.'];
+}
+
 export class PlanningEngine {
   buildTodos(mode: 'ask' | 'plan' | 'code', context: ContextGraphResult): string[] {
     if (mode === 'ask') return ['Gather repository evidence for the question', 'Trace relevant references and tests', 'Answer directly from evidence'];
@@ -224,6 +236,9 @@ export class PlanningEngine {
       '',
       '## Implementation Milestones',
       ...milestoneLines(selectedFiles, validationCommands),
+      '',
+      '## New Implementations',
+      ...newFileDirectoryLines(prompt),
       '',
       '## File-Level Change Plan',
       ...filePlans,

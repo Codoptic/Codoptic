@@ -381,6 +381,49 @@ export function isHiddenByDefault(name: string, isDirectory: boolean): boolean {
   return false;
 }
 
+/** Documentation folders that stay visible in the Code Space file explorer. */
+const CODE_SPACE_VISIBLE_FOLDERS = new Set(['docs', 'doc', 'documentation']);
+
+/** Document formats that stay visible in the Code Space file explorer. */
+const CODE_SPACE_VISIBLE_DOC_EXTENSIONS = new Set([
+  '.md',
+  '.mdx',
+  '.rst',
+  '.adoc',
+  '.txt',
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.odt',
+  '.ods',
+  '.odp',
+  '.rtf',
+  '.csv',
+  '.tsv',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx',
+]);
+
+function hasCodeSpaceVisibleDocExtension(name: string): boolean {
+  const lower = name.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 && CODE_SPACE_VISIBLE_DOC_EXTENSIONS.has(lower.slice(dot));
+}
+
+/**
+ * Hide policy for the Code Space file explorer. Keeps docs folders and common document formats
+ * visible while still hiding build outputs, caches, dotfiles, and other generated noise.
+ */
+export function isBrowserHiddenByDefault(name: string, isDirectory: boolean): boolean {
+  if (!name) return false;
+  if (name.startsWith('.')) return true;
+  if (isDirectory && CODE_SPACE_VISIBLE_FOLDERS.has(name)) return false;
+  if (!isDirectory && hasCodeSpaceVisibleDocExtension(name)) return false;
+  return isHiddenByDefault(name, isDirectory);
+}
+
 /**
  * Glob patterns for fast-glob's `ignore` option. We translate the name/extension/prefix lists
  * into globs so the scanner skips the same things the browser hides. Returned patterns are safe

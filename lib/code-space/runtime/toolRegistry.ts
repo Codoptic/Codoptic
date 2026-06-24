@@ -249,6 +249,44 @@ export function createDefaultToolRegistry(): ToolRegistry {
   );
   registry.register(
     baseTool({
+      name: 'create_files',
+      description: 'Create missing files, including parent directories, through checkpointed reviewable diffs. Fails if a target path already exists; use edit_file for existing files.',
+      inputSchema: objectSchema(
+        {
+          files: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                content: { type: 'string' },
+                reason: { type: 'string' },
+              },
+              required: ['path', 'content', 'reason'],
+            },
+          },
+        },
+        ['files'],
+      ),
+      riskLevel: 'medium',
+      permission: 'approval_required',
+      timeoutMs: 60_000,
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
+      name: 'create_directory',
+      description: 'Create an intentionally empty directory. Defaults to creating a tracked .gitkeep through the reviewable patch pipeline; trackInGit=false creates only a local directory.',
+      inputSchema: objectSchema({ path: { type: 'string' }, reason: { type: 'string' }, trackInGit: { type: 'boolean' } }, ['path']),
+      riskLevel: 'medium',
+      permission: 'approval_required',
+      timeoutMs: 60_000,
+      observationCompression: 'summarize',
+    }),
+  );
+  registry.register(
+    baseTool({
       name: 'propose_patch',
       description: 'Create a reviewable patch proposal with file-level before/after content, unified diff, explanation, and validation intent. Does not write to disk.',
       inputSchema: objectSchema(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isHiddenByDefault, defaultScannerIgnorePatterns } from '../repo/ignoreDefaults';
+import { isHiddenByDefault, isBrowserHiddenByDefault, defaultScannerIgnorePatterns } from '../repo/ignoreDefaults';
 
 describe('ignoreDefaults', () => {
   it('keeps only exact README.md visible while hiding config, setup, test, and generated files', () => {
@@ -24,5 +24,15 @@ describe('ignoreDefaults', () => {
     const patterns = defaultScannerIgnorePatterns();
     expect(patterns.some((pattern) => pattern.includes('README'))).toBe(false);
     expect(patterns).toEqual(expect.arrayContaining(['**/*.config.*', '**/*.d.*', '**/*.test.*', '**/*.spec.*']));
+  });
+
+  it('keeps docs folders and document files visible in the Code Space browser', () => {
+    expect(isBrowserHiddenByDefault('docs', true)).toBe(false);
+    expect(isBrowserHiddenByDefault('documentation', true)).toBe(false);
+    expect(isBrowserHiddenByDefault('guide.pdf', false)).toBe(false);
+    expect(isBrowserHiddenByDefault('spec.docx', false)).toBe(false);
+    expect(isBrowserHiddenByDefault('notes.md', false)).toBe(false);
+    expect(isHiddenByDefault('docs', true)).toBe(true);
+    expect(isHiddenByDefault('notes.md', false)).toBe(true);
   });
 });

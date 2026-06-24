@@ -3340,7 +3340,7 @@ export function CodeSpaceWorkspace() {
       return <div className="px-3 py-1.5 text-[12px] text-ink-500">Loading folder…</div>;
     }
     return nodes
-      .filter((node) => revealHidden || !isCodeSpaceHiddenPath(node.path))
+      .filter((node) => revealHidden || !isCodeSpaceHiddenPath(node.path, node.type === 'dir'))
       .filter((node) => !projectSearch || node.path.toLowerCase().includes(projectSearch.toLowerCase()))
       .map((node) => {
         const nodeKey = `${project.id}:${node.path}`;
@@ -4103,7 +4103,7 @@ export function CodeSpaceWorkspace() {
               <div>
                 <h2 className="text-lg font-semibold">Delete project</h2>
                 <p className="mt-1 text-sm text-[#8b8b8b]">
-                  This removes <span className="font-semibold text-[#d4d4d4]">{projectToDelete.name}</span> from Code Space only. Files at the project root stay on disk.
+                  This removes <span className="font-semibold text-[#d4d4d4]">{projectToDelete.name}</span> from referencing by Codoptic permanently.
                 </p>
               </div>
               <button type="button" onClick={() => setProjectToDelete(null)} className="rounded p-1 text-[#8b8b8b] hover:bg-[#2a2d2e]">

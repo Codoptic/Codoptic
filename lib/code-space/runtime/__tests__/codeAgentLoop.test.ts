@@ -173,6 +173,54 @@ describe('CodeAgentLoop', () => {
     expect(loop.messages.some((message) => message.role === 'tool' && message.toolResults?.some((entry) => entry.isError && entry.content.includes('completedOriginalRequest=true')))).toBe(true);
   });
 
+  it('allows successful completion after create_files creates a scratch project file', async () => {
+    mockedTurn
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{
+          id: 't1',
+          name: 'create_files',
+          input: { files: [{ path: 'src/main.ts', content: 'export const ready = true;\n', reason: 'Create project entrypoint.' }] },
+        }],
+      }))
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Created project entrypoint.' } }],
+      }));
+
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const loop = new CodeAgentLoop();
+    loop.seed('system', 'Create a tiny project from scratch');
+
+    const result = await loop.run(ctx, { session: { id: 'openai', model: 'test', apiKey: '' }, budget: new ToolBudget(10, 40) });
+
+    expect(result.success).toBe(true);
+    expect(await readFile(path.join(tmpDir, 'src/main.ts'), 'utf8')).toBe('export const ready = true;\n');
+    expect(ctx.ledger.has('src/main.ts')).toBe(true);
+  });
+
+  it('allows successful completion after an untracked directory-only creation', async () => {
+    mockedTurn
+      .mockResolvedValueOnce(turn({
+        toolCalls: [{ id: 't1', name: 'create_directory', input: { path: 'scratch/cache', trackInGit: false, reason: 'Create cache directory.' } }],
+      }))
+      .mockResolvedValueOnce(turn({
+        stopReason: 'end_turn',
+        toolCalls: [{ id: 't2', name: 'attempt_completion', input: { success: true, completedOriginalRequest: true, summary: 'Created cache directory.' } }],
+      }));
+
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const loop = new CodeAgentLoop();
+    loop.seed('system', 'Create an empty cache directory');
+
+    const result = await loop.run(ctx, { session: { id: 'openai', model: 'test', apiKey: '' }, budget: new ToolBudget(10, 40) });
+
+    expect(result.success).toBe(true);
+    expect(ctx.createdDirectories?.has('scratch/cache')).toBe(true);
+    expect(ctx.ledger.size).toBe(0);
+  });
+
   it('stops at the hard turn cap without completing', async () => {
     mockedTurn.mockResolvedValue(turn({ toolCalls: [{ id: 'loop', name: 'read_file', input: { path: 'missing.ts' } }] }));
 

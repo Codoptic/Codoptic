@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { isHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
+import { isBrowserHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
 import { resolveCodeSpaceChild } from '@/lib/code-space/runtime/filePaths';
 
 export const runtime = 'nodejs';
@@ -74,7 +74,7 @@ export async function GET(req: Request) {
       dirents
         .filter((dirent) => {
           if (!dirent.isDirectory() && !dirent.isFile()) return false;
-          return revealHidden || !isHiddenByDefault(dirent.name, dirent.isDirectory());
+          return revealHidden || !isBrowserHiddenByDefault(dirent.name, dirent.isDirectory());
         })
         .map(async (dirent) => {
           const absolute = path.join(resolved.child, dirent.name);
@@ -86,7 +86,7 @@ export async function GET(req: Request) {
             type: dirent.isDirectory() ? 'dir' : 'file',
             size: stat.size,
             modifiedAt: stat.mtimeMs,
-            hidden: isHiddenByDefault(dirent.name, dirent.isDirectory()),
+            hidden: isBrowserHiddenByDefault(dirent.name, dirent.isDirectory()),
           };
         }),
     );

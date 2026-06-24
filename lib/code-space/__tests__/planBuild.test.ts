@@ -17,8 +17,10 @@ describe('plan build prompt helpers', () => {
   });
 
   it('keeps the plan helper focused on the source plan file', () => {
-    expect(buildPlanImplementationPrompt('.agent/plans/demo.md')).toContain(
-      'Build from the approved plan at .agent/plans/demo.md.',
-    );
+    const prompt = buildPlanImplementationPrompt('.agent/plans/demo.md');
+
+    expect(prompt).toContain('Build from the approved plan at .agent/plans/demo.md.');
+    expect(prompt).toContain('New Implementations');
+    expect(prompt).toContain('create_files/create_directory');
   });
 });

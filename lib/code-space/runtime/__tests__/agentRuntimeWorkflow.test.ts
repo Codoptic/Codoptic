@@ -26,6 +26,7 @@ function turn(partial: Partial<AssistantTurn>): AssistantTurn {
 }
 
 const PLAN_MARKDOWN = ['# Plan: model-authored', '', ...REQUIRED_PLAN_SECTIONS.map((section) => `## ${section}\n- detail grounded in app.ts`)].join('\n');
+const PLAN_MARKDOWN_MISSING_NEW_FILES = ['# Plan: missing section', '', ...REQUIRED_PLAN_SECTIONS.filter((section) => section !== 'New Implementations').map((section) => `## ${section}\n- detail grounded in app.ts`)].join('\n');
 
 let tmpDir: string | null = null;
 
@@ -223,6 +224,42 @@ describe('AgentRuntime workflow contracts', () => {
     expect(events.some((event) => event.type === 'diff_proposed' || event.type === 'file_applied')).toBe(false);
   });
 
+  it('rejects model-authored plans that omit the new files and directories section', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-new-files-required-'));
+    await writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }), 'utf8');
+    await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
+
+    mockedTurn
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't1', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN_MISSING_NEW_FILES, summary: 'Incomplete plan', status: 'ready', inspectedFiles: ['app.ts'] } }] }))
+      .mockResolvedValueOnce(turn({ toolCalls: [{ id: 't2', name: 'write_plan_artifact', input: { planMarkdown: PLAN_MARKDOWN, summary: 'Complete plan', status: 'ready', inspectedFiles: ['app.ts'] } }] }))
+      .mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [] }));
+
+    const events: AgentSSEEvent[] = [];
+    await new AgentRuntime().run(
+      {
+        sessionId: 'session-plan-new-files-required',
+        projectRoot: tmpDir,
+        projectName: 'demo',
+        messages: [{ role: 'user', content: 'Plan a runtime refactor for app.ts' }],
+        mode: 'plan',
+        model: 'test',
+        providerId: 'openai',
+        apiKey: 'test-key',
+        openTabs: ['app.ts'],
+        toolBudget: 20,
+        autonomy: 'auto_safe_tools',
+        attachments: [],
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    const planEvent = events.find((event) => event.type === 'plan_markdown_created');
+    expect(planEvent?.content).toContain('## New Implementations');
+    expect(mockedTurn.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('plan mode pauses for LLM-authored high-level clarification after reading evidence', async () => {
     tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-agent-runtime-plan-clarify-'));
     await writeFile(path.join(tmpDir, 'app.ts'), 'export function run() { return true; }\n', 'utf8');
@@ -329,6 +366,7 @@ describe('AgentRuntime workflow contracts', () => {
     const planEvent = events.find((event) => event.type === 'plan_markdown_created');
     expect(planEvent?.filePath).toBe('.agent/plans/session-plan-fallback.md');
     expect(planEvent?.content).toContain('## Summary');
+    expect(planEvent?.content).toContain('## New Implementations');
     // The escalation pushed the model to finalize before falling back.
     expect(mockedTurn.mock.calls.length).toBeGreaterThan(1);
     const done = events.find((event) => event.type === 'agent_done');
@@ -355,6 +393,7 @@ describe('AgentRuntime workflow contracts', () => {
     });
 
     expect(content).toContain('## Repository Evidence Reviewed');
+    expect(content).toContain('## New Implementations');
     for (const hiddenText of [
       '## Context Sufficiency Gate',
       'Status: needs_recall',
@@ -376,6 +415,30 @@ describe('AgentRuntime workflow contracts', () => {
     ]) {
       expect(content).not.toContain(hiddenText);
     }
+  });
+
+  it('deterministic scratch-project plans require a creation manifest', () => {
+    const content = new PlanningEngine().buildPlanArtifact({
+      projectName: 'demo',
+      prompt: 'Build a small TypeScript project from scratch',
+      validationCommands: [],
+      context: {
+        filesConsidered: 0,
+        files: [],
+        selectedFiles: [],
+        omittedRelevantCandidates: [],
+        terms: [],
+        dependencyEdges: [],
+        testCandidates: [],
+        validationCandidates: [],
+        missingContextWarnings: [],
+        confidence: 'medium',
+      },
+    });
+
+    expect(content).toContain('## New Implementations');
+    expect(content).toContain('create_files');
+    expect(content).toContain('create_directory');
   });
 
   it('sanitizes hidden status and approach menu sections from model-authored plans', () => {

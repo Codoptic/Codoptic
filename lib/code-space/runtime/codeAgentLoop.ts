@@ -234,7 +234,7 @@ export class CodeAgentLoop {
     const toolResults: ChatMessage['toolResults'] = [];
     let completion: CodeAgentLoopResult | null = null;
     const tools = opts.tools ?? CODE_MODE_TOOL_SPECS;
-    const canMutateSource = tools.some((tool) => ['edit_file', 'apply_patch', 'propose_patch', 'propose_edit_blocks'].includes(tool.name));
+    const canMutateSource = tools.some((tool) => ['edit_file', 'create_files', 'create_directory', 'apply_patch', 'propose_patch', 'propose_edit_blocks'].includes(tool.name));
 
     for (const call of turn.toolCalls) {
       if (call.name === 'attempt_completion') {
@@ -275,12 +275,12 @@ export class CodeAgentLoop {
 
         const success = call.input?.success !== false;
         const summary = typeof call.input?.summary === 'string' ? call.input.summary : '';
-        if (success && canMutateSource && ctx.ledger.size === 0 && ctx.proposedFiles.size === 0) {
+        if (success && canMutateSource && ctx.ledger.size === 0 && ctx.proposedFiles.size === 0 && (ctx.createdDirectories?.size ?? 0) === 0) {
           toolResults.push({
             toolCallId: call.id,
             isError: true,
             content:
-              'Cannot complete successfully: this is a mutating implementation run but no source edits were applied or proposed. Read the target files, make the required edit_file call, or call attempt_completion with success=false and the exact blocker.',
+              'Cannot complete successfully: this is a mutating implementation run but no source edits, file creations, or directory creations were applied or proposed. Read the target files, call edit_file/create_files/create_directory as required, or call attempt_completion with success=false and the exact blocker.',
           });
           continue;
         }
@@ -409,16 +409,17 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '',
     'Workflow you must follow:',
     '1. Understand the task. Read relevant files with read_file and search the repo with search_text before editing.',
-    '2. Make focused edits with edit_file using exact SEARCH/REPLACE blocks. If edit_file returns a diagnostic, re-read the failing region, use a smaller SEARCH, and try a corrected edit.',
-    '3. Use external helpers only when they materially improve the result: research_web with queries/URLs for current docs and OSS examples, harness_context before large unfamiliar changes, and scan_code_quality for refactors, reviews, duplication, secret, or bug-hunting work.',
+    '2. For existing files, make focused edits with edit_file using exact SEARCH/REPLACE blocks. If edit_file returns a diagnostic, re-read the failing region, use a smaller SEARCH, and try a corrected edit.',
+    '3. For new files, folders, or projects from scratch, create a brief file manifest first, then use create_files for missing files and create_directory for intentionally empty directories. Batch coherent scaffold files together; do not use markdown notes as a substitute for real files.',
+    '4. Use external helpers only when they materially improve the result: research_web with queries/URLs for current docs and OSS examples, harness_context before large unfamiliar changes, and scan_code_quality for refactors, reviews, duplication, secret, or bug-hunting work.',
     autonomy === 'suggest_only'
-      ? '4. Propose source edits with edit_file only — do not run run_command, terminal tools, or run_validation_matrix; validation happens after the user accepts patches.'
-      : '4. After editing, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
+      ? '5. Propose source edits and file creations with edit_file/create_files only — do not run run_command, terminal tools, or run_validation_matrix; validation happens after the user accepts patches.'
+      : '5. After editing or creating files, run project validation with run_validation_matrix first (pass changedPaths when known); use run_command for targeted checks that the matrix does not cover.',
     autonomy === 'suggest_only'
-      ? '5. If a tool is blocked by autonomy policy, do not retry it; use read-only inspection tools and edit_file instead.'
-      : '5. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
-    '6. Before completion, compare the cumulative diff, validation output, and files touched against the original Task and Definition of Done. Finish every requested item, including nearby tests/docs/config updates implied by the request.',
-    '7. When the work is done, call attempt_completion with success=true, completedOriginalRequest=true, and a concise summary of what changed.',
+      ? '6. If a tool is blocked by autonomy policy, do not retry it; use read-only inspection tools and edit_file/create_files instead.'
+      : '6. If validation fails, inspect the output, repair the smallest affected area, and re-run the relevant validation.',
+    '7. Before completion, compare the cumulative diff, validation output, and files/directories touched against the original Task and Definition of Done. Finish every requested item, including nearby tests/docs/config updates implied by the request.',
+    '8. When the work is done, call attempt_completion with success=true, completedOriginalRequest=true, and a concise summary of what changed.',
     '',
     'Hard rules:',
     '- Do not fabricate results or write markdown notes as a substitute for real code changes.',
@@ -426,6 +427,7 @@ export function buildCodeSystemPrompt(projectName: string, instructionFiles: str
     '- Do not call attempt_completion(success=true) after only a partial patch. If any part of the user request is unfinished, keep working or report success=false with the exact blocker.',
     '- Never use attempt_completion to echo raw validation, lint, test, build, or verify output. Treat those failures as repair feedback: inspect the named files, fix the smallest affected area, and re-run the failed command.',
     '- Only edit files that the task requires. Avoid unrelated refactors or speculative abstractions.',
+    '- For scratch-project requests, create the actual project files (package/config/source/test/docs as needed) and validate the runnable path; do not stop after an advisory plan.',
     '- Prefer the smallest change that correctly solves the problem.',
     '- Edits are checkpointed and can be restored if a change makes the result worse.',
     '- The user sees applied diffs, validation results, and your final attempt_completion summary.',
@@ -520,6 +522,11 @@ export async function buildCodeSeedMessage(
     '',
     'Initial evidence already gathered for you (read more as needed):',
     evidence || '(none — start by exploring with list_files / search_text)',
+    '',
+    'New-file and scratch-project guidance:',
+    '- If the task asks for new files, folders, or an app/project from scratch, first inspect the workspace with repo_map/list_files, then create a concise manifest of files to create.',
+    '- Use create_files for missing files and create_directory only for intentionally empty directories. Use edit_file only after a file exists and needs exact modification.',
+    '- After creating scaffold files, validate the stack when safe and repair failures caused by the new project files.',
   ].join('\n');
 }
 

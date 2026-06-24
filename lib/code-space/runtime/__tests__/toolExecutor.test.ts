@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolCall } from '@/lib/agent/providers';
@@ -159,6 +159,93 @@ describe('ToolExecutor.edit_file', () => {
     expect(result.isError).toBeFalsy();
     expect(ctx.proposedLedger.get('new.md')).toMatchObject({ beforeContent: '', afterContent: 'hello\n', existedBefore: false });
     await expect(readFile(path.join(tmpDir, 'new.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('creates multiple missing files with parent directories through create_files', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('create_files', {
+        files: [
+          { path: 'src/main.ts', content: 'export const main = true;\n', reason: 'add entrypoint' },
+          { path: 'tests/main.test.ts', content: 'import "../src/main";\n', reason: 'add smoke test' },
+        ],
+      }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(await readFile(path.join(tmpDir, 'src/main.ts'), 'utf8')).toBe('export const main = true;\n');
+    expect(await readFile(path.join(tmpDir, 'tests/main.test.ts'), 'utf8')).toBe('import "../src/main";\n');
+    expect(ctx.ledger.get('src/main.ts')?.existedBefore).toBe(false);
+    expect(ctx.ledger.get('tests/main.test.ts')?.existedBefore).toBe(false);
+    expect(events.filter((event) => event.type === 'file_applied')).toHaveLength(2);
+  });
+
+  it('refuses to overwrite an existing file through create_files', async () => {
+    await writeFile(path.join(tmpDir, 'src.ts'), 'old\n', 'utf8');
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('create_files', { files: [{ path: 'src.ts', content: 'new\n', reason: 'replace' }] }),
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/refused to overwrite/i);
+    expect(await readFile(path.join(tmpDir, 'src.ts'), 'utf8')).toBe('old\n');
+    expect(ctx.ledger.size).toBe(0);
+  });
+
+  it('proposes new files through create_files under suggest_only autonomy', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events, 'suggest_only');
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('create_files', { files: [{ path: 'src/new.ts', content: 'export const x = 1;\n', reason: 'add module' }] }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(ctx.proposedLedger.get('src/new.ts')).toMatchObject({ beforeContent: '', afterContent: 'export const x = 1;\n', existedBefore: false });
+    expect(events.some((event) => event.type === 'diff_proposed')).toBe(true);
+    await expect(readFile(path.join(tmpDir, 'src/new.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('creates a tracked directory by adding .gitkeep through create_directory', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('create_directory', { path: 'public/assets', reason: 'reserve asset directory' }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(await readFile(path.join(tmpDir, 'public/assets/.gitkeep'), 'utf8')).toBe('');
+    expect(ctx.ledger.get('public/assets/.gitkeep')?.existedBefore).toBe(false);
+  });
+
+  it('creates an untracked directory and records it in the directory ledger', async () => {
+    const events: AgentSSEEvent[] = [];
+    const ctx = makeContext(events);
+    const executor = new ToolExecutor();
+
+    const result = await executor.execute(
+      call('create_directory', { path: 'scratch/cache', trackInGit: false, reason: 'runtime cache folder' }),
+      ctx,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect((await stat(path.join(tmpDir, 'scratch/cache'))).isDirectory()).toBe(true);
+    expect(ctx.createdDirectories?.has('scratch/cache')).toBe(true);
+    expect(ctx.ledger.size).toBe(0);
   });
 
   it('rejects invalid Python proposals under suggest_only instead of surfacing them for review', async () => {

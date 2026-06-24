@@ -651,7 +651,7 @@ export class AgentRuntime {
 
     const MAX_CONTEXT_RECALL_ESCALATIONS = 2;
     for (let attempt = 0; attempt < MAX_CONTEXT_RECALL_ESCALATIONS; attempt += 1) {
-      if (ledger.size > 0 || ctx.proposedFiles.size > 0 || sufficiency.status === 'ready') break;
+      if (ledger.size > 0 || ctx.proposedFiles.size > 0 || (ctx.createdDirectories?.size ?? 0) > 0 || sufficiency.status === 'ready') break;
       if (loopOptions.budget.turnsExhausted()) break;
       loopResult = await loop.continueWith(buildRecallDirective(sufficiency), ctx, loopOptions);
     }
@@ -661,7 +661,7 @@ export class AgentRuntime {
     const MAX_EDIT_ESCALATIONS = 3;
     for (let attempt = 0; attempt < MAX_EDIT_ESCALATIONS; attempt += 1) {
       if (loopResult.success !== false) break;
-      if (ledger.size > 0 || ctx.proposedFiles.size > 0) break;
+      if (ledger.size > 0 || ctx.proposedFiles.size > 0 || (ctx.createdDirectories?.size ?? 0) > 0) break;
       if (ctx.editFailures.size === 0) break;
       if (loopOptions.budget.turnsExhausted() || loopOptions.budget.mutationBudgetExhausted()) break;
       loopResult = await loop.continueWith(buildEditEscalationDirective(ctx), ctx, loopOptions);
@@ -730,6 +730,17 @@ export class AgentRuntime {
       await streamAnswer(proposalAnswer, emit, emitRuntime);
       await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_diff_confirmation', filesChanged: proposed });
       emit({ type: 'agent_done', summary: proposalAnswer, filesChanged: proposed });
+      return;
+    }
+
+    if (ledger.size === 0 && (ctx.createdDirectories?.size ?? 0) > 0) {
+      const directoriesChanged = Array.from(ctx.createdDirectories ?? []);
+      const answer = tightenAgentSummary(loopResult.summary) || `Created ${directoriesChanged.length} director${directoriesChanged.length === 1 ? 'y' : 'ies'}.`;
+      await this.coworking.persistLedger(runId, contextLedger);
+      await emitRuntime('coworking.ledger.persisted', { runId, entries: contextLedger.list().length });
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'verified', phase: 'verified', filesChanged: directoriesChanged });
+      emit({ type: 'agent_done', summary: answer, filesChanged: directoriesChanged });
       return;
     }
 

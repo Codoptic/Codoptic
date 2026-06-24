@@ -101,6 +101,8 @@ export interface CodeAgentContext {
   implementationContract?: ImplementationContract;
   /** Paths proposed (but NOT written) under suggest_only autonomy — pending user accept/reject. */
   proposedFiles: Set<string>;
+  /** Directories intentionally created without tracked file content during this run. */
+  createdDirectories?: Set<string>;
   /** Latest proposed before/after per path (suggest_only); used for final pre-completion validation. */
   proposedLedger: Map<string, Pick<LedgerEntry, 'beforeContent' | 'afterContent' | 'existedBefore'>>;
   /** Recoverable edit_file failures per path — cleared when a working edit lands. */
@@ -253,7 +255,7 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'edit_file',
-    description: 'Apply exact SEARCH/REPLACE edit blocks to files on disk. Each edit\'s "search" must match the current file content exactly and uniquely. The server checkpoints, conflict-checks, syntax-validates, and writes. Returns diffs or actionable diagnostics to fix and retry. Use empty search with a new path to create a file.',
+    description: 'Apply exact SEARCH/REPLACE edit blocks to existing files on disk. Each edit\'s "search" must match current file content exactly and uniquely. The server checkpoints, conflict-checks, syntax-validates, and writes. Returns diffs or actionable diagnostics to fix and retry. Prefer create_files for new files and scratch-project scaffolds.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -267,6 +269,33 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
         },
       },
       required: ['edits'],
+    },
+  },
+  {
+    name: 'create_files',
+    description: 'Create one or more missing text files, including parent directories, through the same checkpointed diff pipeline as edit_file. Fails if any target file already exists. Use this for new files, scaffolds, and projects built from scratch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, content: { type: 'string' }, reason: { type: 'string' } },
+            required: ['path', 'content', 'reason'],
+          },
+        },
+      },
+      required: ['files'],
+    },
+  },
+  {
+    name: 'create_directory',
+    description: 'Create an intentionally empty directory. By default trackInGit=true creates <path>/.gitkeep through the reviewable patch pipeline; trackInGit=false creates only the local directory and records it in the run ledger.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string' }, reason: { type: 'string' }, trackInGit: { type: 'boolean' } },
+      required: ['path'],
     },
   },
   {
@@ -541,6 +570,10 @@ export class ToolExecutor {
           return await this.proposeMemoryUpdate(call, ctx);
         case 'edit_file':
           return await this.editFile(call, ctx);
+        case 'create_files':
+          return await this.createFiles(call, ctx);
+        case 'create_directory':
+          return await this.createDirectory(call, ctx);
         case 'run_command':
           return await this.runCommand(call, ctx);
         case 'terminal_start':
@@ -1072,6 +1105,81 @@ export class ToolExecutor {
     }
     const diffSummary = grouped.previews.map((preview) => preview.unifiedDiff).join('\n');
     return { content: clip(`Applied edits to: ${applied.join(', ')}\n\n${diffSummary}`) };
+  }
+
+  private async createFiles(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const rawFiles = Array.isArray(call.input.files) ? call.input.files : [];
+    const files = rawFiles
+      .filter((file): file is Record<string, unknown> => Boolean(file) && typeof file === 'object')
+      .map((file) => ({
+        path: normalizeContextPath(str(file.path)),
+        content: str(file.content),
+        reason: str(file.reason) || 'Create file',
+      }))
+      .filter((file) => file.path);
+    if (!files.length) return { content: 'create_files requires a non-empty "files" array of {path, content, reason}.', isError: true, recoverable: true };
+
+    const seen = new Set<string>();
+    for (const file of files) {
+      if (seen.has(file.path)) return { content: `create_files received duplicate path: ${file.path}`, isError: true, recoverable: true };
+      seen.add(file.path);
+      if (ctx.proposedLedger.has(file.path) || (await safeReadTextFile(ctx.root, file.path)) != null) {
+        return { content: `create_files refused to overwrite existing file: ${file.path}. Use edit_file for existing files.`, isError: true, recoverable: true };
+      }
+    }
+
+    return this.editFile(
+      {
+        ...call,
+        name: 'edit_file',
+        input: {
+          edits: files.map((file) => ({
+            path: file.path,
+            search: '',
+            replace: file.content,
+            reason: file.reason,
+          })),
+        },
+      },
+      ctx,
+    );
+  }
+
+  private async createDirectory(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const target = normalizeContextPath(str(call.input.path));
+    if (!target || target === '.') return { content: 'create_directory requires a non-root workspace-relative path.', isError: true, recoverable: true };
+    const trackInGit = call.input.trackInGit !== false;
+    const reason = str(call.input.reason) || 'Create directory';
+    if (trackInGit) {
+      return this.createFiles(
+        {
+          ...call,
+          name: 'create_files',
+          input: { files: [{ path: `${target}/.gitkeep`, content: '', reason: `${reason} (track directory in git)` }] },
+        },
+        ctx,
+      );
+    }
+
+    const decision = this.decide('create_directory', ctx.autonomy);
+    if (decision.permission !== 'auto') {
+      await ctx.emitRuntime('tool.approval.required', { tool: 'create_directory', path: target, reason: decision.reason });
+      return {
+        content: formatAutonomyBlockedToolMessage('create_directory', ctx.autonomy, decision.reason),
+        isError: true,
+        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+      };
+    }
+
+    const dir = path.resolve(ctx.root, target);
+    if (dir !== ctx.root && !dir.startsWith(`${ctx.root}${path.sep}`)) {
+      return { content: 'create_directory path escapes workspace root.', isError: true, recoverable: true };
+    }
+    await fs.mkdir(dir, { recursive: true });
+    ctx.createdDirectories ??= new Set<string>();
+    ctx.createdDirectories.add(target);
+    await ctx.emitRuntime('directory.created', { path: target, trackedInGit: false });
+    return { content: `Created untracked directory: ${target}` };
   }
 
   private async runCommand(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {

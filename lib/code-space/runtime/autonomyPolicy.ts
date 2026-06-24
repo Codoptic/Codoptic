@@ -6,6 +6,7 @@ import { isReadOnlyTool } from './toolBudget';
 export const SUGGEST_ONLY_PROPOSE_REGISTRY_TOOLS = new Set([
   'propose_edit_blocks',
   'propose_patch',
+  'create_files',
   'propose_memory_update',
 ]);
 
@@ -57,6 +58,8 @@ const SUGGEST_ONLY_BLOCKED_ALTERNATIVES: Record<string, string> = {
     'Confirm mode does not apply or restore checkpoints; propose the needed edits with edit_file.',
   propose_edit_blocks:
     'call edit_file with SEARCH/REPLACE blocks — proposals are recorded automatically under Confirm mode.',
+  create_directory:
+    'use create_files to propose a tracked <directory>/.gitkeep file, or switch autonomy before creating an untracked empty directory.',
 };
 
 export function suggestOnlyBlockedAlternative(registryToolName: string): string {
@@ -89,10 +92,10 @@ export function formatAutonomyToolGuidance(autonomy: AutonomyLevel): string {
   return [
     'Autonomy policy (Confirm / suggest_only — user reviews patches before anything hits source files):',
     '- Inspect freely: read_file, list_files, search_text, repo_map, dependency_trace, git_status, git_diff, harness_context, research_web, scan_code_quality, read_artifact, grep_artifact.',
-    '- Propose user-source edits with edit_file (exact SEARCH/REPLACE). Proposals enter the review queue; disk source stays unchanged until the user accepts.',
+    '- Propose user-source edits with edit_file (exact SEARCH/REPLACE) and new files with create_files. Proposals enter the review queue; disk source stays unchanged until the user accepts.',
     '- Selective writes allowed: edit_file may write ephemeral verification scripts under .agent/tests/ only.',
     '- Propose durable memories with propose_memory_update (does not write /memories until approved).',
-    '- Blocked for this run: run_command, terminal_*, apply_patch, restore_checkpoint, run_validation_matrix. Validation runs after the user accepts proposals.',
+    '- Blocked for this run: run_command, terminal_*, apply_patch, restore_checkpoint, create_directory with untracked directories, run_validation_matrix. Validation runs after the user accepts proposals.',
     '- Policy blocks are not repository failures — never retry a blocked tool; switch to an allowed tool above.',
     '- attempt_completion(success=true) is valid once the required edit_file proposals exist, even though user source files are not written yet.',
   ].join('\n');

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
-import { isHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
+import { isBrowserHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
 import { ProjectManager } from '@/lib/code-space/runtime';
 
 export const runtime = 'nodejs';
@@ -22,7 +22,7 @@ export async function GET(req: Request, { params }: { params: { projectId: strin
     const dirents = await fs.readdir(target, { withFileTypes: true });
     const entries = await Promise.all(
       dirents
-        .filter((dirent) => (dirent.isDirectory() || dirent.isFile()) && (revealHidden || !isHiddenByDefault(dirent.name, dirent.isDirectory())))
+        .filter((dirent) => (dirent.isDirectory() || dirent.isFile()) && (revealHidden || !isBrowserHiddenByDefault(dirent.name, dirent.isDirectory())))
         .map(async (dirent) => {
           const absolute = path.join(target, dirent.name);
           const stat = await fs.stat(absolute);
@@ -32,7 +32,7 @@ export async function GET(req: Request, { params }: { params: { projectId: strin
             type: dirent.isDirectory() ? 'dir' : 'file',
             size: stat.size,
             modifiedAt: stat.mtimeMs,
-            hidden: isHiddenByDefault(dirent.name, dirent.isDirectory()),
+            hidden: isBrowserHiddenByDefault(dirent.name, dirent.isDirectory()),
           };
         }),
     );

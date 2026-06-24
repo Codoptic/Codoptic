@@ -149,6 +149,10 @@ export class SubagentRunner {
     for (const [path, entry] of childCtx.ledger) if (!this.parentCtx.ledger.has(path)) this.parentCtx.ledger.set(path, entry);
     for (const path of childCtx.proposedFiles) this.parentCtx.proposedFiles.add(path);
     for (const [path, entry] of childCtx.proposedLedger) this.parentCtx.proposedLedger.set(path, entry);
+    if (childCtx.createdDirectories?.size) {
+      this.parentCtx.createdDirectories ??= new Set<string>();
+      for (const dir of childCtx.createdDirectories) this.parentCtx.createdDirectories.add(dir);
+    }
     for (const [id, artifact] of childCtx.artifacts) this.parentCtx.artifacts.set(id, artifact);
     for (const checkpoint of childCtx.checkpoints) this.parentCtx.checkpoints.push(checkpoint);
     if (childCtx.patchHistory?.length) {

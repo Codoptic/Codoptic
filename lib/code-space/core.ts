@@ -1,4 +1,4 @@
-import { isHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
+import { isBrowserHiddenByDefault } from '@/lib/agent/repo/ignoreDefaults';
 import type { CodeSpaceAgentMode } from './agentModes';
 import type { RepoSourceConfig, RepoSourceType } from '@/lib/agent/repo/repoTypes';
 
@@ -348,9 +348,13 @@ export function detectCodeSpaceLanguage(filePath: string): string {
   return EXTENSION_LANGUAGE_MAP[ext] ?? 'plaintext';
 }
 
-export function isCodeSpaceHiddenPath(filePath: string): boolean {
+export function isCodeSpaceHiddenPath(filePath: string, leafIsDirectory = false): boolean {
   const parts = filePath.split('/').filter(Boolean);
-  return parts.some((part) => isHiddenByDefault(part, true));
+  if (parts.length === 0) return false;
+  return parts.some((part, index) => {
+    const isDirectory = index < parts.length - 1 || leafIsDirectory;
+    return isBrowserHiddenByDefault(part, isDirectory);
+  });
 }
 
 export function classifyCodeSpaceIntent(prompt: string): CodeSpaceAgentIntent[] {
