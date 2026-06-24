@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolCall } from '@/lib/agent/providers';
@@ -356,6 +357,25 @@ describe('ToolExecutor.edit_file', () => {
 });
 
 describe('ToolExecutor external agent tools', () => {
+  it('returns neutral git_status and git_diff output outside git workspaces', async () => {
+    const nonGitRoot = await mkdtemp(path.join(os.tmpdir(), 'codoptic-non-git-'));
+    try {
+      const events: AgentSSEEvent[] = [];
+      const ctx = { ...makeContext(events), root: nonGitRoot };
+      const executor = new ToolExecutor();
+
+      const status = await executor.execute(call('git_status', {}), ctx);
+      const diff = await executor.execute(call('git_diff', { path: 'src.ts' }), ctx);
+
+      expect(status.isError).toBeFalsy();
+      expect(diff.isError).toBeFalsy();
+      expect(status.content).toMatch(/not git-managed/i);
+      expect(diff.content).toMatch(/change ledger/i);
+    } finally {
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
   it('dispatches harness_context and stores the output as an artifact', async () => {
     await writeFile(path.join(tmpDir, 'AGENTS.md'), '# Rules\n', 'utf8');
     const events: AgentSSEEvent[] = [];

@@ -40,6 +40,6 @@ describe('buildCodeSystemPrompt autonomy guidance', () => {
   it('embeds confirm-mode tool policy in the code system prompt', () => {
     const prompt = buildCodeSystemPrompt('demo', [], 'suggest_only');
     expect(prompt).toContain('Autonomy policy (Confirm / suggest_only');
-    expect(prompt).toContain('Propose source edits with edit_file only');
+    expect(prompt).toContain('Propose source edits and file creations with edit_file/create_files only');
   });
 });

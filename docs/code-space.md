@@ -113,7 +113,7 @@ A **Knowledge graph** link above the chat opens an interactive vis.js map of the
 
 Complex Code-mode tasks now get an explicit delegation phase after context sufficiency is assessed and before the parent coding loop edits files. The runtime builds a work graph and runs isolated subagents according to the selected runtime scale profile for independent repo exploration, documentation/convention reading, critique, validation-risk review, UI review, security review, and integration ownership.
 
-Most automatic subagents are read-only. They share the workspace root and event stream, but they run with fresh context windows and cannot recursively spawn more subagents. Their findings are written to the context ledger, injected back into the parent agent's prompt, surfaced in the run feed, and reconciled before the supervisor can mark the run verified. The existing test-writer subagent still runs later in validation and is limited to `.agent/tests/<runId>/`.
+Most automatic subagents are advisory and source-read-only: the helper itself must not edit files, but the parent Code-mode implementation run can still apply review-gated changes after reconciling the helper's findings. They share the workspace root and event stream, but they run with fresh context windows and cannot recursively spawn more subagents. Their findings are written to the context ledger, injected back into the parent agent's prompt, surfaced in the run feed, and reconciled before the supervisor can mark the run verified. The verifier helper may run non-destructive validation commands, and the existing test-writer subagent still runs later in validation and is limited to `.agent/tests/<runId>/`.
 
 ## Terminal And Browser QA
 

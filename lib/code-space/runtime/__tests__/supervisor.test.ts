@@ -75,6 +75,35 @@ describe('Supervisor.reconcile', () => {
     expect(verdict.blockers.join(' ')).toMatch(/subagent/i);
   });
 
+  it('does not block on advisory helper failures caused by scoped policy or non-git state', () => {
+    const verdict = supervisor.reconcile({
+      ledgerSize: 1,
+      coherence: [],
+      validationRuns: [passing('x')],
+      unresolvedEditFailures: '',
+      subagentResults: [
+        { role: 'docs-reader', summary: 'The advisory helper is read-only and cannot modify files.', success: false, toolCalls: 2, advisory: true },
+        { role: 'explorer', summary: 'fatal: not a git repository; workspace is not git-managed.', success: false, toolCalls: 1, advisory: true },
+      ],
+    });
+
+    expect(verdict.status).toBe('verified');
+    expect(verdict.blockers).toHaveLength(0);
+  });
+
+  it('still blocks required mutating subagent failures', () => {
+    const verdict = supervisor.reconcile({
+      ledgerSize: 1,
+      coherence: [],
+      validationRuns: [passing('x')],
+      unresolvedEditFailures: '',
+      subagentResults: [{ role: 'test-writer', summary: 'Could not write focused tests.', success: false, toolCalls: 3, advisory: false }],
+    });
+
+    expect(verdict.status).toBe('needs_review');
+    expect(verdict.blockers.join(' ')).toMatch(/subagent/i);
+  });
+
   it('blocks when required delegation was not reconciled', () => {
     const verdict = supervisor.reconcile({
       ledgerSize: 1,

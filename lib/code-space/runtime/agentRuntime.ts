@@ -300,6 +300,7 @@ export class AgentRuntime {
               summary: error instanceof Error ? error.message : String(error),
               success: false,
               toolCalls: 0,
+              advisory: task.readOnly,
             };
           }
         }),

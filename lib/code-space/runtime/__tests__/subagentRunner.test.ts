@@ -98,4 +98,19 @@ describe('SubagentRunner', () => {
     expect(result.success).toBe(true);
     expect(parent.ledger.has('.agent/tests/run-1/t.ts')).toBe(true);
   });
+
+  it('gives verifier run_command access without source editing tools', async () => {
+    mockedTurn.mockResolvedValueOnce(turn({ stopReason: 'end_turn', toolCalls: [{ id: 't1', name: 'attempt_completion', input: { success: true, summary: 'Validation reviewed.' } }] }));
+
+    const parent = makeParent();
+    const runner = new SubagentRunner(parent, { id: 'openai', model: 'test', apiKey: '' }, 'demo');
+    const result = await runner.spawn({ role: 'verifier', task: 'Run validation checks', readOnly: false });
+
+    const tools = mockedTurn.mock.calls[0]?.[2].map((tool) => tool.name) ?? [];
+    expect(result.success).toBe(true);
+    expect(result.advisory).toBe(false);
+    expect(tools).toContain('run_command');
+    expect(tools).not.toContain('edit_file');
+    expect(tools).not.toContain('create_files');
+  });
 });

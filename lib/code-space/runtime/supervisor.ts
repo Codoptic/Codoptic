@@ -26,8 +26,9 @@ export interface SupervisorInput {
 /**
  * Reconcile-before-confirm gate. The run is only `verified` when EVERY gate passes:
  * concrete changes exist, no validation stage failed, integration review is clean, no
- * unresolved edit failures, and no subagent reported failure. Otherwise `needs_review`
- * with the exact blockers. The verdict is a conjunction — never derived from a subset.
+ * unresolved edit failures, and no required subagent reported failure. Advisory helper
+ * failures that only reflect optional tooling or scoped read-only policy stay as
+ * reconciliation notes rather than blocking the parent implementation run.
  */
 export class Supervisor {
   reconcile(input: SupervisorInput): SupervisorVerdict {
@@ -60,7 +61,7 @@ export class Supervisor {
       blockers.push('Unresolved edit_file failures remain on at least one file.');
     }
 
-    const failedSubagents = (input.subagentResults ?? []).filter((result) => !result.success);
+    const failedSubagents = (input.subagentResults ?? []).filter((result) => !result.success && !isNonBlockingAdvisoryFailure(result));
     if (failedSubagents.length) {
       blockers.push(`Subagent(s) reported failure: ${failedSubagents.map((result) => result.role).join(', ')}.`);
     }
@@ -80,4 +81,9 @@ export class Supervisor {
       summary: status === 'verified' ? 'All gates passed: changes applied, integration review clean, validation green.' : blockers.join(' '),
     };
   }
+}
+
+function isNonBlockingAdvisoryFailure(result: SubagentResult): boolean {
+  if (!result.advisory) return false;
+  return /not a git repository|not git-managed|policy[- ]blocked|read[- ]only|do not edit|cannot modify|forbids tool execution|requires explicit approval|unavailable|not installed|missing optional/i.test(result.summary);
 }

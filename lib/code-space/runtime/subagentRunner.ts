@@ -37,6 +37,7 @@ export interface SubagentResult {
   summary: string;
   success: boolean;
   toolCalls: number;
+  advisory?: boolean;
 }
 
 function normalizeRole(role: string): SubagentRole {
@@ -53,11 +54,15 @@ function resolveRoleTools(role: SubagentRole, readOnly: boolean, allowedTools?: 
   const readSpecs = CODE_MODE_TOOL_SPECS.filter((spec) => isReadOnlyTool(spec.name));
   const completion = specByName('attempt_completion');
   const specs: ToolSpec[] = [...readSpecs];
-  if (!readOnly && (role === 'test-writer' || role === 'verifier' || role === 'implementer')) {
+  if (!readOnly && (role === 'test-writer' || role === 'implementer')) {
     for (const name of ['edit_file', 'run_command']) {
       const spec = specByName(name);
       if (spec) specs.push(spec);
     }
+  }
+  if (!readOnly && role === 'verifier') {
+    const spec = specByName('run_command');
+    if (spec) specs.push(spec);
   }
   if (completion) specs.push(completion);
   if (allowedTools?.length) {
@@ -69,11 +74,11 @@ function resolveRoleTools(role: SubagentRole, readOnly: boolean, allowedTools?: 
 
 function buildSubagentSystemPrompt(role: SubagentRole, projectName: string, readOnly: boolean): string {
   const roleBrief: Record<SubagentRole, string> = {
-    explorer: 'Investigate the repository and report concrete findings (files, symbols, call sites). Do not edit anything.',
+    explorer: 'Investigate the repository and report concrete findings (files, symbols, call sites). Your helper role is advisory and must not edit files; the parent implementation run may still apply changes later.',
     critic: 'Critically review the current changes/approach and report risks, gaps, and concrete improvement suggestions. Do not edit anything.',
-    'docs-reader': 'Read documentation, READMEs, and comments and report the conventions and constraints that apply. Do not edit anything.',
+    'docs-reader': 'Read documentation, READMEs, and comments and report the conventions and constraints that apply. Your helper role is advisory and must not edit files; the parent implementation run may still apply changes later.',
     'test-writer': 'Write focused, runnable test scripts under the .agent/tests/ folder for the changes, run them, and report results honestly. Do not modify source files.',
-    verifier: 'Verify the changes by running validation commands and inspecting output. Report exact failures. Do not modify source files outside .agent/tests/.',
+    verifier: 'Verify the changes by running validation commands when available and inspecting output. Report exact failures. Do not modify source files.',
     planner: 'Decompose large work into clear implementation packages, dependencies, risks, and validation gates. Do not edit anything.',
     implementer: 'Implement a tightly scoped package only when explicitly allowed tools include edit_file. Report every changed file and validation needed.',
     refactorer: 'Analyze refactor blast radius, call sites, imports, and compatibility risks. Do not edit anything unless explicitly allowed.',
@@ -160,6 +165,6 @@ export class SubagentRunner {
     }
     if (childCtx.implementationContract) this.parentCtx.implementationContract = childCtx.implementationContract;
 
-    return { role, summary: result.summary, success: result.success !== false, toolCalls: budget.turnsUsed };
+    return { role, summary: result.summary, success: result.success !== false, toolCalls: budget.turnsUsed, advisory: readOnly };
   }
 }

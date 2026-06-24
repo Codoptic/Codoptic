@@ -760,6 +760,12 @@ export class ToolExecutor {
   }
 
   private async git(args: string[], ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const probe: TerminalCommand = { kind: 'explore', command: 'git', args: ['rev-parse', '--is-inside-work-tree'], cwd: ctx.root, reason: 'Check whether the workspace is git-managed.', timeoutMs: 30_000 };
+    const probeResult = await ctx.terminal.run(probe, ctx.root, ctx.signal);
+    if (probeResult.status === 'failed' || !/\btrue\b/i.test(probeResult.output)) {
+      return { content: 'Workspace is not git-managed; using Code Space change ledger for diffs.' };
+    }
+
     const command: TerminalCommand = { kind: 'explore', command: 'git', args, cwd: ctx.root, reason: 'Read git state for the agent.', timeoutMs: 30_000 };
     const result = await ctx.terminal.runStreaming(
       command,

@@ -52,8 +52,25 @@ describe('DelegationPlanner', () => {
     expect(plan.tasks.length).toBeGreaterThan(3);
     expect(plan.tasks.length).toBeLessThanOrEqual(plan.workGraph?.limits.maxAutomaticSubagents ?? 0);
     expect(plan.tasks.map((task) => task.role)).toContain('explorer');
-    expect(plan.tasks.every((task) => task.readOnly)).toBe(true);
+    expect(plan.tasks.filter((task) => task.role !== 'verifier').every((task) => task.readOnly)).toBe(true);
+    expect(plan.tasks.find((task) => task.role === 'verifier')?.readOnly).toBe(false);
     expect(plan.reasons.join(' ')).toMatch(/repository|documentation|review|security/i);
+  });
+
+  it('spawns validation-heavy verifier tasks with command-running capability', () => {
+    const plan = new DelegationPlanner('deep').plan({
+      runId: 'run:test',
+      mode: 'code',
+      prompt: 'Fix the implementation and verify test, typecheck, lint, and build results',
+      context: context({ testCandidates: ['a.test.ts', 'b.test.ts', 'c.test.ts'] }),
+      validationCommands: validation,
+    });
+
+    const verifier = plan.tasks.find((task) => task.role === 'verifier');
+    expect(plan.required).toBe(true);
+    expect(verifier).toBeDefined();
+    expect(verifier?.readOnly).toBe(false);
+    expect(verifier?.task).toMatch(/Run non-destructive validation commands/i);
   });
 
   it('keeps standard profile near the legacy helper size', () => {

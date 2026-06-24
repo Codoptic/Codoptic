@@ -90,12 +90,17 @@ export class AgentOrchestrator {
         'Independently inspect relevant repository surfaces and report concrete files, symbols, call sites, risks, and missing evidence.',
         `Task: ${input.prompt}`,
         `Initial selected files: ${input.context.selectedFiles.slice(0, 24).join(', ') || '(none)'}.`,
-        'Do not edit files.',
+        'This helper is advisory: do not edit files. The parent Code-mode implementer may still apply source changes after reconciling your findings.',
       ].join('\n'),
       'independent repository investigation',
     );
     if (docsHeavy || this.profile !== 'standard') {
-      add('docs-reader', 'Documentation and convention scan', `Read instructions, docs, README files, and nearby comments that constrain this task.\nTask: ${input.prompt}\nDo not edit files.`, 'documentation and conventions scan');
+      add(
+        'docs-reader',
+        'Documentation and convention scan',
+        `Read instructions, docs, README files, and nearby comments that constrain this task.\nTask: ${input.prompt}\nThis helper is advisory: do not edit files. The parent Code-mode implementer may still apply source changes after reconciling your findings.`,
+        'documentation and conventions scan',
+      );
     }
     add(
       validationHeavy ? 'verifier' : 'critic',
@@ -104,9 +109,12 @@ export class AgentOrchestrator {
         validationHeavy ? 'Review likely validation/test risks and recommend exact checks.' : 'Critically review the likely implementation plan and identify gaps.',
         `Task: ${input.prompt}`,
         `Relevant validation commands: ${input.validationCommands.map((command) => [command.command, ...command.args].join(' ')).join(', ') || '(none detected)'}.`,
-        'Do not edit source files.',
+        validationHeavy
+          ? 'Run non-destructive validation commands when useful and report exact output. Do not edit source files.'
+          : 'This helper is advisory: do not edit source files. The parent Code-mode implementer may still apply source changes after reconciling your findings.',
       ].join('\n'),
       validationHeavy ? 'independent validation risk review' : 'independent implementation critique',
+      validationHeavy ? false : true,
     );
     if (uiHeavy) add('ui-reviewer', 'Browser and UI review', `Inspect likely browser/UI risks for this task and recommend preview interactions/screenshots.\nTask: ${input.prompt}`, 'browser/UI review');
     if (securityHeavy) add('security-reviewer', 'Security and permission review', `Inspect permission, terminal, sandbox, secret, and risky-command implications.\nTask: ${input.prompt}`, 'security review');
