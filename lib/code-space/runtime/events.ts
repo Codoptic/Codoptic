@@ -70,7 +70,13 @@ export type AgentEventType =
   | 'memory.loaded'
   | 'memory.read'
   | 'memory.update.proposed'
-  | 'artifact.created';
+  | 'artifact.created'
+  | 'coworking.run.created'
+  | 'coworking.phase.changed'
+  | 'coworking.workgraph.persisted'
+  | 'coworking.ledger.persisted'
+  | 'coworking.hook.completed'
+  | 'coworking.deliverable.recorded';
 
 export interface AgentEvent<TPayload = unknown> {
   id: string;

@@ -66,6 +66,25 @@ Code Space supports four runtime scale profiles:
 
 Large tasks are not treated as literally infinite. They are decomposed into work packages, run through a profile-bounded subagent pool, summarized into the context ledger, and reconciled before the parent agent can claim completion.
 
+## Coworking Runtime
+
+Code-mode runs now create a durable coworking record alongside the normal chat run. The coworking runtime tracks phases from intake through work-graph creation, execution, validation, sync, blocked, and complete states so long tasks have a resumable mission trail instead of relying on one model context window.
+
+For complex tasks, the delegation planner creates a governed work graph. Each package has an owner role, dependencies, acceptance criteria, validation expectations, risk level, expected artifacts, and blocker criteria. The subagent governor turns role labels into policy objects with allowed tools, forbidden tools, evidence requirements, escalation triggers, and review requirements.
+
+Run evidence is persisted through the context ledger and mirrored into `.agent/runs/<runId>/PLAN.md`, `STATUS.md`, and `DECISIONS.md`. The Mission Board in the agent panel surfaces the current phase, package count, hook evidence, deliverables, blockers, and latest sync status without making the final chat response verbose.
+
+### Scheduler And Hooks
+
+The execution scheduler stores queued, running, sleeping, completed, and failed package records with attempts, heartbeats, wake times, and profile-bound concurrency. This is the foundation for pause/resume and multi-day continuation: work advances through durable package state rather than an unbounded recursive agent loop.
+
+Runtime hooks add coworking guardrails at key points:
+
+- **After edit** records changed paths and ledger evidence.
+- **After UI edit** blocks supervisor verification until browser evidence exists for UI-affecting files.
+- **After validation failure** marks the repair planner requirement instead of blindly cycling.
+- **Before completion** blocks empty/no-evidence completions and unresolved edit failures.
+
 ## Review And Validation
 
 The right-hand agent panel is where the review loop lives:

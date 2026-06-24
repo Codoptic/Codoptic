@@ -394,7 +394,7 @@ export function clearEditFailures(ctx: CodeAgentContext, filePath: string): void
 
 export function formatUnresolvedEditFailures(ctx: CodeAgentContext): string {
   return Array.from(ctx.editFailures.entries())
-    .filter(([path, failures]) => failures.length > 0 && !ctx.ledger.has(path) && !ctx.proposedFiles.has(path))
+    .filter(([path, failures]) => failures.length > 0 && !path.startsWith('.agent/tests/') && !ctx.ledger.has(path) && !ctx.proposedFiles.has(path))
     .flatMap(([path, failures]) => failures.map((failure) => `- ${path} [${failure.code}]${failure.line ? ` line ${failure.line}` : ''}: ${failure.message}`))
     .join('\n');
 }

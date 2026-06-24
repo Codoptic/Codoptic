@@ -53,29 +53,29 @@ export function PlanClarificationPanel({
   return (
     <section
       data-testid="plan-clarification-panel"
-      className="flex h-full min-h-0 max-h-full flex-col rounded border border-[#30363d] bg-[#0f141b] p-2"
+      className="flex h-full min-h-0 max-h-full flex-col rounded border border-[#30363d] bg-[#0f141b] p-3"
       aria-label="Plan clarifying questions"
     >
-      <div className="mb-2 flex shrink-0 items-center gap-2 text-[10px] uppercase tracking-wider text-[#8b949e]">
-        <HelpCircle size={12} className="text-[#d2a8ff]" />
+      <div className="mb-3 flex shrink-0 items-center gap-2 text-[11px] uppercase tracking-wider text-[#8b949e]">
+        <HelpCircle size={14} className="text-[#d2a8ff]" />
         <span>Clarify Plan</span>
       </div>
       <div
         data-testid="plan-clarification-questions"
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-0.5 max-h-[min(55vh,32rem)]"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1"
       >
         {questions.map((question, index) => {
           const selectedChoices = answers[question.id] ?? [];
           return (
-            <div key={question.id} className="space-y-1.5">
-              <div className="text-[10px] leading-4 text-[#c9d1d9]">
+            <div key={question.id} className="space-y-2">
+              <div className="text-[13px] leading-5 text-[#c9d1d9]">
                 <span className="text-[#6e7681]">{index + 1}. </span>
                 {question.question}
               </div>
               {question.rationale && (
-                <div className="text-[9px] leading-4 text-[#8b949e]">Why it matters: {question.rationale}</div>
+                <div className="text-[11px] leading-4 text-[#8b949e]">Why it matters: {question.rationale}</div>
               )}
-              <div className="grid gap-1">
+              <div className="grid gap-1.5">
                 {(question.options?.length
                   ? question.options
                   : question.choices.map((choice) => ({ label: choice, description: undefined }))
@@ -87,18 +87,18 @@ export function PlanClarificationPanel({
                       type="button"
                       disabled={disabled}
                       onClick={() => toggleChoice(question, option.label)}
-                      className={`flex min-h-8 items-start gap-2 rounded border px-2 py-1 text-left text-[10px] leading-4 transition ${
+                      className={`flex min-h-10 items-start gap-2.5 rounded border px-3 py-2 text-left text-[12px] leading-5 transition ${
                         selected
                           ? 'border-[#8957e5] bg-[#2b1b40] text-[#f0e6ff]'
                           : 'border-[#30363d] bg-[#111111] text-[#c9d1d9] hover:border-[#58a6ff66] hover:bg-[#161b22]'
                       } disabled:cursor-not-allowed disabled:opacity-60`}
                     >
-                      <span className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${selected ? 'border-[#d2a8ff] bg-[#8957e5]' : 'border-[#6e7681]'}`}>
-                        {selected && <Check size={10} />}
+                      <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border ${selected ? 'border-[#d2a8ff] bg-[#8957e5]' : 'border-[#6e7681]'}`}>
+                        {selected && <Check size={11} />}
                       </span>
                       <span className="min-w-0 break-words">
                         <span className="block">{option.label}</span>
-                        {option.description && <span className="mt-0.5 block text-[9px] text-[#8b949e]">{option.description}</span>}
+                        {option.description && <span className="mt-0.5 block text-[11px] text-[#8b949e]">{option.description}</span>}
                       </span>
                     </button>
                   );
@@ -112,9 +112,9 @@ export function PlanClarificationPanel({
         type="button"
         disabled={disabled || !allAnswered}
         onClick={() => onSubmitAnswers(formatAnswerPrompt(questions, answers))}
-        className="mt-3 flex w-full shrink-0 items-center justify-center gap-1 rounded bg-[#8957e5] px-2 py-1.5 text-[10px] text-white hover:bg-[#a371f7] disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-4 flex w-full shrink-0 items-center justify-center gap-1.5 rounded bg-[#8957e5] px-3 py-2 text-[12px] text-white hover:bg-[#a371f7] disabled:cursor-not-allowed disabled:opacity-40"
       >
-        <Send size={11} />
+        <Send size={13} />
         Send answers
       </button>
     </section>

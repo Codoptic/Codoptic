@@ -60,6 +60,8 @@ import { AgentOrchestrator } from './agentOrchestrator';
 import { ContextLedger } from './contextLedger';
 import { BrowserController } from './browserController';
 import { normalizeRuntimeScaleProfile, runtimeScaleLimits } from './scaleProfile';
+import { CoworkingRunManager } from './coworkingRunManager';
+import { HookRunner } from './hookRunner';
 
 export const ResumeValidationRequestSchema = z.object({
   runId: z.string(),
@@ -116,6 +118,7 @@ export class AgentRuntime {
     private readonly events: EventStore = getEventStore(),
     private readonly memories = new MemoryManager(),
     private readonly delegation = new DelegationPlanner(),
+    private readonly coworking = new CoworkingRunManager(),
   ) {}
 
   async run(request: AgentRuntimeRequest, emit: AgentRuntimeEmit, signal?: AbortSignal): Promise<void> {
@@ -510,6 +513,21 @@ export class AgentRuntime {
     const scaleProfile = normalizeRuntimeScaleProfile(request.scaleProfile, 'code');
     const limits = runtimeScaleLimits(scaleProfile, 'code');
     const contextLedger = new ContextLedger(runId, scaleProfile);
+    const coworkingRun = await this.coworking.create({
+      runId,
+      sessionId: request.sessionId,
+      projectId: request.projectName,
+      projectRoot: root,
+      prompt,
+      scaleProfile,
+    });
+    await emitRuntime('coworking.run.created', {
+      runId,
+      phase: coworkingRun.phase,
+      scaleProfile,
+      syncMode: coworkingRun.syncMode,
+      artifactsPath: `.agent/runs/${runId}`,
+    });
     const store = getCodeSpaceStore();
     const ledger = new Map<string, LedgerEntry>();
     const persistCheckpoint = async (checkpoint: FileCheckpoint) => {
@@ -579,6 +597,38 @@ export class AgentRuntime {
       contextLedger,
       emitRuntime,
     });
+    if (delegationReport.plan.workGraph) {
+      const persistedGraph = await this.coworking.persistGraph(coworkingRun, delegationReport.plan.workGraph);
+      await emitRuntime('coworking.workgraph.persisted', {
+        runId,
+        graphId: persistedGraph.id,
+        packageCount: persistedGraph.packages.length,
+        readyCount: persistedGraph.packages.filter((pkg) => pkg.status === 'ready').length,
+      });
+      for (const [index, result] of delegationReport.results.entries()) {
+        const pkg = persistedGraph.packages[index];
+        if (!pkg) continue;
+        await this.coworking.recordDeliverable(runId, {
+          packageId: pkg.id,
+          role: pkg.role,
+          status: result.success ? 'done' : 'blocked',
+          changedFiles: [],
+          evidence: [{ kind: 'review', summary: result.summary }],
+          blockers: result.success ? [] : [result.summary],
+          handoffNotes: result.summary,
+          validationRequested: [],
+          confidence: result.success ? 'medium' : 'low',
+        });
+        await emitRuntime('coworking.deliverable.recorded', {
+          runId,
+          packageId: pkg.id,
+          role: pkg.role,
+          status: result.success ? 'done' : 'blocked',
+        });
+      }
+    }
+    await this.coworking.transition(runId, 'executing', 'Parent agent is integrating governed package findings.');
+    await emitRuntime('coworking.phase.changed', { runId, phase: 'executing' });
 
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
@@ -621,6 +671,8 @@ export class AgentRuntime {
     // accept/reject instead of validating/fixing unchanged code or reporting an autonomy failure.
     if (ledger.size === 0 && ctx.proposedFiles.size > 0) {
       const proposed = Array.from(ctx.proposedFiles);
+      await this.coworking.persistLedger(runId, contextLedger);
+      await emitRuntime('coworking.ledger.persisted', { runId, entries: contextLedger.list().length });
       await emitRuntime('plan.updated', { phase: 'awaiting_diff_confirmation' });
       // Pre-validation diff confirmation gate (Confirm mode): surface the full proposed
       // change set so the user reviews every change before accepting + validating. We persist
@@ -690,6 +742,10 @@ export class AgentRuntime {
       const blocker = sufficiency.blockers[0];
       const suffix = blocker ? ` Blocker: ${blocker}` : sufficiency.warnings[0] ? ` Note: ${sufficiency.warnings[0]}` : '';
       const answer = `${tightened}${suffix}`.trim();
+      contextLedger.markContinuation('Code mode stopped without concrete changes after recall/repair gates.', []);
+      await this.coworking.transition(runId, 'blocked', 'Code mode stopped without concrete changes.', [answer]);
+      await this.coworking.persistLedger(runId, contextLedger);
+      await emitRuntime('coworking.phase.changed', { runId, phase: 'blocked', blockers: [answer] });
       await streamAnswer(answer, emit, emitRuntime);
       await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
       emit({ type: 'validation_result', id: `validation:${runId}:no_changes`, command: 'v3.2 implementation gate', status: 'failed', output: 'Code mode produced no applied files after recall/repair gates.' });
@@ -711,6 +767,17 @@ export class AgentRuntime {
       })),
     );
     const filesChanged = Array.from(ctx.ledger.keys());
+    const editHooks = new HookRunner().runAll(ctx, filesChanged);
+    for (const hook of editHooks) {
+      contextLedger.add({
+        kind: 'decision',
+        summary: `${hook.hook}: ${hook.summary}`,
+        status: hook.status === 'passed' ? 'passed' : hook.status === 'blocked' ? 'failed' : 'skipped',
+      });
+      await emitRuntime('coworking.hook.completed', hook);
+    }
+    await this.coworking.persistLedger(runId, contextLedger);
+    await emitRuntime('coworking.ledger.persisted', { runId, entries: contextLedger.list().length });
     await emitRuntime('plan.updated', { phase: 'diff_review_emitted' });
     const tightenedGateSummary = tightenAgentSummary(loopResult.summary);
     const reviewSummary = [
@@ -816,6 +883,8 @@ export class AgentRuntime {
     };
 
     await emitRuntime('plan.updated', { phase: 'validating' });
+    await this.coworking.transition(runId, 'validating', 'Validation and supervisor reconciliation are running.');
+    await emitRuntime('coworking.phase.changed', { runId, phase: 'validating' });
     const verifier = new IntegrationVerifier(this.validation, subagentRunner);
 
     // Step 1: review the cumulative diff for integration coherence.
@@ -853,13 +922,32 @@ export class AgentRuntime {
     if (revertCheckpoint) await persistCheckpoint(revertCheckpoint);
 
     const filesChanged = Array.from(ctx.ledger.keys());
+    const completionHooks = new HookRunner().runAll(ctx, filesChanged, validationRuns, [
+      ...finalCoherence.findings.map((finding) => `${finding.path}: ${finding.message}`),
+    ]);
+    const blockedHookSummaries = completionHooks
+      .filter((hook) => hook.status === 'blocked')
+      .map((hook) => hook.summary)
+      .filter((summary) => summary !== 'Unresolved edit failures remain.');
+    for (const hook of completionHooks) {
+      ctx.contextLedger?.add({
+        kind: 'decision',
+        summary: `${hook.hook}: ${hook.summary}`,
+        status: hook.status === 'passed' ? 'passed' : hook.status === 'blocked' ? 'failed' : 'skipped',
+      });
+      await emitRuntime('coworking.hook.completed', hook);
+    }
+    if (ctx.contextLedger) {
+      await this.coworking.persistLedger(runId, ctx.contextLedger);
+      await emitRuntime('coworking.ledger.persisted', { runId, entries: ctx.contextLedger.list().length });
+    }
 
     // Supervisor reconciles every gate before confirmation — verified only when all pass.
     const verdict = new Supervisor().reconcile({
       ledgerSize: ctx.ledger.size,
       coherence: finalCoherence.findings,
       validationRuns,
-      unresolvedEditFailures: formatUnresolvedEditFailures(ctx),
+      unresolvedEditFailures: [formatUnresolvedEditFailures(ctx), ...blockedHookSummaries].filter(Boolean).join('\n'),
       subagentResults: [...(params.delegationReport?.results ?? []), ...(testScripts.result ? [testScripts.result] : [])],
       delegationRequired: params.delegationReport?.plan.required,
       delegationReconciled: params.delegationReport ? params.delegationReport.reconciled : true,
@@ -886,6 +974,17 @@ export class AgentRuntime {
     ]
       .filter(Boolean)
       .join('\n\n');
+    await this.coworking.transition(
+      runId,
+      verdict.status === 'verified' ? 'complete' : 'syncing',
+      verdict.status === 'verified' ? 'Supervisor verified all completion gates.' : 'Supervisor requires user review before completion.',
+      verdict.blockers,
+    );
+    await emitRuntime('coworking.phase.changed', {
+      runId,
+      phase: verdict.status === 'verified' ? 'complete' : 'syncing',
+      blockers: verdict.blockers,
+    });
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: terminalPhase, phase: terminalPhase, filesChanged, checkpointId: revertCheckpoint?.id });
     emit({ type: 'agent_done', summary: answer, filesChanged });

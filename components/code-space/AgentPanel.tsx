@@ -11,6 +11,7 @@ import { buildPlanImplementationPrompt, type CodeSpacePromptOptions } from '@/li
 import { AgentModeSelector } from './AgentModeSelector';
 import { ExecutionPolicySelector } from './ExecutionPolicySelector';
 import { ScaleProfileSelector } from './ScaleProfileSelector';
+import { MissionBoard } from './MissionBoard';
 import { SessionListSection } from './SessionListSection';
 import { FileMentionInput } from './FileMentionInput';
 import { PlanClarificationPanel } from './PlanClarificationPanel';
@@ -650,7 +651,7 @@ export function AgentPanel({
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           className={`flex flex-col gap-2 border-b border-[#242424] px-2 py-2 ${
-            hasClarifyingQuestions ? 'min-h-0 flex-1 overflow-hidden' : 'shrink-0'
+            hasClarifyingQuestions ? 'min-h-0 flex-[3] overflow-hidden' : 'shrink-0'
           }`}
         >
         <div className="shrink-0">
@@ -688,7 +689,12 @@ export function AgentPanel({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+        <div
+          className={`min-h-0 overflow-y-auto px-4 py-5 ${
+            hasClarifyingQuestions ? 'flex-1 shrink' : 'flex-1'
+          }`}
+        >
+          <MissionBoard runFeed={session?.runFeed} />
           {agentTimeline.length === 0 ? (
             <p className="mt-6 text-center text-[13px] text-[#6e7681]">Describe a task to get started</p>
           ) : (

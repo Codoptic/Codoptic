@@ -77,6 +77,58 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
         createdAt: event.event.createdAt,
       };
     }
+    if (structuredType === 'coworking.run.created') {
+      return {
+        id: `feed:coworking:run:${event.event.id}`,
+        kind: 'progress',
+        title: `Coworking run started (${String(payload?.scaleProfile ?? 'deep')})`,
+        detail: typeof payload?.artifactsPath === 'string' ? payload.artifactsPath : undefined,
+        status: 'running',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'coworking.phase.changed') {
+      const phase = String(payload?.phase ?? 'executing');
+      return {
+        id: `feed:coworking:phase:${event.event.id}`,
+        kind: phase === 'blocked' ? 'error' : phase === 'complete' ? 'done' : 'progress',
+        title: `Coworking phase: ${phase}`,
+        detail: Array.isArray(payload?.blockers) ? payload.blockers.map(String).join(' ') : undefined,
+        status: phase === 'blocked' ? 'error' : phase === 'complete' ? 'success' : 'running',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'coworking.workgraph.persisted') {
+      return {
+        id: `feed:coworking:workgraph:${event.event.id}`,
+        kind: 'progress',
+        title: `Mission board ready (${Number(payload?.packageCount ?? 0)} package(s))`,
+        detail: `Ready now: ${Number(payload?.readyCount ?? 0)}`,
+        status: 'success',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'coworking.hook.completed') {
+      const status = String(payload?.status ?? 'skipped');
+      return {
+        id: `feed:coworking:hook:${event.event.id}`,
+        kind: status === 'blocked' ? 'review' : 'progress',
+        title: `${String(payload?.hook ?? 'hook')} ${status}`,
+        detail: typeof payload?.summary === 'string' ? payload.summary : undefined,
+        status: status === 'blocked' ? 'warning' : status === 'passed' ? 'success' : 'pending',
+        createdAt: event.event.createdAt,
+      };
+    }
+    if (structuredType === 'coworking.deliverable.recorded') {
+      return {
+        id: `feed:coworking:deliverable:${event.event.id}`,
+        kind: 'review',
+        title: `Deliverable recorded: ${String(payload?.role ?? 'subagent')}`,
+        detail: typeof payload?.packageId === 'string' ? payload.packageId : undefined,
+        status: payload?.status === 'done' ? 'success' : 'warning',
+        createdAt: event.event.createdAt,
+      };
+    }
     if (structuredType === 'memory.loaded') {
       const paths = Array.isArray(payload?.paths) ? payload.paths : [];
       return {

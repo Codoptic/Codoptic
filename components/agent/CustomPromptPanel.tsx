@@ -317,7 +317,7 @@ export function CustomPromptPanel() {
     const genMaxTokens =
       provider.provider === 'local' ? (provider.localContextLength ?? 4096) : undefined;
 
-    let projectName = extractFallbackName(prompt, 2);
+    const projectName = extractFallbackName(prompt, 2);
 
     try {
       const res = await fetch(apiEndpoint, {
