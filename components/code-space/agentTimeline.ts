@@ -1,6 +1,7 @@
 import type { AgentRunFeedEntry, CodeSpaceAgentSession } from '@/lib/code-space/core';
 import type { CodeSpacePendingDiff } from './diffHunks';
 import { countDiffLines } from './diffHunks';
+import { agentDisplayDedupeKey, conciseValidationOutput, sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
 
 export type AgentTimelineItem =
   | { id: string; kind: 'user_prompt'; content: string; messageId: string; createdAt: number }
@@ -50,6 +51,25 @@ const MAX_INLINE_PATCH_CARDS = 4;
 export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: BuildAgentTimelineInput): AgentTimelineItem[] {
   if (!session) return [];
   const items: AgentTimelineItem[] = [];
+  const seenDisplay = new Set<string>();
+
+  const pushAssistantText = (id: string, content: string, createdAt: number) => {
+    const clean = sanitizeAgentDisplayText(content);
+    if (!clean) return;
+    const key = agentDisplayDedupeKey(clean);
+    if (key && seenDisplay.has(key)) return;
+    if (key) seenDisplay.add(key);
+    items.push({ id, kind: 'assistant_text', content: clean, createdAt });
+  };
+
+  const pushStatusSummary = (id: string, text: string, status: AgentRunFeedEntry['status'] | undefined, createdAt: number) => {
+    const clean = sanitizeAgentDisplayText(text);
+    if (!clean) return;
+    const key = agentDisplayDedupeKey(clean);
+    if (key && seenDisplay.has(key)) return;
+    if (key) seenDisplay.add(key);
+    items.push({ id, kind: 'status_summary', text: clean, status, createdAt });
+  };
 
   for (const message of session.messages) {
     if (message.role === 'tool' || message.role === 'system') continue;
@@ -57,7 +77,7 @@ export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: Buil
       items.push({ id: `message:${message.id}`, kind: 'user_prompt', content: message.content, messageId: message.id, createdAt: message.createdAt });
       continue;
     }
-    items.push({ id: `message:${message.id}`, kind: 'assistant_text', content: message.content, createdAt: message.createdAt });
+    pushAssistantText(`message:${message.id}`, message.content, message.createdAt);
   }
 
   const exploration = summarizeExploration(session);
@@ -66,12 +86,13 @@ export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: Buil
   let previousProgressTitle = '';
   for (const entry of session.runFeed ?? []) {
     if (entry.kind === 'progress' && entry.title && !isNoisyProgress(entry.title)) {
-      const normalizedTitle = entry.title.trim().toLowerCase();
+      const cleanTitle = sanitizeAgentDisplayText(entry.title);
+      const normalizedTitle = cleanTitle.trim().toLowerCase();
       if (normalizedTitle === previousProgressTitle) continue;
       previousProgressTitle = normalizedTitle;
-      items.push({ id: `feed:${entry.id}`, kind: 'assistant_text', content: entry.title, createdAt: entry.createdAt });
+      pushAssistantText(`feed:${entry.id}`, cleanTitle, entry.createdAt);
     } else if (entry.kind === 'review' && entry.status && entry.status !== 'success') {
-      items.push({ id: `feed:${entry.id}`, kind: 'status_summary', text: entry.detail ? `${entry.title}: ${entry.detail}` : entry.title, status: entry.status, createdAt: entry.createdAt });
+      pushStatusSummary(`feed:${entry.id}`, entry.detail ? `${entry.title}: ${entry.detail}` : entry.title, entry.status, entry.createdAt);
     }
   }
 
@@ -105,7 +126,7 @@ export function buildAgentTimeline({ session, pendingDiffs, appliedDiffs }: Buil
       kind: 'validation_summary',
       command: result.command,
       status: result.status,
-      output: result.output,
+      output: conciseValidationOutput(result.output),
       createdAt: session.updatedAt + 3,
     });
   }

@@ -7,6 +7,7 @@ import { PermissionManager } from './permissionManager';
 import { TerminalRunner } from './terminalRunner';
 import { formatAutonomyToolGuidance } from './autonomyPolicy';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
+import { sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
 
 export type SubagentRole =
   | 'explorer'
@@ -148,7 +149,11 @@ export class SubagentRunner {
 
     await this.parentCtx.emitRuntime('subagent.started', { role, task: request.task, readOnly });
     const result = await loop.run(childCtx, { session: this.session, budget, signal: this.parentCtx.signal, tools });
-    await this.parentCtx.emitRuntime('subagent.completed', { role, success: result.success !== false, summary: result.summary });
+    const success = result.success !== false;
+    const summary = success
+      ? sanitizeAgentDisplayText(result.summary) || result.summary
+      : sanitizeAgentDisplayText(`Subagent failed: ${role}: ${result.summary}`) || sanitizeAgentDisplayText(result.summary) || result.summary;
+    await this.parentCtx.emitRuntime('subagent.completed', { role, success, summary });
 
     // Merge subagent contributions into the parent context for supervisor reconciliation.
     for (const [path, entry] of childCtx.ledger) if (!this.parentCtx.ledger.has(path)) this.parentCtx.ledger.set(path, entry);
@@ -165,6 +170,6 @@ export class SubagentRunner {
     }
     if (childCtx.implementationContract) this.parentCtx.implementationContract = childCtx.implementationContract;
 
-    return { role, summary: result.summary, success: result.success !== false, toolCalls: budget.turnsUsed, advisory: readOnly };
+    return { role, summary, success, toolCalls: budget.turnsUsed, advisory: readOnly };
   }
 }

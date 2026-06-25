@@ -79,4 +79,26 @@ describe('agentRunFeed', () => {
     expect(feed[0]?.title).toMatch(/Delegation plan/);
     expect(feed[1]?.title).toMatch(/Loaded 1 project memory/);
   });
+
+  it('sanitizes failed subagent summaries for the user-facing feed', () => {
+    const feed = appendRunFeedEvent([], {
+      type: 'structured_event',
+      event: {
+        id: 'event-subagent-failed',
+        type: 'subagent.completed',
+        payload: {
+          role: 'docs-reader',
+          success: false,
+          summary:
+            'attempt_completion(success=false, summary="This docs-reader run is prohibited from editing files, so no source changes were made.")',
+        },
+        createdAt: 10,
+      },
+    } as AgentSSEEvent);
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.title).toBe('Docs reader needs attention');
+    expect(feed[0]?.detail).toBe('Docs reader could only inspect the repo; it could not make changes in this run.');
+    expect(`${feed[0]?.title} ${feed[0]?.detail}`).not.toMatch(/attempt_completion|success=false|summary=/);
+  });
 });

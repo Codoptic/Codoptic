@@ -62,6 +62,7 @@ import { BrowserController } from './browserController';
 import { normalizeRuntimeScaleProfile, runtimeScaleLimits } from './scaleProfile';
 import { CoworkingRunManager } from './coworkingRunManager';
 import { HookRunner } from './hookRunner';
+import { sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
 
 export const ResumeValidationRequestSchema = z.object({
   runId: z.string(),
@@ -295,9 +296,10 @@ export class AgentRuntime {
           try {
             return await params.subagentRunner.spawn(toSubagentRequest(task));
           } catch (error) {
+            const rawSummary = error instanceof Error ? error.message : String(error);
             return {
               role: task.role,
-              summary: error instanceof Error ? error.message : String(error),
+              summary: sanitizeAgentDisplayText(`Subagent failed: ${task.role}: ${rawSummary}`) || rawSummary,
               success: false,
               toolCalls: 0,
               advisory: task.readOnly,
@@ -750,10 +752,10 @@ export class AgentRuntime {
       // ("Summary of intent and actions", "DoD status vs checklist", "Options for you"). Tighten
       // to a single short paragraph and only attach a brief blocker/warning suffix when present —
       // never the full v3.2 boilerplate the runtime used to append.
-      const tightened = tightenAgentSummary(loopResult.summary) || 'No files were changed.';
+      const tightened = sanitizeAgentDisplayText(tightenAgentSummary(loopResult.summary)) || 'No files were changed.';
       const blocker = sufficiency.blockers[0];
-      const suffix = blocker ? ` Blocker: ${blocker}` : sufficiency.warnings[0] ? ` Note: ${sufficiency.warnings[0]}` : '';
-      const answer = `${tightened}${suffix}`.trim();
+      const suffix = blocker ? ` Blocker: ${sanitizeAgentDisplayText(blocker) || blocker}` : sufficiency.warnings[0] ? ` Note: ${sanitizeAgentDisplayText(sufficiency.warnings[0]) || sufficiency.warnings[0]}` : '';
+      const answer = sanitizeAgentDisplayText(`${tightened}${suffix}`) || `${tightened}${suffix}`.trim();
       contextLedger.markContinuation('Code mode stopped without concrete changes after recall/repair gates.', []);
       await this.coworking.transition(runId, 'blocked', 'Code mode stopped without concrete changes.', [answer]);
       await this.coworking.persistLedger(runId, contextLedger);
@@ -967,8 +969,9 @@ export class AgentRuntime {
       browserEvidenceRequired: requiresBrowserEvidence(prompt, filesChanged),
       browserEvidenceCount: ctx.contextLedger?.list('browser').length ?? 0,
     });
-    emit({ type: 'supervisor_verdict', status: verdict.status, blockers: verdict.blockers });
-    await emitRuntime('supervisor.verdict', { status: verdict.status, blockers: verdict.blockers });
+    const sanitizedVerdictBlockers = verdict.blockers.map((blocker) => sanitizeAgentDisplayText(blocker) || blocker);
+    emit({ type: 'supervisor_verdict', status: verdict.status, blockers: sanitizedVerdictBlockers });
+    await emitRuntime('supervisor.verdict', { status: verdict.status, blockers: sanitizedVerdictBlockers });
 
     const terminalPhase = verdict.status === 'verified' ? 'verified' : 'needs_review';
     todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: verdict.status === 'verified' || index < 3 }));
@@ -981,7 +984,7 @@ export class AgentRuntime {
         summary: params.loopSummary ?? '',
         checkpointRef: revertCheckpoint?.id,
       }),
-      verdict.status === 'needs_review' && verdict.blockers.length ? `Supervisor verdict: needs_review — ${verdict.blockers.join(' ')}` : '',
+      verdict.status === 'needs_review' && sanitizedVerdictBlockers.length ? `Supervisor needs review: ${sanitizedVerdictBlockers.join(' ')}` : '',
       testScripts.scripts.length ? `Generated ${testScripts.scripts.length} test script(s) under ${testScripts.folder}.` : '',
     ]
       .filter(Boolean)
@@ -990,12 +993,12 @@ export class AgentRuntime {
       runId,
       verdict.status === 'verified' ? 'complete' : 'syncing',
       verdict.status === 'verified' ? 'Supervisor verified all completion gates.' : 'Supervisor requires user review before completion.',
-      verdict.blockers,
+      sanitizedVerdictBlockers,
     );
     await emitRuntime('coworking.phase.changed', {
       runId,
       phase: verdict.status === 'verified' ? 'complete' : 'syncing',
-      blockers: verdict.blockers,
+      blockers: sanitizedVerdictBlockers,
     });
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: terminalPhase, phase: terminalPhase, filesChanged, checkpointId: revertCheckpoint?.id });

@@ -180,4 +180,49 @@ describe('buildAgentTimeline', () => {
     expect(items.some((item) => 'content' in item && item.content === 'Waiting for model turn.')).toBe(false);
     expect(items.some((item) => 'text' in item && item.text.includes('File not found'))).toBe(false);
   });
+
+  it('cleans repeated blocked-run catch-up messages into one plain blocker', () => {
+    const session = createSession();
+    session.toolCalls = [];
+    session.verificationResults = [];
+    session.messages = [
+      { id: 'user-1', role: 'user', content: 'Fix the agent panel.', createdAt: session.createdAt },
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content:
+          'attempt_completion(success=false, summary="Read the approved plan, but validation was blocked because npm run typecheck failed with spawn ... ENOENT. No source files were modified.")',
+        createdAt: session.createdAt + 1,
+      },
+      {
+        id: 'assistant-2',
+        role: 'assistant',
+        content:
+          'I couldn’t complete verification because the workspace command runner is nonfunctional here: every attempted command fails with spawn ... ENOENT. No source files were modified.',
+        createdAt: session.createdAt + 2,
+      },
+      {
+        id: 'assistant-3',
+        role: 'assistant',
+        content: 'The workspace is still unable to spawn commands, so I cannot make or verify any repository change. No files were modified.',
+        createdAt: session.createdAt + 3,
+      },
+      {
+        id: 'assistant-4',
+        role: 'assistant',
+        content:
+          'Subagent failed: refactorer: Reviewed the current workspace evidence, but this run is constrained to suggest-only review and source edits are blocked.',
+        createdAt: session.createdAt + 4,
+      },
+    ];
+
+    const items = buildAgentTimeline({ session, pendingDiffs: [], appliedDiffs: [] });
+    const text = items.map((item) => ('content' in item ? item.content : 'text' in item ? item.text : '')).join('\n');
+
+    expect(text).toContain('The run is blocked because commands cannot start in this workspace. No files were changed.');
+    expect(text).toContain('Refactorer could only inspect the repo; it could not make changes in this run.');
+    expect(text).not.toMatch(/attempt_completion|success=false|summary=/);
+    expect((text.match(/commands cannot start in this workspace/g) ?? [])).toHaveLength(1);
+    expect((text.match(/No files were changed/g) ?? [])).toHaveLength(1);
+  });
 });

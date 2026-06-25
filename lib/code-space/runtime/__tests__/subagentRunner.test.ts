@@ -113,4 +113,29 @@ describe('SubagentRunner', () => {
     expect(tools).not.toContain('edit_file');
     expect(tools).not.toContain('create_files');
   });
+
+  it('sanitizes blocked subagent summaries before emitting lifecycle events', async () => {
+    mockedTurn.mockResolvedValueOnce(turn({
+      stopReason: 'end_turn',
+      toolCalls: [{
+        id: 't1',
+        name: 'attempt_completion',
+        input: {
+          success: false,
+          summary:
+            'Reviewed the approved plan, but this run is constrained to suggest-only review and source edits are blocked. No source files were modified.',
+        },
+      }],
+    }));
+
+    const parent = makeParent();
+    const runner = new SubagentRunner(parent, { id: 'openai', model: 'test', apiKey: '' }, 'demo');
+    const result = await runner.spawn({ role: 'docs-reader', task: 'Read the plan and docs' });
+    const completed = runtimeEvents.find((event) => event.type === 'subagent.completed');
+
+    expect(result.success).toBe(false);
+    expect(result.summary).toBe('Docs reader could only inspect the repo; it could not make changes in this run. No files were changed.');
+    expect(completed?.payload).toMatchObject({ summary: result.summary });
+    expect(JSON.stringify(completed?.payload)).not.toMatch(/success=false|summary=|suggest-only review/);
+  });
 });

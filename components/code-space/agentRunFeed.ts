@@ -1,5 +1,6 @@
 import type { AgentSSEEvent } from '@/lib/code-space/agent/types';
 import type { AgentRunFeedEntry, PatchHistoryEntry } from '@/lib/code-space/core';
+import { conciseValidationOutput, sanitizeAgentDetailText, sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
 
 const MAX_FEED_ENTRIES = 220;
 
@@ -25,8 +26,8 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
     return {
       id: event.status.id,
       kind: 'progress',
-      title: event.status.title,
-      detail: event.status.detail,
+      title: sanitizeAgentDisplayText(event.status.title) || event.status.title,
+      detail: sanitizeAgentDetailText(event.status.detail),
       status: event.status.status,
       createdAt: event.status.createdAt,
     };
@@ -61,8 +62,8 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
       return {
         id: `feed:delegation:${event.event.id}`,
         kind: 'review',
-        title: `Subagent ${success ? 'completed' : 'failed'}: ${String(payload?.role ?? 'helper')}`,
-        detail: typeof payload?.summary === 'string' ? payload.summary : undefined,
+        title: success ? `Subagent completed: ${String(payload?.role ?? 'helper')}` : `${humanizeRole(String(payload?.role ?? 'helper'))} needs attention`,
+        detail: typeof payload?.summary === 'string' ? sanitizeAgentDetailText(`Subagent failed: ${String(payload?.role ?? 'helper')}: ${payload.summary}`) : undefined,
         status: success ? 'success' : 'warning',
         createdAt: event.event.createdAt,
       };
@@ -93,7 +94,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
         id: `feed:coworking:phase:${event.event.id}`,
         kind: phase === 'blocked' ? 'error' : phase === 'complete' ? 'done' : 'progress',
         title: `Coworking phase: ${phase}`,
-        detail: Array.isArray(payload?.blockers) ? payload.blockers.map(String).join(' ') : undefined,
+        detail: Array.isArray(payload?.blockers) ? sanitizeAgentDetailText(payload.blockers.map(String).join(' ')) : undefined,
         status: phase === 'blocked' ? 'error' : phase === 'complete' ? 'success' : 'running',
         createdAt: event.event.createdAt,
       };
@@ -114,7 +115,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
         id: `feed:coworking:hook:${event.event.id}`,
         kind: status === 'blocked' ? 'review' : 'progress',
         title: `${String(payload?.hook ?? 'hook')} ${status}`,
-        detail: typeof payload?.summary === 'string' ? payload.summary : undefined,
+        detail: typeof payload?.summary === 'string' ? sanitizeAgentDetailText(payload.summary) : undefined,
         status: status === 'blocked' ? 'warning' : status === 'passed' ? 'success' : 'pending',
         createdAt: event.event.createdAt,
       };
@@ -212,7 +213,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
       id: `feed:validation:${event.id}`,
       kind: 'validation',
       title: `${event.status}: ${event.command}`,
-      detail: event.output,
+      detail: conciseValidationOutput(event.output),
       status: event.status === 'passed' ? 'success' : event.status === 'failed' ? 'error' : 'warning',
       command: event.command,
       createdAt: now,
@@ -232,7 +233,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
       id: `feed:supervisor:${now}`,
       kind: 'review',
       title: event.status === 'verified' ? 'Supervisor verified the run' : 'Supervisor needs review',
-      detail: event.blockers.join(' '),
+      detail: sanitizeAgentDetailText(event.blockers.join(' ')),
       status: event.status === 'verified' ? 'success' : 'warning',
       createdAt: now,
     };
@@ -250,7 +251,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
     return {
       id: `feed:error:${now}`,
       kind: 'error',
-      title: event.message,
+      title: sanitizeAgentDisplayText(event.message) || event.message,
       status: 'error',
       createdAt: now,
     };
@@ -260,7 +261,7 @@ export function runFeedEntryFromEvent(event: AgentSSEEvent, now = Date.now()): A
       id: `feed:done:${now}`,
       kind: 'done',
       title: 'Run completed',
-      detail: event.summary,
+      detail: sanitizeAgentDetailText(event.summary),
       status: 'success',
       createdAt: now,
     };
@@ -293,4 +294,9 @@ function previewInput(input: unknown): string | undefined {
 
 function basename(filePath: string): string {
   return filePath.split('/').filter(Boolean).pop() ?? filePath;
+}
+
+function humanizeRole(role: string): string {
+  const cleaned = role.trim().replace(/[-_]+/g, ' ') || 'helper';
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }

@@ -24,6 +24,7 @@ import type { MentionIndexStatus } from '@/lib/code-space/mentions/useMentionInd
 import type { SelectedMention } from '@/lib/code-space/mentions/types';
 import { MentionChip } from './mentions/MentionChip';
 import { buildAgentTimeline, type AgentTimelineItem } from './agentTimeline';
+import { sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
 
 export type RuntimeScaleProfile = 'standard' | 'deep' | 'massive' | 'full_access_local';
 
@@ -80,6 +81,7 @@ interface AgentPanelProps {
 function renderMessageText(message: CodeSpaceMessage) {
   const content = message.content.trim() || ' ';
   if (message.role !== 'assistant') return content;
+  const sanitized = sanitizeAgentDisplayText(content);
 
   const legacyDummyResponse =
     /I looked through the relevant project files[\s\S]*Reviewed \d+ files?[\s\S]*Validation available:/i.test(content) ||
@@ -95,10 +97,10 @@ function renderMessageText(message: CodeSpaceMessage) {
     content.includes('Dependency trace:') ||
     content.includes('Code mode now performs deep workflow analysis');
 
-  if (!looksLikeInternalWorkflow) return content;
+  if (!looksLikeInternalWorkflow) return sanitized || content;
 
   const appliedIndex = content.indexOf('Applied changes:');
-  if (appliedIndex >= 0) return content.slice(appliedIndex).trim();
+  if (appliedIndex >= 0) return sanitizeAgentDisplayText(content.slice(appliedIndex).trim()) || content.slice(appliedIndex).trim();
 
   return 'I reviewed the project context. No code changes were applied in this run.';
 }
