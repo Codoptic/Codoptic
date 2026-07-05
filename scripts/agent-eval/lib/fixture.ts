@@ -23,9 +23,28 @@ export interface FixtureOptions {
   git: boolean;
   /** Seed a deliberate failing-test bug into the inventory module. */
   withBug: boolean;
+  /** Optional approved plan artifact used by plan-to-code eval scenarios. */
+  plan?: 'low-stock-threshold';
 }
 
-const FILES = (withBug: boolean): Record<string, string> => ({
+const LOW_STOCK_PLAN = [
+  '# Low-stock threshold implementation plan',
+  '',
+  '## Summary',
+  'Build a small low-stock signal through the warehouse fixture so callers can detect when a successful order leaves inventory at or below a configured threshold.',
+  '',
+  '## Implementation requirements',
+  '- Add configurable low-stock threshold support to `src/inventory.mjs` without changing existing reserve semantics.',
+  '- Expose the low-stock result through `placeOrder` in `src/orders.mjs` after successful reservations.',
+  '- Add tests in `test/inventory.test.mjs` for threshold detection and non-low-stock orders.',
+  '',
+  '## Definition of Done',
+  '- Existing oversell tests still pass.',
+  '- New threshold tests pass with `npm test`.',
+  '- No unrelated pricing or forecast files are changed.',
+].join('\n');
+
+const FILES = (withBug: boolean, plan?: FixtureOptions['plan']): Record<string, string> => ({
   'package.json': JSON.stringify(
     {
       name: 'warehouse-service',
@@ -48,6 +67,7 @@ const FILES = (withBug: boolean): Record<string, string> => ({
     '- `src/orders.mjs` ties stock reservation and pricing together.\n' +
     '- `service/forecast.py` is an auxiliary demand-forecast helper.\n',
   '.gitignore': 'node_modules/\ngraphify-out/\n',
+  ...(plan === 'low-stock-threshold' ? { '.agent/plans/low-stock-threshold.md': LOW_STOCK_PLAN } : {}),
   'src/inventory.mjs':
     '// In-memory inventory ledger keyed by SKU.\n' +
     'export class Inventory {\n' +
@@ -131,7 +151,7 @@ export function createFixture(options: FixtureOptions): string {
   rmSync(options.root, { recursive: true, force: true });
   mkdirSync(options.root, { recursive: true });
 
-  for (const [relative, content] of Object.entries(FILES(options.withBug))) {
+  for (const [relative, content] of Object.entries(FILES(options.withBug, options.plan))) {
     const target = path.join(options.root, relative);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, content, 'utf8');

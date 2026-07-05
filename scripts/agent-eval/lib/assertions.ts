@@ -118,6 +118,16 @@ export function knowledgeGraphReady(result: RunResult): CheckOutcome {
   return { ok: Boolean(event), detail: event ? 'knowledge_graph_ready emitted' : 'no knowledge graph event' };
 }
 
+export function coverageHasMultipleRequirements(result: RunResult, min = 2): CheckOutcome {
+  const coverageEvents = result.events.filter((event) => event.type === 'coverage_updated');
+  const latest = coverageEvents.at(-1) as { contract?: { requirements?: unknown[] } } | undefined;
+  const requirements = latest?.contract?.requirements ?? [];
+  return {
+    ok: Array.isArray(requirements) && requirements.length >= min,
+    detail: `${Array.isArray(requirements) ? requirements.length : 0} requirement(s) in latest coverage event (need >=${min})`,
+  };
+}
+
 export function noAgentError(result: RunResult): CheckOutcome {
   const error = result.events.find((event) => event.type === 'agent_error');
   return { ok: !error, detail: error ? `agent_error: ${String(error.message).slice(0, 160)}` : 'no agent_error' };

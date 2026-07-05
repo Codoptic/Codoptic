@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFoundryCreds } from './lib/env';
-import { createFixture, removeFixture } from './lib/fixture';
+import { createFixture, removeFixture, type FixtureOptions } from './lib/fixture';
 import { runAgent, type AgentRequestBody, type RunResult } from './lib/sse';
 import * as checks from './lib/assertions';
 
@@ -30,7 +30,7 @@ interface Check {
 interface Scenario {
   name: string;
   description: string;
-  fixture: { git: boolean; withBug: boolean };
+  fixture: Omit<FixtureOptions, 'root'>;
   mode: 'ask' | 'plan' | 'code';
   prompt: string;
   checks: Check[];
@@ -61,6 +61,20 @@ const SCENARIOS: Scenario[] = [
       { id: 'plan-has-base-sections', phase: 0, run: (r) => checks.planHasSections(r, ['Summary', 'Definition of Done']) },
       { id: 'plan-has-approaches', phase: 2, run: (r) => checks.planHasSections(r, ['Candidate Approaches']) },
       { id: 'knowledge-graph-built', phase: 4, run: checks.knowledgeGraphReady },
+    ],
+  },
+  {
+    name: 'plan-to-code-low-stock',
+    description: 'Code mode builds from an approved markdown plan and must surface a multi-requirement implementation contract.',
+    fixture: { git: true, withBug: false, plan: 'low-stock-threshold' },
+    mode: 'code',
+    prompt: 'Build from the approved plan at .agent/plans/low-stock-threshold.md.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'coverage-has-plan-requirements', phase: 0, run: (r) => checks.coverageHasMultipleRequirements(r, 3) },
+      { id: 'produced-file-changes', phase: 0, run: checks.producedFileChanges },
+      { id: 'diff-gate-carries-diff', phase: 1, run: checks.diffGateCarriesDiff },
+      { id: 'ran-real-validation', phase: 1, run: checks.ranRealValidation },
     ],
   },
   {
@@ -130,7 +144,7 @@ async function main() {
   for (const scenario of scenarios) {
     const root = path.join(FIXTURE_BASE, scenario.name);
     console.log(`\n=== ${scenario.name} ===\n${scenario.description}`);
-    createFixture({ root, git: scenario.fixture.git, withBug: scenario.fixture.withBug });
+    createFixture({ root, ...scenario.fixture });
 
     const body: AgentRequestBody = {
       sessionId: `eval-${scenario.name}-${Date.now()}`,
