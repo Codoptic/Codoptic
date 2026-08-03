@@ -15,7 +15,7 @@
 import { AGENT_FILE_ALLOWLIST } from '../repo/repoScanner';
 import { classifyRelevance, type DiagramKind } from '../analysis/classifier';
 import { generateTechnicalDocumentation } from '../docs/docGenerator';
-import { instructionTimeoutMarkdown, withInstructionTimeout } from './instructionTimeout';
+import { instructionFailureMarkdown, withInstructionTimeout } from './instructionTimeout';
 import { generatePlan } from './planner';
 import { planToDsl } from './dslCompiler';
 import { tryRepair } from './repair';
@@ -304,7 +304,10 @@ export async function runPipeline(
         if (input.signal?.aborted) throw err;
         const message = err instanceof Error ? err.message : String(err);
         send({ type: 'log', stage: 'instruction', level: 'warn', message });
-        instructionMarkdown = instructionTimeoutMarkdown();
+        // Root Cause vs Logic: any Document Mode failure used to be replaced with the
+        // fixed 180s timeout stub, which hid real provider/generation errors after the
+        // stage budget was removed. Persist the actual failure while keeping the diagram.
+        instructionMarkdown = instructionFailureMarkdown(message);
       }
       send({
         type: 'stage',

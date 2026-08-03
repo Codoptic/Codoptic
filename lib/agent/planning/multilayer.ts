@@ -23,7 +23,7 @@ import { tryRepair } from './repair';
 import { compile } from '../../dsl/compiler';
 import { validateWithRetry, type ProviderSession } from '../providers';
 import { generateTechnicalDocumentation } from '../docs/docGenerator';
-import { instructionTimeoutMarkdown, withInstructionTimeout } from './instructionTimeout';
+import { instructionFailureMarkdown, withInstructionTimeout } from './instructionTimeout';
 import type { SseEvent } from '../../util/stream';
 import { extractImportGraph } from '../repo/importGraph';
 import { readDocPriors } from '../docs/docReader';
@@ -405,7 +405,10 @@ export async function runMultiLayerPipeline(
         if (input.signal?.aborted) throw err;
         const message = err instanceof Error ? err.message : String(err);
         send({ type: 'log', stage: 'instruction', level: 'warn', message });
-        instructionMarkdown = instructionTimeoutMarkdown();
+        // Root Cause vs Logic: any Document Mode failure used to be replaced with the
+        // fixed 180s timeout stub, which hid real provider/generation errors after the
+        // stage budget was removed. Persist the actual failure while keeping the diagram.
+        instructionMarkdown = instructionFailureMarkdown(message);
       }
       send({
         type: 'stage',
