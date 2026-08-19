@@ -162,7 +162,7 @@ function isCorePath(path: string, kind: DiagramKind): boolean {
 
 function criticalPathSet(repoMap: RepoMap, repoContext?: RepoContextDigest): Set<string> {
   const paths = new Set<string>();
-  for (const file of [...repoMap.entrypoints, ...repoMap.apiRoutes, ...repoMap.schemas, ...repoMap.infra]) {
+  for (const file of [...repoMap.entrypoints, ...repoMap.apiRoutes, ...repoMap.schemas, ...repoMap.infra, ...repoMap.docs]) {
     paths.add(file.path);
   }
   for (const file of repoContext?.centralFiles ?? []) paths.add(file.path);

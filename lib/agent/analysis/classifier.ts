@@ -21,7 +21,7 @@ const WEIGHTS = {
   schema: 0.8,
   config: 0.55,
   infra: 0.65,
-  doc: 0.45,
+  doc: 0.8,
   test: 0.25,
   generic: 0.3,
 };
@@ -71,6 +71,7 @@ function baseScore(file: ScannedFile, map: RepoMap): { score: number; reasons: s
 function diagramBias(kind: DiagramKind, file: ScannedFile, map: RepoMap): number {
   switch (kind) {
     case 'architecture':
+      if (map.docs.includes(file)) return 0.2;
       if (map.entrypoints.includes(file) || map.apiRoutes.includes(file)) return 0.15;
       if (map.infra.includes(file)) return 0.1;
       return 0;

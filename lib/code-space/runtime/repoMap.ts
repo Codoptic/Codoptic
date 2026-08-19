@@ -3,7 +3,7 @@ import path from 'node:path';
 import fg from 'fast-glob';
 
 export const CODE_SPACE_CONTEXT_GLOBS = [
-  '**/*.{ts,tsx,js,jsx,json,md,mdx,css,scss,py,go,rs,java,kt,php,rb,sh,yml,yaml,toml}',
+  '**/*.{ts,tsx,js,jsx,json,md,mdx,rst,adoc,css,scss,py,go,rs,java,kt,php,rb,sh,yml,yaml,toml}',
   '!node_modules/**',
   '!.git/**',
   '!dist/**',

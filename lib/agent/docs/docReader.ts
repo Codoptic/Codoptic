@@ -1,7 +1,7 @@
 /**
- * Documentation reader — pulls the single README exception to use as a
- * planning prior. We intentionally avoid general doc surfaces so the agent
- * stays focused on source code, not prose-heavy repo scaffolding.
+ * Documentation reader — pulls README, agent instruction files, and docs/
+ * surfaces as planning priors. These files are mandatory knowledge for coding
+ * and diagram generation, not optional scaffolding.
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -16,13 +16,21 @@ export interface DocPrior {
 
 function classify(p: string): DocPrior['kind'] {
   const lower = p.toLowerCase();
-  if (/(^|\/)readme\.md$/.test(lower)) return 'readme';
+  if (/(^|\/)readme\.mdx?$/.test(lower)) return 'readme';
+  if (/(^|\/)(docs\/)?adr[\/_-]/i.test(lower) || /(^|\/)adr[-_]/i.test(lower)) return 'adr';
   return 'doc';
 }
 
 const PRIORITY: Array<RegExp> = [
+  /^agents\.md$/i,
   /^readme\.md$/i,
   /^docs?\/readme\.md$/i,
+  /^docs?\/architecture\.md$/i,
+  /^docs?\/code-space\.md$/i,
+  /^docs?\/(dsl-grammar|providers|local-setup|generative)\.md$/i,
+  /^docs?\//i,
+  /(^|\/)docs?\/adr\//i,
+  /\.(md|mdx|rst|adoc)$/i,
 ];
 
 function priorityFor(p: string): number {
@@ -32,10 +40,10 @@ function priorityFor(p: string): number {
   return PRIORITY.length + 1;
 }
 
-export async function readDocPriors(repo: RepoMap, maxBytes = 6000, maxDocs = 6): Promise<DocPrior[]> {
+export async function readDocPriors(repo: RepoMap, maxBytes = 6000, maxDocs = 16): Promise<DocPrior[]> {
   const candidates = repo.docs
     .map((f) => f.path)
-    .sort((a, b) => priorityFor(a) - priorityFor(b))
+    .sort((a, b) => priorityFor(a) - priorityFor(b) || a.localeCompare(b))
     .slice(0, maxDocs);
   const out: DocPrior[] = [];
   for (const rel of candidates) {

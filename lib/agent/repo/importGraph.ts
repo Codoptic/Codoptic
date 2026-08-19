@@ -95,7 +95,7 @@ export async function extractImportGraph(
   const maxBytes = opts.maxBytesPerFile ?? 80_000;
   const maxFiles = opts.maxFiles ?? 300;
   const graph: ImportGraph = { files: new Map(), edges: [], externals: new Map() };
-  const candidates = files.slice(0, maxFiles).filter((f) => detectLang(f) !== null);
+  const candidates = files.filter((f) => detectLang(f) !== null).slice(0, maxFiles);
 
   for (const rel of candidates) {
     const lang = detectLang(rel);

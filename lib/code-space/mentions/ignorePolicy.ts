@@ -1,11 +1,8 @@
-// Motivation vs Logic: The existing repo-scanner ignore policy in `lib/agent/repo/ignoreDefaults.ts`
-// is intentionally aggressive — it hides docs/, tests/, scripts/, package.json, tsconfig.json,
-// every README.md other than the root, and so on. That policy is correct for the agent's read
-// budget but wrong for the @ mention picker, where the user explicitly wants to surface those
-// files. This module owns the separate "picker" policy: drop only the truly generated/binary
-// noise, and keep every source folder, source file, and high-value config visible. Binary/media
-// files are kept in the index (so an exact path match still resolves) but flagged so the scorer
-// can heavily down-rank them.
+// Motivation vs Logic: The repo-scanner ignore policy in `lib/agent/repo/ignoreDefaults.ts`
+// hides build outputs, caches, tests, and config noise, but keeps docs/ and markdown readable.
+// The @ mention picker is even more inclusive: drop only generated/binary noise, and keep every
+// source folder, source file, and high-value config visible. Binary/media files stay in the
+// index (so an exact path match still resolves) but are flagged so the scorer can down-rank them.
 
 /** Folder names that the picker always hides regardless of depth. */
 const HARD_HIDDEN_FOLDERS = new Set<string>([

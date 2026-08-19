@@ -1,13 +1,12 @@
 // Motivation vs Logic: keep one canonical list of "things the agent never needs to read" so the
-// folder browser and the repo scanner stay perfectly in sync. Before this module each side had
-// its own ad-hoc allow/deny rules and the browser would show entries the scanner already skipped
-// (and vice versa), which was confusing. Here we model the policy in three small lists plus one
-// explicit exception:
+// folder browser and the repo scanner stay perfectly in sync. Documentation folders and
+// markdown/rst/adoc files stay visible — they are mandatory priors for coding and diagram
+// generation. Hidden entries are build outputs, caches, configs, tests, binaries, and license
+// noise.
 //
 //  - HIDDEN_NAMES         exact folder OR file names hidden anywhere in the tree
-//  - HIDDEN_EXTENSIONS    file extensions hidden anywhere (binary/media, markdown, logs, …)
+//  - HIDDEN_EXTENSIONS    file extensions hidden anywhere (binary/media, logs, configs, …)
 //  - HIDDEN_PREFIXES      filename prefixes hidden anywhere (LICENSE*, setup*, seed*, …)
-//  - README.md            the only document file that stays visible/readable by default
 //
 // Plus a single rule: any name starting with "." is hidden. That single rule covers the long tail
 // of dot-files users asked us to filter (.claude, .rtk, .gitignore, .dockerignore, .hintrc,
@@ -97,11 +96,6 @@ const HIDDEN_FOLDER_NAMES = [
   // Log directories (per user request: "logs/log folder")
   'logs',
   'log',
-
-  // Documentation directories
-  'docs',
-  'doc',
-  'documentation',
 ] as const;
 
 const HIDDEN_FILE_NAMES = [
@@ -173,13 +167,7 @@ export const HIDDEN_NAMES: readonly string[] = [...HIDDEN_FOLDER_NAMES, ...HIDDE
 
 // File extensions (with leading dot, lower-case) to hide anywhere in the tree.
 export const HIDDEN_EXTENSIONS: readonly string[] = [
-  // Markdown/docs + config metadata files. README.md is handled as a special-case exception.
-  // Motivation vs Logic: these extensions are mostly configs, docs, or auxiliary artifacts we
-  // never need to parse.
-  '.md',
-  '.mdx',
-  '.rst',
-  '.adoc',
+  // Config metadata and auxiliary text. Documentation formats (.md/.mdx/.rst/.adoc) stay readable.
   '.txt',
   '.json',
   '.yaml',
@@ -289,7 +277,6 @@ export const HIDDEN_EXTENSIONS: readonly string[] = [
 
 // Case-insensitive filename prefixes that should be hidden.
 export const HIDDEN_PREFIXES: readonly string[] = [
-  'README',
   'CHANGELOG',
   'CHANGES',
   'HISTORY',
@@ -298,22 +285,15 @@ export const HIDDEN_PREFIXES: readonly string[] = [
   'LICENCE',
   'COPYING',
   'NOTICE',
-  'CONTRIBUTING',
   'CODE_OF_CONDUCT',
   'CODEOWNERS',
   'GOVERNANCE',
-  'SECURITY',
   'SUPPORT',
   'MAINTAINERS',
   'AUTHORS',
   'requirements',
   'setup',
   'seed',
-  'AGENTS',
-  'CLAUDE',
-  'CURSOR',
-  'GEMINI',
-  'COPILOT',
   'RTK',
   'VSCODE',
 ];
@@ -321,7 +301,6 @@ export const HIDDEN_PREFIXES: readonly string[] = [
 const HIDDEN_NAME_SET = new Set(HIDDEN_NAMES);
 const HIDDEN_EXT_SET = new Set(HIDDEN_EXTENSIONS.map((ext) => ext.toLowerCase()));
 const HIDDEN_PREFIX_SET = HIDDEN_PREFIXES.map((prefix) => prefix.toLowerCase());
-const README_MD = 'readme.md';
 const HIDDEN_FILE_PATTERNS: readonly RegExp[] = [
   /\.config\.[^.]+$/i,
   /\.d\.[^.]+$/i,
@@ -337,13 +316,49 @@ const HIDDEN_FILE_PATTERNS: readonly RegExp[] = [
   /^dockerfile(?:\.[^.]+)?$/i,
 ];
 
-function isHiddenReadme(name: string): boolean {
-  const lower = name.toLowerCase();
-  return lower.startsWith('readme') && lower !== README_MD;
-}
-
 function matchesHiddenFilePattern(name: string): boolean {
   return HIDDEN_FILE_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+export const DOCUMENTATION_EXTENSIONS: readonly string[] = ['.md', '.mdx', '.rst', '.adoc'];
+
+const DOCUMENTATION_EXT_SET = new Set(DOCUMENTATION_EXTENSIONS);
+
+/** Prefixes whose `name*` glob would also swallow documentation files (CHANGELOG.md, LICENSE.md). */
+const DOCUMENTATION_NAME_PREFIXES = new Set([
+  'changelog',
+  'changes',
+  'history',
+  'news',
+  'license',
+  'licence',
+  'copying',
+  'notice',
+  'contributing',
+  'code_of_conduct',
+  'governance',
+  'security',
+  'support',
+  'maintainers',
+  'authors',
+  'agents',
+  'claude',
+  'cursor',
+  'gemini',
+  'copilot',
+  'readme',
+  'setup',
+  'seed',
+]);
+
+export function hasDocumentationExtension(name: string): boolean {
+  const lower = name.toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 && DOCUMENTATION_EXT_SET.has(lower.slice(dot));
+}
+
+function isTestOrGeneratedName(name: string): boolean {
+  return /\.(test|spec|story|stories)\.[^.]+$/i.test(name) || /\.(generated|gen|auto)\.[^.]+$/i.test(name);
 }
 
 /**
@@ -358,10 +373,8 @@ export function isHiddenByDefault(name: string, isDirectory: boolean): boolean {
   // .editorconfig, .nvmrc, .yarnrc, .babelrc, IDE configs like .vscode/.idea, etc.).
   if (name.startsWith('.')) return true;
 
-  if (name.toLowerCase() === README_MD) return false;
-  if (isHiddenReadme(name)) return true;
-
   if (HIDDEN_NAME_SET.has(name)) return true;
+  if (!isDirectory && hasDocumentationExtension(name)) return isTestOrGeneratedName(name);
 
   if (!isDirectory) {
     const lower = name.toLowerCase();
@@ -372,7 +385,7 @@ export function isHiddenByDefault(name: string, isDirectory: boolean): boolean {
     const dot = lower.lastIndexOf('.');
     if (dot >= 0 && HIDDEN_EXT_SET.has(lower.slice(dot))) return true;
 
-    // Prefix match (LICENSE, CLAUDE.md, AGENTS.md, requirements*.txt, setup*.py, seed*.ts, …).
+    // Prefix match (LICENSE, requirements*.txt, setup*.py, seed*.ts, …).
     for (const prefix of HIDDEN_PREFIX_SET) {
       if (lower.startsWith(prefix)) return true;
     }
@@ -443,12 +456,11 @@ export function defaultScannerIgnorePatterns(): string[] {
   }
 
   for (const ext of HIDDEN_EXTENSIONS) {
-    if (ext === '.md' || ext === '.mdx') continue;
     patterns.push(`**/*${ext}`);
   }
 
   for (const prefix of HIDDEN_PREFIXES) {
-    if (prefix.toLowerCase() === 'readme') continue;
+    if (DOCUMENTATION_NAME_PREFIXES.has(prefix.toLowerCase())) continue;
     patterns.push(`**/${prefix}*`);
   }
 

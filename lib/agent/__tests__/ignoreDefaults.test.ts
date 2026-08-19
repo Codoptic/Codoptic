@@ -2,8 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { isHiddenByDefault, isBrowserHiddenByDefault, defaultScannerIgnorePatterns } from '../repo/ignoreDefaults';
 
 describe('ignoreDefaults', () => {
-  it('keeps only exact README.md visible while hiding config, setup, test, and generated files', () => {
+  it('keeps documentation and instruction files visible while hiding config, setup, test, and generated files', () => {
     expect(isHiddenByDefault('README.md', false)).toBe(false);
+    expect(isHiddenByDefault('AGENTS.md', false)).toBe(false);
+    expect(isHiddenByDefault('CHANGELOG.md', false)).toBe(false);
+    expect(isHiddenByDefault('LICENSE.md', false)).toBe(false);
+    expect(isHiddenByDefault('CONTRIBUTING.md', false)).toBe(false);
+    expect(isHiddenByDefault('setup.md', false)).toBe(false);
+    expect(isHiddenByDefault('notes.md', false)).toBe(false);
+    expect(isHiddenByDefault('guide.mdx', false)).toBe(false);
+    expect(isHiddenByDefault('guide.rst', false)).toBe(false);
+    expect(isHiddenByDefault('guide.adoc', false)).toBe(false);
+    expect(isHiddenByDefault('docs', true)).toBe(false);
+    expect(isHiddenByDefault('doc', true)).toBe(false);
+    expect(isHiddenByDefault('documentation', true)).toBe(false);
     expect(isHiddenByDefault('README.txt', false)).toBe(true);
     expect(isHiddenByDefault('eslint.config.mjs', false)).toBe(true);
     expect(isHiddenByDefault('next.config.ts', false)).toBe(true);
@@ -20,9 +32,19 @@ describe('ignoreDefaults', () => {
     expect(isHiddenByDefault('.vscode', true)).toBe(true);
   });
 
-  it('keeps README.md out of the scanner ignore glob set', () => {
+  it('does not ignore documentation folders or markdown in the scanner glob set', () => {
     const patterns = defaultScannerIgnorePatterns();
+    expect(patterns).not.toContain('**/docs');
+    expect(patterns).not.toContain('**/docs/**');
+    expect(patterns).not.toContain('**/doc');
+    expect(patterns).not.toContain('**/documentation');
+    expect(patterns).not.toContain('**/*.md');
+    expect(patterns).not.toContain('**/*.mdx');
+    expect(patterns).not.toContain('**/*.rst');
+    expect(patterns).not.toContain('**/*.adoc');
     expect(patterns.some((pattern) => pattern.includes('README'))).toBe(false);
+    expect(patterns.some((pattern) => pattern.includes('AGENTS'))).toBe(false);
+    expect(patterns.some((pattern) => /CHANGELOG|LICENSE|CONTRIBUTING/i.test(pattern))).toBe(false);
     expect(patterns).toEqual(expect.arrayContaining(['**/*.config.*', '**/*.d.*', '**/*.test.*', '**/*.spec.*']));
   });
 
@@ -32,7 +54,7 @@ describe('ignoreDefaults', () => {
     expect(isBrowserHiddenByDefault('guide.pdf', false)).toBe(false);
     expect(isBrowserHiddenByDefault('spec.docx', false)).toBe(false);
     expect(isBrowserHiddenByDefault('notes.md', false)).toBe(false);
-    expect(isHiddenByDefault('docs', true)).toBe(true);
-    expect(isHiddenByDefault('notes.md', false)).toBe(true);
+    expect(isHiddenByDefault('docs', true)).toBe(false);
+    expect(isHiddenByDefault('notes.md', false)).toBe(false);
   });
 });

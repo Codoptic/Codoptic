@@ -39,4 +39,32 @@ describe('classifyRelevance', () => {
     expect(selected.some((path) => path.startsWith('db/'))).toBe(true);
     expect(selected.some((path) => path.startsWith('components/'))).toBe(true);
   });
+
+  it('keeps documentation files eligible for architecture diagrams', () => {
+    const docs = [file('docs/architecture.md'), file('README.md')];
+    const code = [file('src/main.ts')];
+    const files = [...docs, ...code];
+    const map: RepoMap = {
+      root: '/repo',
+      fileCount: files.length,
+      totalBytes: files.reduce((sum, item) => sum + item.bytes, 0),
+      byExt: {},
+      files,
+      manifests: [],
+      entrypoints: code,
+      apiRoutes: [],
+      components: [],
+      schemas: [],
+      configs: [],
+      infra: [],
+      tests: [],
+      docs,
+      depHints: [],
+      ignoredFolders: [],
+      likelyStack: [],
+    };
+
+    const selected = classifyRelevance(map, 'architecture', '', 3).map((item) => item.file.path);
+    expect(selected).toEqual(expect.arrayContaining(['docs/architecture.md', 'README.md']));
+  });
 });

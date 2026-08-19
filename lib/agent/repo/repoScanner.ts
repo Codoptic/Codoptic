@@ -2,7 +2,7 @@ import fg from 'fast-glob';
 import ignore from 'ignore';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { defaultScannerIgnorePatterns } from './ignoreDefaults';
+import { defaultScannerIgnorePatterns, DOCUMENTATION_EXTENSIONS } from './ignoreDefaults';
 
 // Motivation vs Logic: the canonical "skip" list lives in `ignoreDefaults.ts` so the folder
 // browser and the scanner stay in lock-step. We keep a few scanner-specific extras here for
@@ -20,9 +20,29 @@ const DEFAULT_IGNORE = [
   '**/diagram.svg',
 ];
 
+// Motivation vs Logic: prefix globs such as `**/setup.*` and `**/LICENSE*` can still swallow
+// documentation files. A second harvest reads markdown/rst/adoc with only build/cache ignores so
+// those patterns cannot hide mandatory docs.
+const DOCUMENTATION_GLOBS = ['**/*.{md,mdx,rst,adoc}'];
+const DOCUMENTATION_SAFE_IGNORE = [
+  '**/node_modules/**',
+  '**/.git/**',
+  '**/.*/**',
+  '**/dist/**',
+  '**/build/**',
+  '**/coverage/**',
+  '**/.next/**',
+  '**/.codoptic-cache/**',
+  '**/vendor/**',
+  '**/__pycache__/**',
+  '**/.venv/**',
+  '**/venv/**',
+];
+
 const MAX_FILE_BYTES = 1024 * 1024; // 1MB
 
 export const AGENT_ALLOWED_EXTENSIONS = [
+  'adoc',
   'c',
   'cc',
   'cjs',
@@ -40,12 +60,15 @@ export const AGENT_ALLOWED_EXTENSIONS = [
   'jsx',
   'kt',
   'kts',
+  'md',
+  'mdx',
   'mjs',
   'php',
   'prisma',
   'py',
   'rb',
   'rs',
+  'rst',
   'scala',
   'scss',
   'sql',
@@ -56,11 +79,15 @@ export const AGENT_ALLOWED_EXTENSIONS = [
   'vue',
 ] as const;
 
-// Motivation vs Logic: the scanner now treats dependency/config manifests as noise and only
-// admits source-like files plus the exact README.md document exception. That keeps the repo
-// explorer focused on the code the agent can actually reason about.
+// Motivation vs Logic: source plus documentation stay on the readable surface. Docs are
+// mandatory priors for coding and diagram generation; named instruction files stay allowed
+// even when they use uncommon casings or live outside docs/.
 export const AGENT_ALLOWED_FILES = [
   'README.md',
+  'AGENTS.md',
+  'CLAUDE.md',
+  'INSTRUCTIONS.md',
+  'PROJECT_RULES.md',
 ] as const;
 
 export interface RepoScanAllowlist {
@@ -125,7 +152,7 @@ function classify(file: ScannedFile, map: RepoMap): void {
     map.infra.push(file);
   if (/(test|spec)\.(ts|tsx|js|jsx|py|go|rb|java)$/.test(p) || /__tests__\//.test(p))
     map.tests.push(file);
-  if (/(^|\/)readme\.md$/.test(p)) map.docs.push(file);
+  if (isDocumentationFile(p)) map.docs.push(file);
 }
 
 function detectStack(map: RepoMap): string[] {
@@ -210,12 +237,24 @@ function ignoredFolderPatterns(folders: readonly string[]): string[] {
   return patterns;
 }
 
+const DOC_EXTENSIONS = new Set(DOCUMENTATION_EXTENSIONS.map((ext) => ext.replace(/^\./, '')));
+
+function isDocumentationFile(rel: string): boolean {
+  const normalized = rel.replace(/\\/g, '/').toLowerCase();
+  const ext = normalizeExt(path.extname(normalized));
+  if (DOC_EXTENSIONS.has(ext)) return true;
+  return /(^|\/)(docs?|documentation)\//.test(normalized) && ext === 'txt';
+}
+
 function isAllowedByAllowlist(rel: string, allowlist: RepoScanAllowlist): boolean {
-  // Motivation vs Logic: repo previews and agent runs should only ever admit code-like inputs. Keeping the allowlist here means later stages cannot accidentally read docs, screenshots, cached summaries, or test fixtures just because they share a folder with source.
+  // Motivation vs Logic: later stages should read source plus documentation, but still cannot
+  // accidentally ingest screenshots, cached summaries, or test fixtures just because they share
+  // a folder with source.
   const normalizedRel = rel.replace(/\\/g, '/').toLowerCase();
   const basename = path.basename(normalizedRel);
   const allowedFiles = new Set(allowlist.fileNames.map((name) => name.replace(/\\/g, '/').toLowerCase()));
   if (allowedFiles.has(normalizedRel) || allowedFiles.has(basename)) return true;
+  if (isDocumentationFile(normalizedRel)) return true;
 
   const ext = normalizeExt(path.extname(rel).slice(1));
   if (!ext) return false;
@@ -235,8 +274,17 @@ export async function scanRepo(root: string, opts: RepoScanOptions = {}): Promis
     suppressErrors: true,
     followSymbolicLinks: false,
   });
+  const documentation = await fg(DOCUMENTATION_GLOBS, {
+    cwd: root,
+    dot: false,
+    onlyFiles: true,
+    ignore: [...DOCUMENTATION_SAFE_IGNORE, ...ignoredFolderPatterns(opts.ignoredFolders ?? [])],
+    suppressErrors: true,
+    followSymbolicLinks: false,
+  });
+  const merged = [...new Set([...entries, ...documentation])];
 
-  const filtered = entries.filter((p) => !ig.ignores(p) && isAllowedByAllowlist(p, allowlist));
+  const filtered = merged.filter((p) => !ig.ignores(p) && isAllowedByAllowlist(p, allowlist));
 
   const map: RepoMap = {
     root,

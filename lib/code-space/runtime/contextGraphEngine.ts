@@ -270,7 +270,11 @@ export class ContextGraphEngine {
         addScore(scores, file, 70, 'package_config', 'data/retrieval configuration prompt');
       }
       if (/(__tests__|\.test\.|\.spec\.|tests?\/)/i.test(file)) addScore(scores, file, 10, 'test_surface');
-      if (/^(docs|README\.md)/i.test(file)) addScore(scores, file, 8, 'documentation_spec');
+      if (/(^|\/)(docs?|documentation)\//i.test(file) || /(^|\/)readme\.(md|mdx|rst|adoc)$/i.test(file)) {
+        addScore(scores, file, 22, 'documentation_spec');
+      } else if (/\.(md|mdx|rst|adoc)$/i.test(file)) {
+        addScore(scores, file, 14, 'documentation_spec');
+      }
       if (/AGENTS\.md|CLAUDE\.md|INSTRUCTIONS\.md|PROJECT_RULES\.md/i.test(file)) addScore(scores, file, 24, 'project_rule');
       if (/^\.agent\/plans/.test(file)) addScore(scores, file, 8, 'plan_artifact');
       const pathHits = terms.reduce((sum, term) => sum + (lower.includes(term) ? 7 : 0), 0);

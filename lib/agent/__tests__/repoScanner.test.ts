@@ -11,11 +11,19 @@ async function write(root: string, rel: string, content: string): Promise<void> 
 }
 
 describe('repoScanner', () => {
-  it('scans source-like files plus README.md and ignores configs, docs, tests, assets, and generated output', async () => {
+  it('scans source-like files plus documentation and ignores configs, tests, assets, and generated output', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codoptic-scan-'));
     try {
       const allowed = [
         'README.md',
+        'AGENTS.md',
+        'CHANGELOG.md',
+        'CONTRIBUTING.md',
+        'LICENSE.md',
+        'setup.md',
+        'docs/guide.md',
+        'docs/architecture.md',
+        'docs/setup.md',
         'app/layout.tsx',
         'app/page.tsx',
         'backend/main.py',
@@ -48,7 +56,6 @@ describe('repoScanner', () => {
         'tests/app.test.ts',
         'src/app.spec.ts',
         '__tests__/fixture.ts',
-        'docs/guide.md',
         'README.txt',
       ];
 
@@ -64,7 +71,17 @@ describe('repoScanner', () => {
 
       expect(paths).toEqual(expect.arrayContaining(allowed));
       expect(paths).not.toEqual(expect.arrayContaining(ignored));
-      expect(repo.docs.map((file) => file.path)).toEqual(['README.md']);
+      expect(repo.docs.map((file) => file.path).sort()).toEqual([
+        'AGENTS.md',
+        'CHANGELOG.md',
+        'CONTRIBUTING.md',
+        'LICENSE.md',
+        'README.md',
+        'docs/architecture.md',
+        'docs/guide.md',
+        'docs/setup.md',
+        'setup.md',
+      ]);
       expect(repo.tests).toHaveLength(0);
       expect(repo.manifests).toHaveLength(0);
       expect(repo.configs).toHaveLength(0);

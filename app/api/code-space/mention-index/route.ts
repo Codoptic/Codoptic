@@ -13,8 +13,7 @@ export const dynamic = 'force-dynamic';
 // them), refreshed on demand. fast-glob is fast, but scanning a large repo on every keystroke
 // would be wasteful, so we cache by `rootPath` with a short TTL and provide an explicit
 // `?refresh=true` escape hatch. The picker policy lives in `pickerIgnoreGlobs` — separate from
-// the agent's aggressive scan policy — so high-value folders like `tests/`, `docs/`, `scripts/`
-// stay in the index.
+// the agent scanner — so high-value folders like `tests/`, `docs/`, `scripts/` stay in the index.
 
 const Query = z.object({
   rootPath: z.string().optional(),
