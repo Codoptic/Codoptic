@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { StoredAgentEvent } from '@/lib/code-space/domain';
 import { createAgentEvent, encodeSseEvent, type AgentEvent, type AgentEventType } from './events';
@@ -20,11 +19,12 @@ export interface EventStore {
   }): Promise<StoredAgentEvent<TPayload>>;
   list(runId: string): Promise<StoredAgentEvent[]>;
   subscribe(runId: string, subscriber: EventSubscriber): () => void;
-  stream(runId: string, signal?: AbortSignal): ReadableStream<Uint8Array>;
+  stream(runId: string, signal?: AbortSignal, lastEventId?: string): ReadableStream<Uint8Array>;
 }
 
 function storeRoot(): string {
-  return process.env.CODE_SPACE_EVENT_STORE_DIR ?? path.join(os.tmpdir(), 'codoptic-code-space-events');
+  if (process.env.CODE_SPACE_EVENT_STORE_DIR) return process.env.CODE_SPACE_EVENT_STORE_DIR;
+  return path.join(process.cwd(), '.codoptic-cache', 'events');
 }
 
 function redactSecrets(value: unknown, keyHint = ''): unknown {
@@ -103,12 +103,17 @@ export class JsonlEventStore implements EventStore {
     };
   }
 
-  stream(runId: string, signal?: AbortSignal): ReadableStream<Uint8Array> {
+  stream(runId: string, signal?: AbortSignal, lastEventId?: string): ReadableStream<Uint8Array> {
     const encoder = new TextEncoder();
     return new ReadableStream({
       start: async (controller) => {
-        const send = (event: StoredAgentEvent) => controller.enqueue(encoder.encode(encodeSseEvent(event)));
-        for (const event of await this.list(runId)) send(event);
+        const send = (event: StoredAgentEvent) => {
+          controller.enqueue(encoder.encode(encodeSseEvent(event, String(event.sequence))));
+        };
+        const lastSequence = lastEventId ? Number(lastEventId) : 0;
+        for (const event of await this.list(runId)) {
+          if (event.sequence > lastSequence) send(event);
+        }
         const unsubscribe = this.subscribe(runId, send);
         const close = () => {
           unsubscribe();

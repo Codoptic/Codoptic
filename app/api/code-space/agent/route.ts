@@ -91,7 +91,8 @@ export async function POST(req: NextRequest) {
         } else if (event.type === 'structured_event' && event.event.type === 'run.completed') {
           terminalEventSeen = true;
         }
-        controller.enqueue(encoder.encode(encodeSseEvent(event)));
+        const sequence = event.type === 'structured_event' && typeof event.event.sequence === 'number' ? String(event.event.sequence) : undefined;
+        controller.enqueue(encoder.encode(encodeSseEvent(event, sequence)));
       };
       try {
         await agentRuntime.run(

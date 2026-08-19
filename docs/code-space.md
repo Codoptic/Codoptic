@@ -47,9 +47,10 @@ The runtime is intentionally structured rather than monolithic. In broad terms, 
 - Collects project context from the selected repository and the open tabs.
 - Loads bounded durable project memories from `/memories/` when they exist.
 - Detects useful validation commands from the project stack.
-- Automatically delegates complex Code-mode runs to a small set of isolated read-only subagents.
-- Streams assistant output back into the UI as the run progresses.
-- Builds a visible plan and TODO list so the work can be tracked step by step.
+- Does not auto-spawn heuristic work graphs. The parent `CodeAgentLoop` owns writes; `todo_write` is the default control plane. The model may author a work ledger with asserted dependencies (or `independent: true`) and `RunWorker` drains `ExecutionScheduler.nextBatch`.
+- Ask mode is a read-only agent loop. Plan is a permission mask on the same thread (`exit_plan_mode`); Code applies edits under the selected autonomy (`auto_safe_tools` by default).
+- Streams assistant output back into the UI as the run progresses. Cancel aborts the registered Node loop. Mid-run compose queues a steer. SSE replay uses `Last-Event-ID`.
+- Live TODOs come from `todo_write` / `todo_update`, not template lists.
 - Emits tool calls and patch proposals into the agent panel.
 - Marks the run complete once the validation phase finishes.
 

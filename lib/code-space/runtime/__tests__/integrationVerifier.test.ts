@@ -69,3 +69,32 @@ describe('progressiveOrder', () => {
     expect(ordered.map((command) => command.kind)).toEqual(['syntax', 'typecheck', 'lint', 'test', 'build']);
   });
 });
+
+describe('fail-fast validation', () => {
+  it('does not run e2e or build after a syntax failure', async () => {
+    const { ValidationRunner } = await import('../validationRunner');
+    const calls: string[] = [];
+    const terminal = {
+      runStreaming: async (command: { kind: string; command: string }) => {
+        calls.push(command.kind);
+        return { command: command.command, status: command.kind === 'syntax' ? 'failed' : 'passed', output: 'syntax failed', durationMs: 1 };
+      },
+    };
+    const runner = new ValidationRunner(terminal as never);
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'fail-fast-'));
+    try {
+      const results = await runner.runValidationCommands(tmp, 'run-ff', [
+        { kind: 'syntax', command: 'syntax', args: [], reason: 'syntax', timeoutMs: 1000 },
+        { kind: 'e2e', command: 'e2e', args: [], reason: 'e2e', timeoutMs: 1000 },
+        { kind: 'build', command: 'build', args: [], reason: 'build', timeoutMs: 1000 },
+      ]);
+      expect(calls).toEqual(['syntax']);
+      expect(results.map((result) => result.kind)).toEqual(['syntax']);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});

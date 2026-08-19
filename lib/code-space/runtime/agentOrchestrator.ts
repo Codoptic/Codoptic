@@ -11,6 +11,8 @@ export interface WorkPackage {
   readOnly: boolean;
   maxToolCalls: number;
   dependencies: string[];
+  /** Required when dependencies are empty so the scheduler can start the package. */
+  independent?: boolean;
   depth: number;
   reason: string;
 }
@@ -51,80 +53,8 @@ export class AgentOrchestrator {
     mode: 'ask' | 'plan' | 'code';
   }): WorkGraph {
     const limits = runtimeScaleLimits(this.profile, input.mode);
-    if (input.mode !== 'code') {
-      return { runId: input.runId, profile: this.profile, packages: [], createdAt: Date.now(), limits };
-    }
-
-    const prompt = input.prompt.toLowerCase();
-    const selected = input.context.selectedFiles.length;
-    const validationHeavy = input.context.testCandidates.length >= 3 || /\b(test(?:ing)?|validation|verify|e2e|build|typecheck|lint|ci|regression)\b/.test(prompt);
-    const docsHeavy = /\b(docs?|readme|research|convention|migration|api|sdk|workflow|memory|subagent|agent)\b/.test(prompt);
-    const uiHeavy = /\b(ui|ux|browser|preview|layout|responsive|click|scroll|screenshot|website|web app|frontend)\b/.test(prompt);
-    const securityHeavy = /\b(security|secret|permission|sandbox|approval|policy|risk|destructive|auth)\b/.test(prompt);
-    const massive = selected >= 18 || /\b(complex|comprehensively|deep|massive|huge|large|architecture|workflow|orchestrat|multi[-\s]?file|across|refactor)\b/.test(prompt);
-    const needsDelegation = massive || validationHeavy || docsHeavy || uiHeavy || securityHeavy || input.context.missingContextWarnings.length > 0;
-    if (!needsDelegation) {
-      return { runId: input.runId, profile: this.profile, packages: [], createdAt: Date.now(), limits };
-    }
-
-    const packages: WorkPackage[] = [];
-    const add = (role: SubagentRole, title: string, task: string, reason: string, readOnly = true, depth = 0) => {
-      if (packages.length >= limits.maxWorkPackages || depth > limits.maxDepth) return;
-      packages.push({
-        id: `work:${input.runId}:${packages.length + 1}:${role}`,
-        role,
-        title,
-        task,
-        readOnly,
-        dependencies: [],
-        depth,
-        reason,
-        maxToolCalls: limits.maxSubagentToolCalls,
-      });
-    };
-
-    add(
-      'explorer',
-      'Repository exploration',
-      [
-        'Independently inspect relevant repository surfaces and report concrete files, symbols, call sites, risks, and missing evidence.',
-        `Task: ${input.prompt}`,
-        `Initial selected files: ${input.context.selectedFiles.slice(0, 24).join(', ') || '(none)'}.`,
-        'This helper is advisory: do not edit files. The parent Code-mode implementer may still apply source changes after reconciling your findings.',
-      ].join('\n'),
-      'independent repository investigation',
-    );
-    if (docsHeavy || this.profile !== 'standard') {
-      add(
-        'docs-reader',
-        'Documentation and convention scan',
-        `Read instructions, docs, README files, and nearby comments that constrain this task.\nTask: ${input.prompt}\nThis helper is advisory: do not edit files. The parent Code-mode implementer may still apply source changes after reconciling your findings.`,
-        'documentation and conventions scan',
-      );
-    }
-    add(
-      validationHeavy ? 'verifier' : 'critic',
-      validationHeavy ? 'Validation risk review' : 'Implementation critique',
-      [
-        validationHeavy ? 'Review likely validation/test risks and recommend exact checks.' : 'Critically review the likely implementation plan and identify gaps.',
-        `Task: ${input.prompt}`,
-        `Relevant validation commands: ${input.validationCommands.map((command) => [command.command, ...command.args].join(' ')).join(', ') || '(none detected)'}.`,
-        validationHeavy
-          ? 'Run non-destructive validation commands when useful and report exact output. Do not edit source files.'
-          : 'This helper is advisory: do not edit source files. The parent Code-mode implementer may still apply source changes after reconciling your findings.',
-      ].join('\n'),
-      validationHeavy ? 'independent validation risk review' : 'independent implementation critique',
-      validationHeavy ? false : true,
-    );
-    if (uiHeavy) add('ui-reviewer', 'Browser and UI review', `Inspect likely browser/UI risks for this task and recommend preview interactions/screenshots.\nTask: ${input.prompt}`, 'browser/UI review');
-    if (securityHeavy) add('security-reviewer', 'Security and permission review', `Inspect permission, terminal, sandbox, secret, and risky-command implications.\nTask: ${input.prompt}`, 'security review');
-    if (massive && this.profile !== 'standard') add('planner', 'Work breakdown', `Break the task into implementation-safe packages, dependencies, and validation gates.\nTask: ${input.prompt}`, 'large task decomposition');
-    if (massive && (this.profile === 'massive' || this.profile === 'full_access_local')) {
-      add('integration-owner', 'Integration ownership review', `Identify cross-cutting integration seams and final reconciliation gates.\nTask: ${input.prompt}`, 'integration ownership');
-      add('refactorer', 'Refactor risk scan', `Find refactor blast-radius risks and call sites that must move together.\nTask: ${input.prompt}`, 'refactor blast-radius scan');
-    }
-
-    return { runId: input.runId, profile: this.profile, packages: packages.slice(0, limits.maxAutomaticSubagents), createdAt: Date.now(), limits };
+    // Automatic heuristic spawn is off. The parent may spawn_subagent or propose_work_graph.
+    return { runId: input.runId, profile: this.profile, packages: [], createdAt: Date.now(), limits };
   }
 
   reconcile(graph: WorkGraph, results: SubagentResult[]): ReconciliationReport {

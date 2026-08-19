@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MemoryManager, normalizeMemoryPath, PROJECT_MEMORY_DIR } from '../memoryManager';
+import { applyMemoryProposal, formatMemoryContext, MemoryManager, normalizeMemoryPath, PROJECT_MEMORY_DIR } from '../memoryManager';
 
 let tmpDir: string;
 
@@ -34,5 +34,15 @@ describe('MemoryManager', () => {
     expect(normalizeMemoryPath('../secrets.md')).toBe('');
     expect(normalizeMemoryPath('/tmp/secrets.md')).toBe('');
     expect(normalizeMemoryPath('memories/blob.bin')).toBe('');
+  });
+
+  it('cites memory paths and only writes on explicit apply', async () => {
+    await mkdir(path.join(tmpDir, PROJECT_MEMORY_DIR), { recursive: true });
+    await writeFile(path.join(tmpDir, PROJECT_MEMORY_DIR, 'research-notes.md'), '# Research\nCite this file.\n', 'utf8');
+    const context = await new MemoryManager().collectRelevant(tmpDir, 'research notes', 2);
+    const rendered = formatMemoryContext(context);
+    expect(rendered).toContain('memories/research-notes.md');
+    const written = await applyMemoryProposal(tmpDir, { path: 'memories/decisions.md', content: '# Decision\nKeep small diffs.\n' });
+    expect(written).toBe('memories/decisions.md');
   });
 });

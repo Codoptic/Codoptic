@@ -470,6 +470,8 @@ export function CodeSpaceWorkspace() {
   const [activeProjectKnowledgeGraph, setActiveProjectKnowledgeGraph] = useState<KnowledgeGraphSummary | null>(null);
   const [knowledgeGraphModalOpen, setKnowledgeGraphModalOpen] = useState(false);
   const agentAbortRef = useRef<AbortController | null>(null);
+  const lastRunIdRef = useRef<string | null>(null);
+  const lastEventIdRef = useRef<string | null>(null);
   const runningSessionIdRef = useRef<string | null>(null);
   const activeRunTokenRef = useRef<string | null>(null);
   const applyingDiffIdsRef = useRef<Set<string>>(new Set());
@@ -2246,6 +2248,10 @@ export function CodeSpaceWorkspace() {
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
         for (const line of lines) {
+          if (line.startsWith('id: ')) {
+            lastEventIdRef.current = line.slice(4).trim();
+            continue;
+          }
           if (!line.startsWith('data: ')) continue;
           if (!isCurrentRun()) continue;
           try {
@@ -2413,6 +2419,7 @@ export function CodeSpaceWorkspace() {
               }
             } else if (event.type === 'structured_event') {
               if (event.event.type === 'run.created') {
+                lastRunIdRef.current = event.event.runId ?? lastRunIdRef.current;
                 patchSession(sessionWithPrompt.id, (current) => ({
                   ...current,
                   messages: current.messages.map((message) =>
@@ -2717,6 +2724,7 @@ export function CodeSpaceWorkspace() {
               }
             } else if (event.type === 'structured_event') {
               if (event.event.type === 'run.created') {
+                lastRunIdRef.current = event.event.runId ?? lastRunIdRef.current;
                 patchSession(sessionWithPrompt.id, (current) => ({
                   ...current,
                   messages: current.messages.map((message) =>
@@ -3191,7 +3199,19 @@ export function CodeSpaceWorkspace() {
     }
   }, [applyPendingDiff, executionPolicy, pendingDiffs]);
 
+  const handleSteer = useCallback(async (text: string, mode: 'queue' | 'steer' | 'interrupt' = 'queue') => {
+    const runId = lastRunIdRef.current;
+    if (!runId) return;
+    await fetch(`/api/code-space/runs/${encodeURIComponent(runId)}/steer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, mode }),
+    });
+  }, []);
+
   const handleCancelRun = useCallback(() => {
+    const runId = lastRunIdRef.current;
+    if (runId) void fetch(`/api/code-space/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' });
     agentAbortRef.current?.abort();
     setAgentRunning(false);
     if (runningSessionIdRef.current) {
@@ -3798,6 +3818,7 @@ export function CodeSpaceWorkspace() {
             onRenameSession={renameSession}
             onDeleteSession={(session) => removeSessionRecord(session)}
             onSubmitPrompt={handleRunAgent}
+            onSteer={handleSteer}
             onClarifyingAnswersChange={handleClarifyingAnswersChange}
             onEditPrompt={(messageId) => void handleEditPrompt(messageId)}
             onCancelRun={handleCancelRun}

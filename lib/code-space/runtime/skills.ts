@@ -91,11 +91,31 @@ export const SUPERPOWERS_SKILLS: AgentSkill[] = [
  * Compact, per-mode skill guidance for the workflow kernel prompt. Returns an empty string when no
  * skills apply to the mode so the kernel stays lean.
  */
+export interface SkillCatalogEntry {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export function listSkillCatalog(mode: WorkflowMode): SkillCatalogEntry[] {
+  return SUPERPOWERS_SKILLS.filter((skill) => skill.appliesTo.includes(mode)).map((skill) => ({
+    id: skill.id,
+    title: skill.title,
+    description: skill.lines[0] ?? skill.title,
+  }));
+}
+
+export function readSkillBody(id: string): string | null {
+  const skill = SUPERPOWERS_SKILLS.find((item) => item.id === id);
+  if (!skill) return null;
+  return [`# ${skill.title}`, ...skill.lines.map((line) => `- ${line}`)].join('\n');
+}
+
 export function buildSkillsKernel(mode: WorkflowMode): string {
-  const applicable = SUPERPOWERS_SKILLS.filter((skill) => skill.appliesTo.includes(mode));
-  if (!applicable.length) return '';
+  const catalog = listSkillCatalog(mode);
+  if (!catalog.length) return '';
   return [
-    'Skills (hard-gated workflow disciplines):',
-    ...applicable.flatMap((skill) => [`- ${skill.title}:`, ...skill.lines.map((line) => `  - ${line}`)]),
+    'Skills catalog (call read_skill before applying a body):',
+    ...catalog.map((skill) => `- ${skill.id}: ${skill.description}`),
   ].join('\n');
 }

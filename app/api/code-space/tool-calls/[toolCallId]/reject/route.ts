@@ -16,6 +16,8 @@ export async function POST(req: Request, { params }: { params: { toolCallId: str
   if (!toolCall) return NextResponse.json({ error: 'Tool call not found' }, { status: 404 });
   const updated = { ...toolCall, approvalStatus: 'rejected' as const, error: parsed.data.reason, updatedAt: Date.now() };
   await store.upsert('toolCalls', updated);
+  const { resolveApproval } = await import('@/lib/code-space/runtime/pendingToolApproval');
+  resolveApproval(params.toolCallId, 'rejected');
   await getEventStore().emit({ type: 'tool.rejected', runId: updated.runId, payload: { toolCallId: updated.id, reason: parsed.data.reason } });
   return NextResponse.json({ toolCall: updated });
 }

@@ -100,7 +100,16 @@ export class AnthropicProvider implements Provider {
 
     let stopReason = mapAnthropicStop(res.stop_reason);
     if (stopReason === 'tool_use' && toolCalls.length === 0) stopReason = 'end_turn';
-    return { text, toolCalls, stopReason };
+    return {
+      text,
+      toolCalls,
+      stopReason,
+      usage: {
+        promptTokens: res.usage?.input_tokens,
+        completionTokens: res.usage?.output_tokens,
+        totalTokens: (res.usage?.input_tokens ?? 0) + (res.usage?.output_tokens ?? 0),
+      },
+    };
   }
 
   async *chatWithToolsStream(params: ChatWithToolsParams): AsyncIterable<ChatWithToolsStreamEvent> {

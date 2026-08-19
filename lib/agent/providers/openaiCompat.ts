@@ -101,6 +101,7 @@ interface OpenAIChatResponse {
       tool_calls?: OpenAIToolCall[];
     };
   }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
 
 /** Normalize an OpenAI-shaped chat completion into an AssistantTurn. */
@@ -119,5 +120,14 @@ export function parseOpenAIToolResponse(json: OpenAIChatResponse): AssistantTurn
   let stopReason = mapFinishReason(choice?.finish_reason);
   // A finish_reason of tool_calls with no parsed calls degrades to end_turn so the loop can settle.
   if (stopReason === 'tool_use' && toolCalls.length === 0) stopReason = 'end_turn';
-  return { text, toolCalls, stopReason };
+  return {
+    text,
+    toolCalls,
+    stopReason,
+    usage: {
+      promptTokens: json.usage?.prompt_tokens,
+      completionTokens: json.usage?.completion_tokens,
+      totalTokens: json.usage?.total_tokens,
+    },
+  };
 }

@@ -48,6 +48,7 @@ export interface AssistantTurn {
   text: string;
   toolCalls: ToolCall[];
   stopReason: ToolStopReason;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
 }
 
 export type ChatWithToolsStreamEvent =

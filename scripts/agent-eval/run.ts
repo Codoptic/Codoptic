@@ -92,6 +92,74 @@ const SCENARIOS: Scenario[] = [
       { id: 'diff-gate-carries-diff', phase: 1, run: checks.diffGateCarriesDiff },
     ],
   },
+  {
+    name: 'short-task-no-graph',
+    description: 'Short Code-mode typo fix must not auto-spawn a work graph.',
+    fixture: { git: true, withBug: false },
+    mode: 'code',
+    prompt: 'Rename the constant AVAILABLE in src/inventory.mjs comments only if it is misspelled. Do not spawn helpers.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'no-auto-graph', phase: 0, run: (r) => checks.noStructuredEvent(r, 'coworking.workgraph.persisted') },
+    ],
+  },
+  {
+    name: 'ask-is-agentic',
+    description: 'Ask mode must use read-only tools and cite files.',
+    fixture: { git: true, withBug: false },
+    mode: 'ask',
+    prompt: 'Explain how Inventory.reserve() decides whether stock is available. Cite the file path.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'used-read-tools', phase: 0, run: (r) => checks.usedTool(r, 'read_file') },
+      { id: 'no-disk-writes', phase: 0, run: checks.noDiskWrites },
+    ],
+  },
+  {
+    name: 'memory-cite',
+    description: 'Ask mode should cite memories/ paths and not silently write them.',
+    fixture: { git: true, withBug: false },
+    mode: 'ask',
+    prompt: 'What durable project notes exist? Cite memories/research-notes.md if present.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'memory-cite', phase: 0, run: checks.citedMemoryPath },
+      { id: 'no-disk-writes', phase: 0, run: checks.noDiskWrites },
+    ],
+  },
+  {
+    name: 'fail-fast-validate',
+    description: 'A failing early validation gate must not continue into e2e/build.',
+    fixture: { git: true, withBug: true },
+    mode: 'code',
+    prompt: 'Fix the oversell bug in src/inventory.mjs.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'fail-fast-validate', phase: 1, run: checks.failFastValidation },
+    ],
+  },
+  {
+    name: 'approval-resume',
+    description: 'Approval-required autonomy must emit a review gate before treating the run as verified.',
+    fixture: { git: true, withBug: true },
+    mode: 'code',
+    prompt: 'Fix the oversell bug in src/inventory.mjs.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'diff-gate-before-validation', phase: 1, run: checks.diffGateBeforeValidation },
+    ],
+  },
+  {
+    name: 'crash-wake',
+    description: 'Worker wake must reuse the same run without requiring a new graph.',
+    fixture: { git: true, withBug: false },
+    mode: 'code',
+    prompt: 'Rename a comment only. Do not spawn helpers.',
+    checks: [
+      { id: 'no-agent-error', phase: 0, run: checks.noAgentError },
+      { id: 'no-auto-graph', phase: 0, run: (r) => checks.noStructuredEvent(r, 'coworking.workgraph.persisted') },
+    ],
+  },
 ];
 
 interface Args {

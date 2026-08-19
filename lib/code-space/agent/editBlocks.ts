@@ -43,6 +43,30 @@ function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function normalizeWs(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+}
+
+function findFuzzySearch(haystack: string, needle: string): string | null {
+  const normalizedNeedle = normalizeWs(needle);
+  if (!normalizedNeedle) return null;
+  const lines = haystack.split('\n');
+  const needleLines = needle.replace(/\r\n/g, '\n').split('\n');
+  if (needleLines.length > lines.length) return null;
+  for (let index = 0; index <= lines.length - needleLines.length; index += 1) {
+    const slice = lines.slice(index, index + needleLines.length).join('\n');
+    if (normalizeWs(slice) === normalizedNeedle) return slice;
+  }
+  return null;
+}
+
+function closestLineSnippet(haystack: string, needle: string): string {
+  const first = needle.replace(/\r\n/g, '\n').split('\n').find((line) => line.trim()) ?? '';
+  if (!first) return '';
+  const hit = haystack.split('\n').find((line) => line.includes(first.trim().slice(0, 40)));
+  return hit ? hit.slice(0, 200) : '';
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   if (!needle) return 0;
   let count = 0;
@@ -98,12 +122,23 @@ export function applyEditBlocksToContent(path: string, beforeContent: string, ed
       continue;
     }
 
-    const occurrences = countOccurrences(nextContent, edit.search);
+    let search = edit.search;
+    let occurrences = countOccurrences(nextContent, search);
     if (occurrences === 0) {
+      const fuzzy = findFuzzySearch(nextContent, search);
+      if (fuzzy) {
+        search = fuzzy;
+        occurrences = countOccurrences(nextContent, search);
+      }
+    }
+    if (occurrences === 0) {
+      const closest = closestLineSnippet(nextContent, edit.search);
       diagnostics.push({
         path: normalizedPath,
         code: 'SEARCH_NOT_FOUND',
-        message: 'SEARCH block did not exactly match the current file. Re-read the target range and regenerate the edit.',
+        message: closest
+          ? `SEARCH block did not match. Closest existing span:\n${closest}`
+          : 'SEARCH block did not exactly match the current file. Re-read the target range and regenerate the edit.',
       });
       continue;
     }
@@ -116,7 +151,7 @@ export function applyEditBlocksToContent(path: string, beforeContent: string, ed
       continue;
     }
 
-    nextContent = nextContent.replace(edit.search, edit.replace);
+    nextContent = nextContent.replace(search, edit.replace);
   }
 
   if (diagnostics.length) return { ok: false, diagnostics };

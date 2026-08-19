@@ -221,7 +221,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   );
   registry.register(
     baseTool({
-      name: 'propose_edit_blocks',
+      name: 'edit_file',
       description: 'Propose exact SEARCH/REPLACE edit blocks. The server exact-matches, rejects ambiguous blocks, syntax-validates, and returns a reviewable diff without writing to disk.',
       inputSchema: objectSchema(
         {

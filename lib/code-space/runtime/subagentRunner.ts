@@ -8,6 +8,7 @@ import { TerminalRunner } from './terminalRunner';
 import { formatAutonomyToolGuidance } from './autonomyPolicy';
 import { ToolBudget, isReadOnlyTool } from './toolBudget';
 import { sanitizeAgentDisplayText } from '@/lib/code-space/agent/displaySanitizer';
+import { modelForRole } from './roleRouting';
 
 export type SubagentRole =
   | 'explorer'
@@ -140,6 +141,8 @@ export class SubagentRunner {
       terminal: new TerminalRunner(),
       onCheckpoint: this.parentCtx.onCheckpoint,
       signal: this.parentCtx.signal,
+      writeAllowlist: role === 'test-writer' ? ['.agent/tests/'] : undefined,
+      frozenTestRoots: role === 'test-writer' ? undefined : this.parentCtx.frozenTestRoots,
       // No nested spawning — subagents cannot recursively spawn.
     };
 
@@ -148,7 +151,12 @@ export class SubagentRunner {
     loop.seed(buildSubagentSystemPrompt(role, this.projectName, readOnly), buildSubagentSeedMessage(request.task));
 
     await this.parentCtx.emitRuntime('subagent.started', { role, task: request.task, readOnly });
-    const result = await loop.run(childCtx, { session: this.session, budget, signal: this.parentCtx.signal, tools });
+    const lane = role === 'critic' ? 'critic' : role === 'planner' ? 'plan' : role === 'explorer' || role === 'docs-reader' ? 'explore' : 'implement';
+    const session = {
+      ...this.session,
+      model: modelForRole(lane, this.session.model, process.env.CODE_SPACE_CHEAP_MODEL),
+    };
+    const result = await loop.run(childCtx, { session, budget, signal: this.parentCtx.signal, tools });
     const success = result.success !== false;
     const summary = success
       ? sanitizeAgentDisplayText(result.summary) || result.summary

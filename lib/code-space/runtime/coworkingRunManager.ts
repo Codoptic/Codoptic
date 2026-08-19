@@ -16,6 +16,7 @@ import type {
   PersistedWorkGraph,
   SubagentDeliverable,
 } from './coworkingTypes';
+import { assertPersistableWorkGraph } from './workGraphPolicy';
 
 export interface CoworkingRunCreateInput {
   runId: string;
@@ -73,6 +74,7 @@ export class CoworkingRunManager {
   }
 
   async persistGraph(run: CoworkingRun, graph: WorkGraph): Promise<PersistedWorkGraph> {
+    assertPersistableWorkGraph(graph);
     const packages: GovernedWorkPackage[] = graph.packages.map((pkg) => this.governor.governPackage(pkg, graph));
     const now = Date.now();
     const persisted: PersistedWorkGraph = {
@@ -171,16 +173,25 @@ export class CoworkingRunManager {
       ].join('\n'),
       'utf8',
     );
+    const decisionLines = ledgerEntries.filter((entry) => entry.kind === 'decision').map((entry) => `- ${entry.summary}`);
     await fs.writeFile(
       path.join(dir, 'DECISIONS.md'),
       [
         `# Coworking Decisions: ${run.runId}`,
         '',
-        '- Product tradeoffs, risky choices, and user decisions will be appended here as the run progresses.',
+        ...(decisionLines.length ? decisionLines : ['- No durable decisions recorded yet.']),
         '',
       ].join('\n'),
       'utf8',
     );
+  }
+
+  async appendDecision(runId: string, decision: string): Promise<void> {
+    const run = await this.get(runId);
+    if (!run) return;
+    const filePath = path.join(run.projectRoot, '.agent', 'runs', sanitizeRunId(run.runId), 'DECISIONS.md');
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.appendFile(filePath, `- ${new Date().toISOString()} ${decision}\n`, 'utf8');
   }
 }
 

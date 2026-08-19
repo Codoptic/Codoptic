@@ -74,7 +74,8 @@ const PLAN_TERMINAL_TOOL_SPECS: ToolSpec[] = [
 export const PLAN_MODE_TOOL_SPECS: ToolSpec[] = [
   ...CODE_MODE_TOOL_SPECS.filter((spec) => isReadOnlyTool(spec.name)),
   ...PLAN_TERMINAL_TOOL_SPECS,
-];
+  CODE_MODE_TOOL_SPECS.find((spec) => spec.name === 'exit_plan_mode'),
+].filter((spec): spec is ToolSpec => Boolean(spec));
 
 export function buildPlanSystemPrompt(projectName: string, instructionFiles: string[]): string {
   return [

@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type {
   CheckpointRecord,
@@ -56,7 +55,9 @@ const EMPTY_DATA: CodeSpaceServerData = {
 };
 
 function dataPath(): string {
-  return process.env.CODE_SPACE_SERVER_STORE_PATH ?? path.join(os.tmpdir(), 'codoptic-code-space-store.json');
+  if (process.env.CODE_SPACE_SERVER_STORE_PATH) return process.env.CODE_SPACE_SERVER_STORE_PATH;
+  const cwd = process.cwd();
+  return path.join(cwd, '.codoptic-cache', 'server-store.json');
 }
 
 export class JsonCodeSpaceStore {

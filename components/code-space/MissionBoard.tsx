@@ -17,8 +17,8 @@ export function MissionBoard({ runFeed = [] }: MissionBoardProps) {
   if (!coworking.length) return null;
 
   const latestPhase = [...coworking].reverse().find((entry) => entry.title.startsWith('Coworking phase:'))?.title.replace('Coworking phase: ', '') ?? 'intake';
-  const graph = [...coworking].reverse().find((entry) => entry.title.startsWith('Mission board created'));
-  const packages = parsePackages(graph?.detail);
+  const graph = [...coworking].reverse().find((entry) => entry.title.startsWith('Mission board ready') || entry.title.startsWith('Mission board created'));
+  const packages = parsePackages(graph?.detail, graph?.title);
   const blockers = coworking.filter((entry) => entry.status === 'warning').slice(-3);
   const evidence = coworking.filter((entry) => entry.status === 'success').slice(-4);
 
@@ -63,14 +63,23 @@ export function MissionBoard({ runFeed = [] }: MissionBoardProps) {
   );
 }
 
-function parsePackages(detail?: string): MissionPackage[] {
-  if (!detail) return [];
-  return detail
-    .split(';')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const [role, ...rest] = part.split(':');
-      return { role: role?.trim() || 'agent', goal: rest.join(':').trim() || part, status: 'ready' };
-    });
+function parsePackages(detail?: string, title?: string): MissionPackage[] {
+  const fromTitle = title?.match(/Mission board ready \((\d+) package/)?.[1];
+  if (detail?.includes(':') && detail.includes(';')) {
+    return detail
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const [role, ...rest] = part.split(':');
+        return { role: role?.trim() || 'agent', goal: rest.join(':').trim() || part, status: 'ready' };
+      });
+  }
+  const count = Number(fromTitle ?? 0);
+  if (!count) return [];
+  return Array.from({ length: Math.min(count, 5) }, (_, index) => ({
+    role: 'package',
+    goal: detail || `Work package ${index + 1}`,
+    status: 'ready',
+  }));
 }

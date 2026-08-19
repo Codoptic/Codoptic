@@ -62,17 +62,22 @@ export class IntegrationVerifier {
     const folder = `.agent/tests/${runId}`;
     if (!this.subagents) return { folder, scripts: [] };
     const changed = Array.from(ctx.ledger.keys()).slice(0, 12).join(', ') || '(see git diff)';
-    const result = await this.subagents.spawn({
-      role: 'test-writer',
-      task: [
-        `Write focused, runnable test scripts under ${folder}/ that exercise the changes made for this task: ${task}.`,
-        `Changed files: ${changed}.`,
-        'Use edit_file to create the scripts under that folder, then run them with run_command and report any failures honestly. Do not modify source files.',
-      ].join('\n'),
-      readOnly: false,
-      maxToolCalls: 16,
-    });
-    const scripts = (await listRepositoryFiles(ctx.root)).filter((file) => file.startsWith(`${folder}/`));
+    let result: SubagentResult | undefined;
+    try {
+      result = await this.subagents.spawn({
+        role: 'test-writer',
+        task: [
+          `Write focused, runnable test scripts under ${folder}/ that exercise the changes made for this task: ${task}.`,
+          `Changed files: ${changed}.`,
+          'Use edit_file to create the scripts under that folder or `.agent/tests/`, then run them with run_command and report any failures honestly. Do not modify source files.',
+        ].join('\n'),
+        readOnly: false,
+        maxToolCalls: 16,
+      });
+    } catch {
+      result = { role: 'test-writer', summary: 'Test-writer subagent failed; continuing with repository validation.', success: false, toolCalls: 0 };
+    }
+    const scripts = (await listRepositoryFiles(ctx.root)).filter((file) => file.startsWith('.agent/tests/'));
     return { folder, scripts, result };
   }
 }

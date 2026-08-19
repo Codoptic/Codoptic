@@ -37,7 +37,6 @@ export class DelegationPlanner {
     mode: 'ask' | 'plan' | 'code';
     scaleProfile?: RuntimeScaleProfile;
   }): DelegationPlan {
-    if (input.mode !== 'code') return { required: false, reasons: [], tasks: [] };
     const scaleProfile = normalizeRuntimeScaleProfile(input.scaleProfile ?? this.profile, input.mode);
     const graph = new AgentOrchestrator(scaleProfile).buildWorkGraph({
       runId: input.runId ?? 'auto',
@@ -46,24 +45,7 @@ export class DelegationPlanner {
       validationCommands: input.validationCommands,
       mode: input.mode,
     });
-    if (!graph.packages.length) return { required: false, reasons: [], tasks: [], workGraph: graph };
-
-    const reasons = Array.from(new Set(graph.packages.map((pkg) => pkg.reason)));
-    const tasks: DelegationTask[] = graph.packages.map((pkg) => ({
-      id: pkg.id,
-      role: pkg.role,
-      readOnly: pkg.readOnly,
-      maxToolCalls: pkg.maxToolCalls,
-      reason: pkg.reason,
-      task: pkg.task,
-    }));
-
-    return {
-      required: true,
-      reasons,
-      tasks,
-      workGraph: graph,
-    };
+    return { required: false, reasons: [], tasks: [], workGraph: graph };
   }
 }
 

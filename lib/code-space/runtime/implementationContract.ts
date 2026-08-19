@@ -32,6 +32,20 @@ export function createImplementationContract(prompt: string, planMarkdown = ''):
   };
 }
 
+export function evidenceMatchesRequirement(
+  requirement: PlanRequirement,
+  evidence: Pick<CoverageEvidence, 'summary' | 'filePath' | 'command' | 'kind'>,
+): boolean {
+  const haystack = `${requirement.text} ${requirement.id}`.toLowerCase();
+  const path = (evidence.filePath ?? '').toLowerCase();
+  const command = (evidence.command ?? '').toLowerCase();
+  const summary = (evidence.summary ?? '').toLowerCase();
+  if (path && (haystack.includes(path) || path.split(/[\\/]/).some((part) => part && haystack.includes(part)))) return true;
+  if (command && (haystack.includes(command) || command.includes(haystack.slice(0, 18)))) return true;
+  const tokens = haystack.split(/[^a-z0-9]+/).filter((token) => token.length > 3);
+  return tokens.some((token) => summary.includes(token) || path.includes(token));
+}
+
 export function addCoverageEvidence(
   contract: ImplementationContract | undefined,
   evidence: Omit<CoverageEvidence, 'id' | 'createdAt'> & { id?: string; createdAt?: number },
@@ -43,12 +57,37 @@ export function addCoverageEvidence(
     id: evidence.id ?? `evidence:${now}:${Math.random().toString(36).slice(2, 8)}`,
     createdAt: now,
   };
-  const requirements = contract.requirements.map((requirement) => ({
-    ...requirement,
-    status: requirement.status === 'blocked' ? requirement.status : 'covered' as const,
-    evidence: [...requirement.evidence, normalized],
-  }));
+  const patchOnly = normalized.kind === 'patch';
+  const validationPassed = normalized.kind === 'validation' && normalized.status === 'passed';
+  const requirements = contract.requirements.map((requirement) => {
+    if (requirement.status === 'blocked') return requirement;
+    const matches = evidenceMatchesRequirement(requirement, normalized);
+    const hasMatchingPatch = requirement.evidence.some((item) => item.kind === 'patch');
+    if (!matches && !(validationPassed && hasMatchingPatch)) return requirement;
+    if (patchOnly) {
+      return matches ? { ...requirement, evidence: [...requirement.evidence, normalized] } : requirement;
+    }
+    if (normalized.kind === 'validation' && !validationPassed) {
+      return matches ? { ...requirement, evidence: [...requirement.evidence, normalized] } : requirement;
+    }
+    return {
+      ...requirement,
+      status: 'covered' as const,
+      evidence: [...requirement.evidence, normalized],
+    };
+  });
   return { ...contract, requirements, updatedAt: now };
+}
+
+export function coverRequirement(
+  contract: ImplementationContract | undefined,
+  requirementId: string,
+  evidence: Omit<CoverageEvidence, 'id' | 'createdAt'> & { id?: string; createdAt?: number },
+): ImplementationContract | undefined {
+  if (!contract) return undefined;
+  const target = contract.requirements.find((requirement) => requirement.id === requirementId);
+  if (!target) return contract;
+  return addCoverageEvidence(contract, { ...evidence, summary: `${requirementId}: ${evidence.summary}` });
 }
 
 export function addPatchCoverage(contract: ImplementationContract | undefined, patch: PatchHistoryEntry): ImplementationContract | undefined {
@@ -71,7 +110,11 @@ export function addValidationCoverage(contract: ImplementationContract | undefin
 
 export function contractBlockers(contract: ImplementationContract | undefined): string[] {
   if (!contract || contract.requirements.length === 0) return [];
-  const uncovered = contract.requirements.filter((requirement) => requirement.status === 'pending' || requirement.evidence.length === 0);
+  const uncovered = contract.requirements.filter((requirement) => {
+    if (requirement.status === 'pending' || requirement.status === 'blocked') return true;
+    const hasPassingValidation = requirement.evidence.some((item) => item.kind === 'validation' && item.status === 'passed');
+    return requirement.status === 'covered' && !hasPassingValidation;
+  });
   if (!uncovered.length) return [];
   return [
     `Implementation contract has ${uncovered.length} uncovered requirement(s): ${uncovered

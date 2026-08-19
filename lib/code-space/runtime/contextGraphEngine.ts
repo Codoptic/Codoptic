@@ -326,7 +326,12 @@ export class ContextGraphEngine {
       .filter(([file, scored]) => candidateSet.has(file) && scored.score > 0)
       .map(([file, scored]) => ({ file, ...scored }))
       .sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
-    let tracedFiles = new Set<string>(ranked.slice(0, budget).map((item) => item.file));
+    const { fuseRankedIds, routeRetrievalQuery } = await import('./hybridRetrieval');
+    const lexical = ranked.map((item) => item.file);
+    const structural = (options.structuralSignals ?? []).map((signal) => signal.path).filter((file) => candidateSet.has(file));
+    const route = routeRetrievalQuery(prompt);
+    const fused = fuseRankedIds(route === 'structural' ? [structural, lexical] : [lexical, structural], budget);
+    let tracedFiles = new Set<string>(fused.length ? fused : ranked.slice(0, budget).map((item) => item.file));
 
     // Motivation vs Logic: the first-ranked evidence set is often only the doorway into the real
     // implementation. We intentionally mine those seed files for explicit file references, then

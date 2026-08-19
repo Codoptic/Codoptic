@@ -164,24 +164,8 @@ function newFileDirectoryLines(prompt: string): string[] {
 }
 
 export class PlanningEngine {
-  buildTodos(mode: 'ask' | 'plan' | 'code', context: ContextGraphResult): string[] {
-    if (mode === 'ask') return ['Gather repository evidence for the question', 'Trace relevant references and tests', 'Answer directly from evidence'];
-    const surfaces = planCandidateFiles(context).slice(0, 4).map((file) => file.path);
-    if (mode === 'plan') {
-      return [
-        'Resolve intent, scope, non-goals, assumptions, and risk',
-        surfaces.length ? `Ground the plan in ${formatList(surfaces.map((file) => `\`${file}\``))}` : 'Ground the plan in selected repository evidence',
-        'Gather enough surrounding evidence to make the plan concrete',
-        'Write a human-reviewable implementation plan artifact',
-        'Define the validation checks the implementer should run',
-      ];
-    }
-    return [
-      'Load the approved plan and target files',
-      surfaces.length ? `Prepare the patch across ${formatList(surfaces.map((file) => `\`${file}\``))}` : 'Recall enough context, then prepare the smallest coherent patch',
-      'Run validation and inspect failures',
-      'Repair bounded failures or mark exact needs_review blockers',
-    ];
+  buildTodos(_mode: 'ask' | 'plan' | 'code', _context: ContextGraphResult): string[] {
+    return [];
   }
 
   buildOutline(mode: 'ask' | 'plan' | 'code', prompt: string, context: ContextGraphResult): WorkflowOutline {

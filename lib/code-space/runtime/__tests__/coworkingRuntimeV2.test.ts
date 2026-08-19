@@ -122,6 +122,7 @@ function sampleGraph(runId: string): WorkGraph {
       readOnly: true,
       maxToolCalls: 20,
       dependencies: [],
+      independent: true,
       depth: 0,
       reason: 'repository investigation',
     },

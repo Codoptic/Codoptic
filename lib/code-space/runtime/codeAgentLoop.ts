@@ -23,6 +23,12 @@ import { formatAutonomyToolGuidance } from './autonomyPolicy';
 import { allocateContextBudget, compressMessageHistory, formatEvidenceBody, isReduciblePromptError, skeletonizeFileContent } from './contextWindowManager';
 import { formatMemoryContext, type MemoryContext } from './memoryManager';
 import { formatDelegationReport, type DelegationReport } from './delegationPlanner';
+import { buildStablePrefix } from './contextAssembler';
+import { listSkillCatalog } from './skills';
+import { ASK_MODE_TOOL_SPECS } from './toolExecutor';
+import { applyLayeredCompact, structuredCompactSummary } from './compactionEngine';
+import { drainSteerQueue, formatSteerInjection } from './steerQueue';
+import { evaluateUserHook } from './userHooks';
 
 export interface CodeAgentLoopResult {
   /** attempt_completion was called (the model declared the task done). */
@@ -31,7 +37,7 @@ export interface CodeAgentLoopResult {
   success: boolean;
   /** Final summary text the model produced (or a forced-stop reason). */
   summary: string;
-  stopReason: 'completed' | 'provider_end' | 'turns_exhausted' | 'aborted';
+  stopReason: 'completed' | 'provider_end' | 'turns_exhausted' | 'aborted' | 'spend_exhausted';
 }
 
 export interface CodeAgentLoopOptions {
@@ -40,6 +46,9 @@ export interface CodeAgentLoopOptions {
   tools?: ToolSpec[];
   maxTokens?: number;
   signal?: AbortSignal;
+  spend?: import('./spendMeter').SpendMeter;
+  constitution?: string;
+  task?: string;
 }
 
 /**
@@ -104,10 +113,36 @@ export class CodeAgentLoop {
   }
 
   private async continueUntilQuiescent(ctx: CodeAgentContext, opts: CodeAgentLoopOptions): Promise<CodeAgentLoopResult> {
-    const tools = opts.tools ?? CODE_MODE_TOOL_SPECS;
+    const tools = this.resolveTools(ctx, opts);
 
     while (true) {
       if (opts.signal?.aborted) return { completed: false, success: false, summary: 'Run aborted.', stopReason: 'aborted' };
+      if (opts.spend?.exhausted()) {
+        await ctx.onBeforeCompact?.();
+        return { completed: false, success: false, summary: 'Spend limit reached. Ledger flushed; wake from STATUS.md.', stopReason: 'spend_exhausted' };
+      }
+      const steered = drainSteerQueue(ctx.runId);
+      if (steered.length) {
+        await ctx.emitRuntime('user.steering', { messages: steered });
+        this.messages.push({ role: 'user', content: formatSteerInjection(steered) });
+      }
+      if (this.messages.length > 16) {
+        evaluateUserHook(ctx.userHooks, 'PreCompact');
+        await ctx.onBeforeCompact?.();
+        const summary = structuredCompactSummary({
+          task: opts.task || '',
+          files: Array.from(ctx.ledger.keys()),
+          failingCommands: Array.from(ctx.recoverableFailures?.values() ?? []).map((item) => item.command),
+        });
+        const compacted = applyLayeredCompact(this.messages, summary);
+        const prefix = compacted.messages[0];
+        const tail = compacted.messages.slice(1);
+        this.messages.length = 0;
+        if (prefix) this.messages.push(prefix);
+        if (opts.constitution) this.messages.push({ role: 'user', content: `Constitution (verbatim reload after compact):\n${opts.constitution}` });
+        this.messages.push(...tail);
+        if (ctx.todoBoard) this.messages.push({ role: 'user', content: ctx.todoBoard.format() });
+      }
       if (opts.budget.turnsExhausted()) {
         return { completed: false, success: false, summary: 'Reached the maximum number of agent turns before completing the task.', stopReason: 'turns_exhausted' };
       }
@@ -125,7 +160,7 @@ export class CodeAgentLoop {
       opts.budget.recordTurn();
       let turn: AssistantTurn;
       try {
-        turn = await this.streamTurn(ctx, opts, tools);
+        turn = await this.streamTurn(ctx, opts, this.resolveTools(ctx, opts));
       } catch (err) {
         if (isReduciblePromptError(err) && this.contextPruneCount < 2) {
           this.contextPruneCount++;
@@ -145,6 +180,19 @@ export class CodeAgentLoop {
       }
 
       await this.recordAssistantTurn(turn, ctx);
+      if (opts.spend) {
+        const fallbackIn = Math.ceil(this.messages.reduce((sum, message) => sum + message.content.length, 0) / 4);
+        const fallbackOut = Math.ceil(turn.text.length / 4);
+        const snapshot = opts.spend.record(turn.usage ?? {}, fallbackIn, fallbackOut);
+        await ctx.emitRuntime('spend.updated', snapshot);
+        if (opts.spend.warnSoft()) {
+          this.messages.push({ role: 'user', content: 'Spend is past 70%. Finish with the smallest remaining change and flush STATUS/DECISIONS before more tools.' });
+        }
+        if (opts.spend.exhausted()) {
+          await ctx.onBeforeCompact?.();
+          return { completed: false, success: false, summary: 'Spend limit reached. Ledger flushed.', stopReason: 'spend_exhausted' };
+        }
+      }
 
       if (!turn.toolCalls.length) {
         const recoverableFeedback = buildRecoverableFailureDirective(ctx);
@@ -304,11 +352,15 @@ export class CodeAgentLoop {
 
       const mutating = !isReadOnlyTool(call.name);
       let result: ToolExecutionResult;
-      if (mutating && opts.budget.mutationBudgetExhausted()) {
+      const hookDecision = evaluateUserHook(ctx.userHooks, 'PreToolUse');
+      if (hookDecision.block) {
+        result = { content: hookDecision.reason || 'PreToolUse hook blocked this tool.', isError: true, recoverable: true };
+      } else if (mutating && opts.budget.mutationBudgetExhausted()) {
         result = { content: `Mutation budget exhausted (${opts.budget.mutationsUsed}/${opts.budget.max}). Finish with the current state and exact blockers.`, isError: true };
       } else {
         result = await this.executor.execute(call, ctx);
         if (mutating && !result.isError) opts.budget.charge(call.name);
+        evaluateUserHook(ctx.userHooks, 'PostToolUse');
       }
 
       updateRecoverableToolFailures(ctx, call.name, result);
@@ -340,6 +392,12 @@ export class CodeAgentLoop {
 
     this.messages.push({ role: 'tool', content: '', toolResults });
     return completion;
+  }
+
+  private resolveTools(ctx: CodeAgentContext, opts: CodeAgentLoopOptions): ToolSpec[] {
+    if (opts.tools?.length) return opts.tools;
+    if (ctx.permissionMode === 'ask') return ASK_MODE_TOOL_SPECS;
+    return CODE_MODE_TOOL_SPECS;
   }
 }
 
@@ -397,10 +455,19 @@ function buildRecoverableFailureDirective(ctx: CodeAgentContext): string {
   ].join('\n');
 }
 
-export function buildCodeSystemPrompt(projectName: string, instructionFiles: string[], autonomy?: AutonomyLevel): string {
+export function buildCodeSystemPrompt(projectName: string, instructionFiles: string[], autonomy?: AutonomyLevel, mode: 'ask' | 'plan' | 'code' = 'code'): string {
   const autonomyGuidance = autonomy ? formatAutonomyToolGuidance(autonomy) : '';
+  const prefix = buildStablePrefix({
+    projectName,
+    mode,
+    autonomyGuidance,
+    toolNames: ['read_file', 'search_text', 'edit_file', 'run_command', 'todo_write', 'todo_update', 'read_skill', 'attempt_completion'],
+    skillCatalog: listSkillCatalog(mode),
+  });
   return [
-    buildWorkflowKernelPrompt('code'),
+    prefix,
+    '',
+    buildWorkflowKernelPrompt(mode === 'ask' ? 'ask' : mode === 'plan' ? 'plan' : 'code'),
     '',
     autonomyGuidance,
     autonomyGuidance ? '' : undefined,
@@ -472,15 +539,19 @@ export async function buildCodeSeedMessage(
   autonomy?: AutonomyLevel,
 ): Promise<string> {
   const budget = allocateContextBudget(model);
-  const evidence = selectEvidenceFiles(context, prompt, budget.maxFiles)
-    .map((file) => {
-      const body = formatEvidenceBody(file.path, file.content, budget);
-      return [`--- FILE ${file.path} (${file.summary}) ---`, body, file.truncated ? '[TRUNCATED]' : ''].filter(Boolean).join('\n');
-    })
-    .join('\n\n');
+  const mentioned = selectEvidenceFiles(context, prompt, 3).map((file) => {
+    const body = formatEvidenceBody(file.path, file.content, { ...budget, maxCharsPerFile: Math.min(budget.maxCharsPerFile, 800), useSkeleton: true });
+    return [`--- FILE ${file.path} (skeleton) ---`, body].join('\n');
+  });
 
   const repositoryFiles = await listRepositoryFiles(root);
-  const fileIndex = repositoryFiles.slice(0, budget.maxIndexEntries).join('\n');
+  const { buildJitSeed } = await import('./contextAssembler');
+  const jit = buildJitSeed({
+    task: prompt,
+    fileIndex: repositoryFiles.slice(0, budget.maxIndexEntries),
+    mentionedSkeletons: mentioned,
+    memoryTree: memoryContext ? formatMemoryContext(memoryContext) : undefined,
+  });
   const validation =
     autonomy === 'suggest_only'
       ? '- Confirm mode: do not run validation commands in this run. Propose edits with edit_file; validation runs after the user accepts patches.'
@@ -493,8 +564,7 @@ export async function buildCodeSeedMessage(
   const autonomyGuidance = autonomy ? formatAutonomyToolGuidance(autonomy) : '';
 
   return [
-    'Task:',
-    prompt,
+    jit,
     '',
     autonomyGuidance,
     autonomyGuidance ? '' : undefined,
@@ -516,12 +586,6 @@ export async function buildCodeSeedMessage(
     '',
     'Validation commands expected after changes:',
     validation,
-    '',
-    'Repository file index (read any of these with read_file; this is not the full tree if truncated):',
-    fileIndex || '(empty)',
-    '',
-    'Initial evidence already gathered for you (read more as needed):',
-    evidence || '(none — start by exploring with list_files / search_text)',
     '',
     'New-file and scratch-project guidance:',
     '- If the task asks for new files, folders, or an app/project from scratch, first inspect the workspace with repo_map/list_files, then create a concise manifest of files to create.',

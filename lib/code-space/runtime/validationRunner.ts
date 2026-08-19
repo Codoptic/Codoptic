@@ -117,6 +117,7 @@ export class ValidationRunner {
       results.push(validationResult);
       await callbacks.onResult?.(validationResult);
       if (signal?.aborted) break;
+      if (validationResult.status === 'failed' && command.kind !== 'explore') break;
     }
     return results;
   }

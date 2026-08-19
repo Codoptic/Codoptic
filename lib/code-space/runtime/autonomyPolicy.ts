@@ -4,6 +4,7 @@ import { isReadOnlyTool } from './toolBudget';
 
 /** Registry tools that may run under suggest_only but only emit proposals (no user source writes). */
 export const SUGGEST_ONLY_PROPOSE_REGISTRY_TOOLS = new Set([
+  'edit_file',
   'propose_edit_blocks',
   'propose_patch',
   'create_files',

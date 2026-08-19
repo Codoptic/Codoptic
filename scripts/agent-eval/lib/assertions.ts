@@ -122,3 +122,32 @@ export function noAgentError(result: RunResult): CheckOutcome {
   const error = result.events.find((event) => event.type === 'agent_error');
   return { ok: !error, detail: error ? `agent_error: ${String(error.message).slice(0, 160)}` : 'no agent_error' };
 }
+
+export function noStructuredEvent(result: RunResult, type: string): CheckOutcome {
+  const hit = result.events.some((event) => event.type === 'structured_event' && (event.event as { type?: string })?.type === type);
+  return { ok: !hit, detail: hit ? `unexpected ${type}` : `no ${type}` };
+}
+
+export function usedTool(result: RunResult, name: string): CheckOutcome {
+  const hit = result.events.some((event) => event.type === 'tool_start' && event.tool === name);
+  return { ok: hit, detail: hit ? `used ${name}` : `did not call ${name}` };
+}
+
+export function citedMemoryPath(result: RunResult): CheckOutcome {
+  const text = `${result.text ?? ''} ${JSON.stringify(result.events)}`;
+  const ok = /memories\/[\w./-]+\.(md|txt|json)/i.test(text);
+  return { ok, detail: ok ? 'cited a memories/ path' : 'did not cite memories/*' };
+}
+
+export function failFastValidation(result: RunResult): CheckOutcome {
+  const validations = result.events.filter((event) => event.type === 'validation_result');
+  const syntaxFail = validations.find((event) => /syntax|compileall/i.test(String(event.command ?? '')) && event.status === 'failed');
+  if (!syntaxFail) return { ok: true, detail: 'no syntax failure (n/a)' };
+  const later = validations.filter((event) => /e2e|build/i.test(String(event.command ?? '')));
+  return { ok: later.length === 0, detail: later.length ? 'ran e2e/build after syntax fail' : 'stopped after syntax fail' };
+}
+
+export function noDiskWrites(result: RunResult): CheckOutcome {
+  const writes = result.events.filter((event) => event.type === 'file_applied' || event.type === 'diff_proposed');
+  return { ok: writes.length === 0, detail: writes.length ? `${writes.length} write event(s)` : 'no disk writes' };
+}

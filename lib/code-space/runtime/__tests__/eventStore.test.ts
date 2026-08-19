@@ -26,6 +26,20 @@ describe('JsonlEventStore', () => {
     expect(events.map((event) => event.sequence)).toEqual([1, 2]);
   });
 
+  it('replays only events after Last-Event-ID', async () => {
+    tmpDir = await mkdtemp(path.join(process.cwd(), '.tmp-code-space-events-'));
+    const store = new JsonlEventStore(tmpDir);
+    await store.append(createAgentEvent({ type: 'run.created', runId: 'run-2', payload: { index: 1 } }));
+    await store.append(createAgentEvent({ type: 'run.started', runId: 'run-2', payload: { index: 2 } }));
+    const stream = store.stream('run-2', undefined, '1');
+    const reader = stream.getReader();
+    const first = await reader.read();
+    const text = new TextDecoder().decode(first.value);
+    expect(text).toContain('id: 2');
+    expect(text).not.toContain('"index":1');
+    reader.releaseLock();
+  });
+
   it('redacts secret-like payload keys and values before persistence', async () => {
     expect(
       redactEventPayloadForTest({

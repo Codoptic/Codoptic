@@ -24,6 +24,13 @@ const READ_ONLY_TOOLS = new Set([
   // Plan-mode terminal tools: they never mutate source files (the artifact is written by the runtime).
   'ask_clarifying_questions',
   'write_plan_artifact',
+  'read_skill',
+  'todo_write',
+  'todo_update',
+  'consult_advisor',
+  'read_lints',
+  'exit_plan_mode',
+  'propose_work_graph',
 ]);
 
 export function isReadOnlyTool(name: string): boolean {

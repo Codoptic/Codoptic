@@ -77,7 +77,12 @@ export type AgentEventType =
   | 'coworking.workgraph.persisted'
   | 'coworking.ledger.persisted'
   | 'coworking.hook.completed'
-  | 'coworking.deliverable.recorded';
+  | 'coworking.deliverable.recorded'
+  | 'user.steering'
+  | 'spend.updated'
+  | 'run.waking'
+  | 'tool.parked'
+  | 'job.notify';
 
 export interface AgentEvent<TPayload = unknown> {
   id: string;
@@ -115,6 +120,7 @@ export function createAgentEvent<TPayload>({
   };
 }
 
-export function encodeSseEvent(event: AgentEvent | Record<string, unknown>): string {
-  return `data: ${JSON.stringify(event)}\n\n`;
+export function encodeSseEvent(event: AgentEvent | Record<string, unknown>, id?: string): string {
+  const eventId = id ?? (typeof (event as { sequence?: number }).sequence === 'number' ? String((event as { sequence: number }).sequence) : undefined);
+  return `${eventId ? `id: ${eventId}\n` : ''}data: ${JSON.stringify(event)}\n\n`;
 }

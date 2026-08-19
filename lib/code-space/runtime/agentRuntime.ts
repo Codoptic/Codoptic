@@ -21,10 +21,24 @@ import { SubagentRunner } from './subagentRunner';
 import type { TerminalCommand } from './terminalPolicy';
 import type { LoadedInstruction } from './instructionLoader';
 import { RepairLoop } from './repairLoop';
-import { buildAskFinalResponse, buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse, tightenAgentSummary } from './responsePolicy';
+import { buildCodeFinalResponse, buildCodeProposalResponse, buildPlanFinalResponse, tightenAgentSummary } from './responsePolicy';
 import { CodeAgentLoop, buildCodeSystemPrompt, buildCodeSeedMessage, type CodeAgentLoopOptions } from './codeAgentLoop';
 import { PLAN_MODE_TOOL_SPECS, buildPlanSystemPrompt, buildPlanSeedMessage, buildPlanFinalizationDirective } from './planAgentLoop';
-import { ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, formatUnresolvedEditFailures, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
+import { ASK_MODE_TOOL_SPECS, ToolExecutor, createRunRevertCheckpoint, buildEditEscalationDirective, formatUnresolvedEditFailures, type CodeAgentContext, type LedgerEntry } from './toolExecutor';
+import { registerRunAbort, clearRunAbort, composeAbortSignals } from './runAbortRegistry';
+import { acquireWorkspaceLock, releaseWorkspaceLock } from './workspaceLock';
+import { TodoBoard } from './todoBoard';
+import { SpendMeter } from './spendMeter';
+import { RunWorker } from './runWorker';
+import { formatConstitution } from './contextAssembler';
+import { loadEnvironmentContract } from './environmentContract';
+import { buildSessionNoteProposal } from './sessionNotes';
+import { recordRewindSnapshot } from './rewindStore';
+import { buildCleanCriticPrompt } from './cleanCritic';
+import { addWorktree, removeWorktree } from './worktreeManager';
+import { loadMcpConfig, listMcpToolSpecs, resolveExposedToolSpecs } from './mcpRuntime';
+import { evaluateUserHook, loadUserHooks } from './userHooks';
+import { classifySandboxError, formatSandboxDenied } from './sandboxRuntime';
 import { ToolBudget } from './toolBudget';
 import { createDefaultToolRegistry } from './toolRegistry';
 import { PermissionManager } from './permissionManager';
@@ -131,10 +145,13 @@ export class AgentRuntime {
     if (!latestUserMessage) throw new Error('A user message is required to start the agent.');
 
     const runId = `run:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const abort = registerRunAbort(runId);
+    const combinedSignal = composeAbortSignals(signal, abort.signal);
     let state = createRunState(runId);
     const projectId = request.projectName;
     const prompt = mode === 'plan' ? findOriginalPlanPrompt(request.messages, latestUserMessage.content) : latestUserMessage.content;
     const buildPlanPath = extractBuildPlanPath(latestUserMessage.content);
+    acquireWorkspaceLock(root, runId);
 
     const emitRuntime = async (type: AgentEventType, payload: unknown) => {
       const event = await this.events.append(createAgentEvent({ type, projectId, sessionId: request.sessionId, runId, payload }));
@@ -192,9 +209,8 @@ export class AgentRuntime {
       });
 
       await setPhase('tracing_dependencies', { dependencyEdges: context.dependencyEdges.length });
-      const todos = this.planning.buildTodos(mode, context);
+      const todos: string[] = [];
       emit({ type: 'plan_created', items: todos });
-      todos.forEach((text, index) => emit({ type: 'todo_created', todo: { id: `todo:${runId}:${index}`, text, done: false } }));
 
       await setPhase('planning');
       const validationCommands = await emitTool(emit, emitRuntime, 'validation_strategy', { mode }, async () =>
@@ -204,19 +220,24 @@ export class AgentRuntime {
       await emitRuntime('context.sufficiency.completed', sufficiency);
 
       if (mode === 'ask') {
-        await this.finishAsk(request, prompt, context, emit, emitRuntime, runId, state, todos);
+        await this.finishAsk(request, root, prompt, context, emit, emitRuntime, runId, state, loadedInstructions, sufficiency, memoryContext, combinedSignal);
         return;
       }
       if (mode === 'plan') {
-        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, signal);
+        await this.finishPlan(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, combinedSignal);
         return;
       }
-      await this.finishCode(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, signal);
+      await this.finishCode(request, root, prompt, context, validationCommands, emit, emitRuntime, runId, todos, loadedInstructions, sufficiency, memoryContext, combinedSignal);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await setPhase('failed', { message });
-      await emitRuntime('run.failed', { message });
-      await emit({ type: 'agent_error', message, recoverable: true });
+      const sandbox = classifySandboxError(message);
+      const display = sandbox ? formatSandboxDenied(sandbox, message) : message;
+      await setPhase('failed', { message: display });
+      await emitRuntime('run.failed', { message: display });
+      await emit({ type: 'agent_error', message: display, recoverable: true });
+    } finally {
+      releaseWorkspaceLock(root, runId);
+      clearRunAbort(runId);
     }
   }
 
@@ -331,21 +352,78 @@ export class AgentRuntime {
 
   private async finishAsk(
     request: AgentRuntimeRequest,
+    root: string,
     prompt: string,
     context: ContextGraphResult,
     emit: AgentRuntimeEmit,
     emitRuntime: (type: AgentEventType, payload: unknown) => Promise<void>,
     runId: string,
     state: CodeSpaceRunState,
-    todos: string[],
+    loadedInstructions: LoadedInstruction[],
+    sufficiency: ContextSufficiencyReport,
+    memoryContext: MemoryContext,
+    signal?: AbortSignal,
   ) {
-    const answer = buildAskFinalResponse({
-      projectName: request.projectName,
-      prompt,
-      evidence: context.files.map((file) => ({ path: file.path, summary: file.summary, content: file.content })),
-      missingContextWarnings: context.missingContextWarnings,
+    const credentials = await resolveProviderCredentials(root, request);
+    if (!credentials.apiKey && request.providerId !== 'local') {
+      const answer = `The "${request.providerId}" provider is not configured (no API key found), so Ask mode cannot inspect the repository. Add a provider key and retry.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
+    const ctx: CodeAgentContext = {
+      root,
+      runId,
+      projectId: request.projectName,
+      sessionId: request.sessionId,
+      autonomy: 'suggest_only',
+      emit,
+      emitRuntime,
+      ledger: new Map<string, LedgerEntry>(),
+      proposedFiles: new Set<string>(),
+      proposedLedger: new Map(),
+      editFailures: new Map(),
+      readFiles: new Set(context.files.map((file) => file.path)),
+      artifacts: new Map(),
+      checkpoints: [],
+      registry: createDefaultToolRegistry(),
+      permission: new PermissionManager(),
+      terminal: new TerminalRunner(),
+      signal,
+      todoBoard: new TodoBoard(runId),
+      permissionMode: 'ask',
+      userHooks: await loadUserHooks(root),
+    };
+
+    const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
+    const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
+    const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
+    loop.seed(
+      buildCodeSystemPrompt(request.projectName, loadedInstructions.map((item) => item.path), 'suggest_only', 'ask'),
+      await buildCodeSeedMessage(
+        root,
+        prompt,
+        context,
+        [],
+        sufficiency,
+        request.model,
+        memoryContext,
+        undefined,
+        undefined,
+        'suggest_only',
+      ),
+    );
+    const result = await loop.run(ctx, {
+      session,
+      budget,
+      signal,
+      tools: ASK_MODE_TOOL_SPECS,
+      constitution: formatConstitution(loadedInstructions),
+      task: prompt,
     });
-    todos.forEach((_, index) => emit({ type: 'todo_updated', todoId: `todo:${runId}:${index}`, done: true }));
+    const answer = tightenAgentSummary(result.summary) || 'Ask mode finished without a summary.';
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('validation.completed', { status: 'passed', summary: 'Ask mode completed read-only.' });
     await emitRuntime('run.completed', { status: 'verified', phase: 'verified', filesChanged: [], state: transitionRunState(state, 'verified') });
@@ -401,11 +479,21 @@ export class AgentRuntime {
       permission: new PermissionManager(),
       terminal: new TerminalRunner(),
       signal,
+      todoBoard: new TodoBoard(runId),
+      permissionMode: 'plan',
+      userHooks: await loadUserHooks(root),
     };
 
     const budget = new ToolBudget(request.toolBudget, resolveMaxTurns(request.toolBudget));
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
-    const loopOptions: CodeAgentLoopOptions = { session, budget, signal, tools: PLAN_MODE_TOOL_SPECS };
+    const loopOptions: CodeAgentLoopOptions = {
+      session,
+      budget,
+      signal,
+      tools: PLAN_MODE_TOOL_SPECS,
+      constitution: formatConstitution(loadedInstructions),
+      task: prompt,
+    };
 
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
@@ -442,6 +530,40 @@ export class AgentRuntime {
       await streamAnswer(answer, emit, emitRuntime);
       await emitRuntime('run.completed', { status: 'awaiting_review', phase: 'awaiting_clarification', filesChanged: [] });
       emit({ type: 'agent_done', summary: answer, filesChanged: [] });
+      return;
+    }
+
+    if (ctx.planArtifactRequest && ctx.permissionMode === 'code') {
+      const artifact = await emitTool(emit, emitRuntime, 'write_plan_artifact', { inspectedFiles: ctx.planArtifactRequest.inspectedFiles }, async () =>
+        this.planning.writePlanContent(root, request.sessionId, ctx.planArtifactRequest!.planMarkdown),
+      );
+      emit({ type: 'plan_markdown_created', filePath: artifact.filePath, content: artifact.content });
+      loopOptions.tools = (await import('./toolExecutor')).CODE_MODE_TOOL_SPECS;
+      const implemented = await loop.continueWith('Plan permission released. Implement the accepted plan on this same thread.', ctx, loopOptions);
+      if (ctx.ledger.size) {
+        const subagentRunner = new SubagentRunner(ctx, session, request.projectName);
+        await this.runValidationPhase({
+          projectName: request.projectName,
+          root,
+          prompt,
+          runId,
+          todos,
+          validationCommands,
+          ctx,
+          loop,
+          loopOptions,
+          subagentRunner,
+          loopSummary: implemented.summary,
+          emit,
+          emitRuntime,
+          signal,
+        });
+        return;
+      }
+      const answer = tightenAgentSummary(implemented.summary) || `Plan written to ${artifact.filePath}.`;
+      await streamAnswer(answer, emit, emitRuntime);
+      await emitRuntime('run.completed', { status: 'needs_review', phase: 'needs_review', filesChanged: [artifact.filePath] });
+      emit({ type: 'agent_done', summary: answer, filesChanged: [artifact.filePath] });
       return;
     }
 
@@ -570,6 +692,15 @@ export class AgentRuntime {
       terminal: new TerminalRunner(),
       onCheckpoint: persistCheckpoint,
       signal,
+      todoBoard: new TodoBoard(runId),
+      permissionMode: 'code',
+      frozenTestRoots: [`.agent/tests/${runId}/`],
+      spendMeter: new SpendMeter({ maxUsd: 8, maxTokens: 200_000 }),
+      userHooks: await loadUserHooks(root),
+      planSnapshotHash: createHash('sha256').update((await readPlanMarkdown(root, buildPlanPath)) || prompt).digest('hex'),
+      onBeforeCompact: async () => {
+        if (ctx.contextLedger) await this.coworking.persistLedger(runId, ctx.contextLedger);
+      },
     };
     emit({ type: 'coverage_updated', contract: ctx.implementationContract! });
     emit({
@@ -586,52 +717,50 @@ export class AgentRuntime {
 
     const budget = new ToolBudget(Math.max(request.toolBudget, limits.maxSpendUnits), resolveMaxTurns(Math.max(request.toolBudget, limits.maxSpendUnits)));
     const session: ProviderSession = { id: request.providerId, model: request.model, endpoint: credentials.endpoint, apiKey: credentials.apiKey || 'local' };
-    const loopOptions: CodeAgentLoopOptions = { session, budget, signal };
+    const env = await loadEnvironmentContract(root);
+    const loopOptions: CodeAgentLoopOptions = {
+      session,
+      budget,
+      signal,
+      spend: ctx.spendMeter,
+      constitution: formatConstitution(loadedInstructions),
+      task: prompt,
+    };
 
     const subagentRunner = new SubagentRunner(ctx, session, request.projectName);
     ctx.spawnSubagent = (subRequest) => subagentRunner.spawn(subRequest);
-    const delegationReport = await this.runAutomaticDelegation({
-      runId,
-      prompt,
-      context,
-      validationCommands,
-      subagentRunner,
-      scaleProfile,
-      contextLedger,
-      emitRuntime,
-    });
-    if (delegationReport.plan.workGraph) {
-      const persistedGraph = await this.coworking.persistGraph(coworkingRun, delegationReport.plan.workGraph);
-      await emitRuntime('coworking.workgraph.persisted', {
-        runId,
-        graphId: persistedGraph.id,
-        packageCount: persistedGraph.packages.length,
-        readyCount: persistedGraph.packages.filter((pkg) => pkg.status === 'ready').length,
+    ctx.persistWorkGraph = async (packages) => {
+      const graph = { runId, profile: scaleProfile, packages, createdAt: Date.now(), limits };
+      const persisted = await this.coworking.persistGraph(coworkingRun, graph);
+      await emitRuntime('coworking.workgraph.persisted', { runId, graphId: persisted.id, packageCount: persisted.packages.length });
+      const worker = new RunWorker();
+      const results = await worker.drain(runId, {
+        executePackage: async (pkg) => {
+          const tree = pkg.role === 'implementer' ? addWorktree(root, pkg.id) : { ok: false, path: root, output: '' };
+          try {
+            return await subagentRunner.spawn({ role: pkg.role, task: pkg.task, readOnly: pkg.readOnly, maxToolCalls: pkg.maxToolCalls });
+          } finally {
+            if (tree.ok) removeWorktree(root, pkg.id);
+          }
+        },
       });
-      for (const [index, result] of delegationReport.results.entries()) {
-        const pkg = persistedGraph.packages[index];
-        if (!pkg) continue;
-        await this.coworking.recordDeliverable(runId, {
-          packageId: pkg.id,
-          role: pkg.role,
-          status: result.success ? 'done' : 'blocked',
-          changedFiles: [],
-          evidence: [{ kind: 'review', summary: result.summary }],
-          blockers: result.success ? [] : [result.summary],
-          handoffNotes: result.summary,
-          validationRequested: [],
-          confidence: result.success ? 'medium' : 'low',
-        });
-        await emitRuntime('coworking.deliverable.recorded', {
-          runId,
-          packageId: pkg.id,
-          role: pkg.role,
-          status: result.success ? 'done' : 'blocked',
-        });
-      }
-    }
-    await this.coworking.transition(runId, 'executing', 'Parent agent is integrating governed package findings.');
+      return `Persisted ${persisted.packages.length} package(s); worker completed ${results.length}.`;
+    };
+    const mcpSpecs = listMcpToolSpecs(await loadMcpConfig(root));
+    loopOptions.tools = resolveExposedToolSpecs((await import('./toolExecutor')).CODE_MODE_TOOL_SPECS, mcpSpecs);
+    recordRewindSnapshot({
+      id: `rewind:${runId}:start`,
+      runId,
+      createdAt: Date.now(),
+      files: Object.fromEntries(context.files.slice(0, 12).map((file) => [file.path, file.content])),
+      conversationDigest: prompt.slice(0, 400),
+    });
+    const delegationReport = { plan: { required: false, reasons: [], tasks: [] }, results: [], reconciled: true } as DelegationReport;
+    await this.coworking.transition(runId, 'executing', 'Parent agent owns writes; model-authored packages drain via worker.');
     await emitRuntime('coworking.phase.changed', { runId, phase: 'executing' });
+    if (env?.test && !validationCommands.some((command) => command.kind === 'test')) {
+      validationCommands.push({ kind: 'test', command: env.test.split(' ')[0] ?? 'npm', args: env.test.split(' ').slice(1), reason: 'environment.json test contract', timeoutMs: 180_000 });
+    }
 
     const loop = new CodeAgentLoop(new ToolExecutor(ctx.registry, ctx.permission));
     loop.seed(
@@ -815,7 +944,6 @@ export class AgentRuntime {
       isGit: diffReport.isGit,
       summary: reviewSummary,
     });
-
     if (request.autonomy === 'approval_required') {
       await savePendingValidation({
         runId,
@@ -911,6 +1039,23 @@ export class AgentRuntime {
 
     // Step 3: generate + run focused test scripts via a test-writer subagent (in .agent/tests/<runId>/).
     const testScripts = await verifier.generateAndRunTestScripts(ctx, runId, prompt);
+    try {
+      const criticPrompt = buildCleanCriticPrompt({
+        diff: (await buildAggregatedDiff(root, Array.from(ctx.ledger.entries()).map(([filePath, entry]) => ({
+          path: filePath,
+          beforeContent: entry.beforeContent,
+          afterContent: entry.afterContent,
+          deleted: entry.deleted,
+        })))).unifiedDiff,
+        acceptance: ctx.implementationContract?.requirements.map((item) => item.text) ?? [],
+        tests: validationRuns.map((run) => run.command),
+      });
+      await emitRuntime('review.started', { critic: 'clean-context' });
+      const critic = await subagentRunner.spawn({ role: 'critic', task: criticPrompt, readOnly: true, maxToolCalls: 4 });
+      await emitRuntime('review.completed', { summary: critic.summary, success: critic.success, transcript: false });
+    } catch {
+      await emitRuntime('review.completed', { skipped: true });
+    }
 
     if (this.repairLoop.shouldRepair(validationRuns) && ctx.ledger.size) {
       await emitRuntime('plan.updated', { phase: 'repairing' });
@@ -1000,6 +1145,19 @@ export class AgentRuntime {
       phase: verdict.status === 'verified' ? 'complete' : 'syncing',
       blockers: sanitizedVerdictBlockers,
     });
+    try {
+      const note = buildSessionNoteProposal({
+        runId,
+        decisions: ctx.contextLedger?.list('decision').map((entry) => entry.summary) ?? [],
+        pitfalls: sanitizedVerdictBlockers,
+        commands: validationRuns.map((run) => run.command),
+      });
+      ctx.memoryUpdateProposals = [...(ctx.memoryUpdateProposals ?? []), note];
+      await emitRuntime('memory.update.proposed', { path: note.path, reason: note.reason });
+    } catch {
+      /* session notes are advisory */
+    }
+    evaluateUserHook(ctx.userHooks, 'Stop');
     await streamAnswer(answer, emit, emitRuntime);
     await emitRuntime('run.completed', { status: terminalPhase, phase: terminalPhase, filesChanged, checkpointId: revertCheckpoint?.id });
     emit({ type: 'agent_done', summary: answer, filesChanged });

@@ -93,10 +93,14 @@ export class MemoryManager {
       const scored = scoreMemory(entry, terms);
       if (scored.score > 0 || isRecommendedMemory(file)) entries.push(scored);
     }
+    const { fuseRankedIds, routeRetrievalQuery } = await import('./hybridRetrieval');
+    const route = routeRetrievalQuery(prompt);
+    const byPath = [...entries].sort((a, b) => a.path.localeCompare(b.path)).map((entry) => entry.path);
+    const byScore = [...entries].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).map((entry) => entry.path);
+    const fused = fuseRankedIds(route === 'memory' ? [byScore, byPath] : [byPath, byScore], Math.max(0, limit));
+    const ranked = fused.map((id) => entries.find((entry) => entry.path === id)).filter((entry): entry is MemoryEntry => Boolean(entry));
     return {
-      entries: entries
-        .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-        .slice(0, Math.max(0, limit)),
+      entries: ranked.length ? ranked : entries.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, Math.max(0, limit)),
       recommendedFiles: RECOMMENDED_MEMORY_FILES.map((file) => `${PROJECT_MEMORY_DIR}/${file}`),
     };
   }
@@ -108,6 +112,19 @@ export class MemoryManager {
   async read(root: string, memoryPath: string): Promise<MemoryEntry | null> {
     return this.backend.read(root, memoryPath);
   }
+
+  async applyProposal(root: string, proposal: { path: string; content: string }): Promise<string> {
+    return applyMemoryProposal(root, proposal);
+  }
+}
+
+export async function applyMemoryProposal(root: string, proposal: { path: string; content: string }): Promise<string> {
+  const normalized = normalizeMemoryPath(proposal.path);
+  if (!normalized) throw new Error('Invalid memory path.');
+  const absolute = path.join(root, normalized);
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  await fs.writeFile(absolute, proposal.content, 'utf8');
+  return normalized;
 }
 
 export function normalizeMemoryPath(memoryPath: string): string {

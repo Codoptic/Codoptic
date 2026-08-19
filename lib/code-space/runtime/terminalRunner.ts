@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { formatCommand, isCircuitBreakerTerminalCommand, isRiskyTerminalCommand, redactTerminalOutput, type TerminalCommand } from './terminalPolicy';
+import { wrapSandboxedCommand } from './sandboxRuntime';
 
 export interface TerminalRunResult {
   command: string;
@@ -66,7 +67,8 @@ export class TerminalRunner {
     };
 
     return new Promise<TerminalRunResult>((resolve) => {
-      const child = spawn(command.command, command.args, {
+      const sandboxed = wrapSandboxedCommand(command.command, command.args, root);
+      const child = spawn(sandboxed.command, sandboxed.args, {
         cwd: command.cwd ?? root,
         env: { ...process.env },
       });

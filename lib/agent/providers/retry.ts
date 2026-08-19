@@ -28,6 +28,7 @@ export interface RetryOptions {
   cooldownKey?: string;
   cooldownMinMs?: number;
   cooldownMaxMs?: number;
+  maxAttempts?: number;
 }
 
 const TRANSIENT_ERROR_CODES = new Set([
@@ -111,6 +112,7 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
   const isRetryable = opts.isRetryable ?? defaultIsRetryable;
   const base = opts.baseDelayMs ?? 2000;
   const cap = opts.capDelayMs ?? 60_000;
+  const maxAttempts = opts.maxAttempts ?? 8;
   let attempt = 0;
   for (;;) {
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -127,6 +129,7 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
     } catch (err) {
       if (!isRetryable(err)) throw err;
       attempt++;
+      if (attempt > maxAttempts) throw err;
       const retryError = err as RetryError;
       // Root Cause vs Logic: SDKs surface transient failures inconsistently (status, code, headers, or only a message like "500 The server had an error..."). Normalize the common shapes here so every provider benefits from the same retry behavior.
       const status = typeof retryError.status === 'number' ? retryError.status : statusFromMessage(retryError.message);

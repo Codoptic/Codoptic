@@ -58,6 +58,7 @@ interface AgentPanelProps {
   onRenameSession: (session: CodeSpaceAgentSession) => void;
   onDeleteSession: (session: CodeSpaceAgentSession) => void;
   onSubmitPrompt: (prompt: string, attachments?: SelectedMention[], options?: CodeSpacePromptOptions) => void;
+  onSteer?: (prompt: string, mode?: 'queue' | 'steer' | 'interrupt') => void;
   onClarifyingAnswersChange?: React.Dispatch<SetStateAction<Record<string, string[]>>>;
   onEditPrompt: (messageId: string) => void;
   onCancelRun: () => void;
@@ -328,6 +329,7 @@ export function AgentPanel({
   onRenameSession,
   onDeleteSession,
   onSubmitPrompt,
+  onSteer,
   onClarifyingAnswersChange,
   onEditPrompt,
   onCancelRun,
@@ -404,7 +406,14 @@ export function AgentPanel({
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     const value = prompt.trim();
-    if (!value || isRunning) return;
+    if (!value) return;
+    if (isRunning && onSteer) {
+      onSteer(value, 'queue');
+      setPrompt('');
+      setPromptMentions([]);
+      return;
+    }
+    if (isRunning) return;
     onSubmitPrompt(value, promptMentions);
     setPrompt('');
     setPromptMentions([]);
@@ -723,7 +732,7 @@ export function AgentPanel({
 
       <form onSubmit={handleSubmit} className="flex-shrink-0 border-t border-[#242424] bg-[#0d1117] p-2">
         <div className="rounded-xl border border-[#30363d] bg-[#161b22] px-3 py-2 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
-          <FileMentionInput value={prompt} mentions={promptMentions} onChange={(nextValue, nextMentions) => { setPrompt(nextValue); setPromptMentions(nextMentions); }} onSubmit={(nextValue, nextMentions) => { const trimmed = nextValue.trim(); if (!trimmed || isRunning) return; onSubmitPrompt(trimmed, nextMentions); setPrompt(''); setPromptMentions([]); }} mentionIndex={effectiveIndex} indexStatus={indexStatus} indexError={indexError} openFiles={openFiles} recentFiles={recentFiles} currentEditorFilePath={currentEditorFilePath} disabled={isRunning} placeholder="Plan, Build, / for skills, @ for context" />
+          <FileMentionInput value={prompt} mentions={promptMentions} onChange={(nextValue, nextMentions) => { setPrompt(nextValue); setPromptMentions(nextMentions); }} onSubmit={(nextValue, nextMentions) => { const trimmed = nextValue.trim(); if (!trimmed) return; if (isRunning && onSteer) { onSteer(trimmed, 'queue'); setPrompt(''); setPromptMentions([]); return; } if (isRunning) return; onSubmitPrompt(trimmed, nextMentions); setPrompt(''); setPromptMentions([]); }} mentionIndex={effectiveIndex} indexStatus={indexStatus} indexError={indexError} openFiles={openFiles} recentFiles={recentFiles} currentEditorFilePath={currentEditorFilePath} disabled={false} placeholder={isRunning ? 'Steer the live run…' : 'Plan, Build, / for skills, @ for context'} />
           <div className="mt-1.5 flex flex-wrap items-center gap-x-1 gap-y-1">
             <div className="flex shrink-0 items-center gap-1">
               <ExecutionPolicySelector policy={executionPolicy} disabled={isRunning} onChange={onExecutionPolicyChange} />

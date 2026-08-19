@@ -29,7 +29,7 @@ describe('PermissionManager', () => {
       permission: 'auto',
       approvalRequired: false,
     });
-    expect(permissions.decide(registry.get('propose_edit_blocks')!, 'suggest_only')).toMatchObject({
+    expect(permissions.decide(registry.get('edit_file')!, 'suggest_only')).toMatchObject({
       permission: 'approval_required',
       approvalRequired: true,
     });

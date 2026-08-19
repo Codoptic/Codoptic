@@ -48,6 +48,14 @@ import { MemoryManager, normalizeMemoryPath } from './memoryManager';
 import { BrowserController } from './browserController';
 import type { ContextLedger } from './contextLedger';
 import type { RuntimeScaleProfile } from './scaleProfile';
+import { readSkillBody } from './skills';
+import { assertPersistableWorkPackage } from './workGraphPolicy';
+import { buildAdvisorPacket } from './roleRouting';
+import { parseLintOutput } from './lintService';
+import { invokeMcpTool, parseMcpToolName } from './mcpRuntime';
+import { startBackgroundJob, appendJobOutput, completeJob, matchNotifyPattern } from './backgroundJobs';
+import { evaluateUserHook } from './userHooks';
+import { loadMcpConfig } from './mcpRuntime';
 
 export interface LedgerEntry {
   beforeContent: string;
@@ -63,6 +71,7 @@ export interface ToolExecutionResult {
   recoverable?: boolean;
   command?: string;
   artifactId?: string;
+  parked?: boolean;
 }
 
 export interface RecoverableToolFailure {
@@ -131,6 +140,16 @@ export interface CodeAgentContext {
   terminal: TerminalRunner;
   onCheckpoint?: CheckpointSink;
   signal?: AbortSignal;
+  todoBoard?: import('./todoBoard').TodoBoard;
+  readHashes?: Map<string, string>;
+  permissionMode?: 'ask' | 'plan' | 'code';
+  persistWorkGraph?: (packages: import('./agentOrchestrator').WorkPackage[]) => Promise<string>;
+  writeAllowlist?: string[];
+  frozenTestRoots?: string[];
+  spendMeter?: import('./spendMeter').SpendMeter;
+  onBeforeCompact?: () => Promise<void>;
+  userHooks?: import('./userHooks').UserHooksConfig;
+  planSnapshotHash?: string;
 }
 
 const MAX_TOOL_OUTPUT = 6000;
@@ -141,7 +160,7 @@ const MAX_SEARCH_MATCHES = 80;
 export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
   {
     name: 'read_file',
-    description: 'Read a UTF-8 text file from the workspace. Optionally pass startLine/endLine (1-based) to read a slice. Always read a file before editing it.',
+    description: 'Read a UTF-8 text file from the workspace. Defaults to a 100-line window. Pass startLine/endLine to page. Always read a file before editing it.',
     inputSchema: { type: 'object', properties: { path: { type: 'string' }, startLine: { type: 'number' }, endLine: { type: 'number' } }, required: ['path'] },
   },
   {
@@ -151,8 +170,8 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'search_text',
-    description: 'Search the workspace for a substring or regex, returning matching files with line numbers and nearby context. Use before refactors to find references.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string' }, glob: { type: 'string' }, contextLines: { type: 'number' } }, required: ['query'] },
+    description: 'Search the workspace. Default mode=files returns matching paths only. Set mode=content for snippets. Prefer ripgrep when available.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, glob: { type: 'string' }, contextLines: { type: 'number' }, mode: { type: 'string' } }, required: ['query'] },
   },
   {
     name: 'repo_map',
@@ -352,7 +371,90 @@ export const CODE_MODE_TOOL_SPECS: ToolSpec[] = [
       required: ['success', 'summary'],
     },
   },
+  {
+    name: 'todo_write',
+    description: 'Create or replace the live TODO list for this run. Own the task breakdown; update as work progresses.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todos: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, text: { type: 'string' }, done: { type: 'boolean' } },
+            required: ['text'],
+          },
+        },
+      },
+      required: ['todos'],
+    },
+  },
+  {
+    name: 'todo_update',
+    description: 'Mark a live TODO done or rewrite its text.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' }, done: { type: 'boolean' } }, required: ['id'] },
+  },
+  {
+    name: 'read_skill',
+    description: 'Load the full body of a skill from the catalog before applying it.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  },
+  {
+    name: 'propose_work_graph',
+    description: 'Propose a model-authored work ledger. Each package must have dependencies or independent=true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        packages: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              role: { type: 'string' },
+              title: { type: 'string' },
+              task: { type: 'string' },
+              independent: { type: 'boolean' },
+              dependencies: { type: 'array', items: { type: 'string' } },
+              readOnly: { type: 'boolean' },
+            },
+            required: ['role', 'task'],
+          },
+        },
+      },
+      required: ['packages'],
+    },
+  },
+  {
+    name: 'consult_advisor',
+    description: 'Ask a stronger model for advice using a bounded packet (goal, recent tools, failing tests). Not the full transcript.',
+    inputSchema: { type: 'object', properties: { goal: { type: 'string' }, recentTools: { type: 'array', items: { type: 'string' } }, failingTests: { type: 'array', items: { type: 'string' } } }, required: ['goal'] },
+  },
+  {
+    name: 'read_lints',
+    description: 'Parse lint/typecheck output into diagnostics for recently edited files.',
+    inputSchema: { type: 'object', properties: { output: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } } },
+  },
+  {
+    name: 'git_commit',
+    description: 'Create a git commit from the current diff using a HEREDOC-style message. Never skip hooks or force-push.',
+    inputSchema: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] },
+  },
+  {
+    name: 'create_pull_request',
+    description: 'Open a pull request with gh after status/diff/log. High risk; approval gated.',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } }, required: ['title'] },
+  },
+  {
+    name: 'exit_plan_mode',
+    description: 'Leave plan permission mode on the same thread so implementation tools become available.',
+    inputSchema: { type: 'object', properties: { summary: { type: 'string' } } },
+  },
 ];
+
+export const ASK_MODE_TOOL_SPECS: ToolSpec[] = CODE_MODE_TOOL_SPECS.filter((spec) =>
+  ['read_file', 'list_files', 'search_text', 'repo_map', 'dependency_trace', 'git_status', 'git_diff', 'read_memory', 'list_memories', 'read_skill', 'todo_write', 'todo_update', 'attempt_completion'].includes(spec.name),
+);
 
 function clip(output: string): string {
   return output.length > MAX_TOOL_OUTPUT ? `${output.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; ${output.length - MAX_TOOL_OUTPUT} more chars]` : output;
@@ -613,7 +715,29 @@ export class ToolExecutor {
           return this.askClarifyingQuestions(call, ctx);
         case 'write_plan_artifact':
           return this.writePlanArtifactTool(call, ctx);
+        case 'todo_write':
+          return this.todoWrite(call, ctx);
+        case 'todo_update':
+          return this.todoUpdate(call, ctx);
+        case 'read_skill':
+          return this.readSkill(call);
+        case 'propose_work_graph':
+          return this.proposeWorkGraph(call, ctx);
+        case 'consult_advisor':
+          return this.consultAdvisor(call);
+        case 'read_lints':
+          return this.readLints(call, ctx);
+        case 'git_commit':
+          return await this.gitCommit(call, ctx);
+        case 'create_pull_request':
+          return await this.createPullRequest(call, ctx);
+        case 'exit_plan_mode':
+          ctx.permissionMode = 'code';
+          return { content: 'Plan permission released. Implementation tools are now available on this thread.' };
+        case 'tool_search':
+          return this.toolSearch(call);
         default:
+          if (call.name.startsWith('mcp__')) return this.invokeMcp(call, ctx);
           return { content: `Unknown tool "${call.name}". Use one of the provided tools.`, isError: true, recoverable: true };
       }
     } catch (error) {
@@ -636,7 +760,10 @@ export class ToolExecutor {
     const lines = content.split('\n');
     ctx.contextLedger?.add({ kind: 'file_read', path: normalized, summary: `Read ${normalized} (${lines.length} lines)`, status: 'completed' });
     const start = typeof call.input.startLine === 'number' ? Math.max(1, Math.floor(call.input.startLine)) : 1;
-    const end = typeof call.input.endLine === 'number' ? Math.min(lines.length, Math.floor(call.input.endLine)) : lines.length;
+    const defaultEnd = Math.min(lines.length, start + 99);
+    const end = typeof call.input.endLine === 'number' ? Math.min(lines.length, Math.floor(call.input.endLine)) : defaultEnd;
+    ctx.readHashes ??= new Map();
+    ctx.readHashes.set(normalized, hashContent(content));
     const slice = lines.slice(start - 1, end);
     const numbered = slice.map((line, index) => `${start + index}\t${line}`).join('\n');
     const header = proposed
@@ -669,6 +796,9 @@ export class ToolExecutor {
     const query = str(call.input.query);
     if (!query) return { content: 'search_text requires "query".', isError: true, recoverable: true };
     const glob = str(call.input.glob);
+    const mode = str(call.input.mode) === 'content' ? 'content' : 'files';
+    const rg = await this.searchWithRipgrep(ctx.root, query, glob, mode);
+    if (rg) return { content: clip(rg) };
     const contextLines = typeof call.input.contextLines === 'number' ? Math.max(0, Math.min(6, Math.floor(call.input.contextLines))) : 1;
     let rx: RegExp;
     try {
@@ -678,6 +808,7 @@ export class ToolExecutor {
     }
     const files = await listRepositoryFiles(ctx.root);
     const candidates = glob ? files.filter((file) => matchesGlob(file, glob)) : files;
+    const fileHits = new Map<string, number>();
     const blocks: string[] = [];
     let matchCount = 0;
     for (const file of candidates) {
@@ -688,11 +819,17 @@ export class ToolExecutor {
       for (let index = 0; index < lines.length && matchCount < MAX_SEARCH_MATCHES; index += 1) {
         if (!rx.test(lines[index] ?? '')) continue;
         matchCount += 1;
+        fileHits.set(file, (fileHits.get(file) ?? 0) + 1);
+        if (mode === 'files') continue;
         const from = Math.max(0, index - contextLines);
         const to = Math.min(lines.length, index + contextLines + 1);
         const snippet = lines.slice(from, to).map((line, offset) => `${from + offset + 1}: ${line}`).join('\n');
         blocks.push(`${file}:\n${snippet}`);
       }
+    }
+    if (mode === 'files') {
+      const listing = [...fileHits.entries()].map(([file, count]) => `${file} (${count})`).join('\n');
+      return { content: listing || `No matches for "${query}".` };
     }
     await ctx.emitRuntime('tool.completed', { tool: 'search_text', matches: matchCount });
     const rendered = blocks.length ? `${matchCount} match(es):\n\n${blocks.join('\n\n')}` : `No matches for "${query}".`;
@@ -790,13 +927,21 @@ export class ToolExecutor {
     artifactKind: AgentArtifactKind,
   ): Promise<ToolExecutionResult> {
     const decision = this.decide(registryToolName, ctx.autonomy);
-    if (decision.permission !== 'auto') {
-      await ctx.emitRuntime('tool.approval.required', { tool: registryToolName, command: [command.command, ...command.args].join(' '), reason: decision.reason });
+    if (decision.permission === 'blocked') {
       return {
         content: formatAutonomyBlockedToolMessage(registryToolName, ctx.autonomy, decision.reason),
         isError: true,
         recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
       };
+    }
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(
+        { id: `script:${ctx.runId}:${registryToolName}`, name: registryToolName, input: { command: command.command, args: command.args } },
+        ctx,
+        registryToolName,
+        decision.reason,
+      );
+      if (parked) return parked;
     }
     const result = await ctx.terminal.run(command, ctx.root, ctx.signal);
     const artifact = await writeAgentArtifact({
@@ -925,6 +1070,12 @@ export class ToolExecutor {
     const currentFiles: Record<string, string> = {};
     const existedBefore: Record<string, boolean> = {};
     for (const filePath of uniquePaths) {
+      if (ctx.frozenTestRoots?.some((rootPath) => filePath.startsWith(rootPath)) && !ctx.writeAllowlist?.some((allowed) => filePath.startsWith(allowed))) {
+        return { content: `Frozen test path ${filePath} cannot be edited by the implementer. Amend the spec instead.`, isError: true, recoverable: true };
+      }
+      if (ctx.writeAllowlist?.length && !ctx.writeAllowlist.some((allowed) => filePath.startsWith(allowed))) {
+        return { content: `Write allowlist rejected ${filePath}.`, isError: true, recoverable: true };
+      }
       const proposed = ctx.proposedLedger.get(filePath);
       if (proposed) {
         currentFiles[filePath] = proposed.afterContent;
@@ -934,6 +1085,12 @@ export class ToolExecutor {
       const disk = await safeReadTextFile(ctx.root, filePath);
       currentFiles[filePath] = disk ?? '';
       existedBefore[filePath] = disk != null;
+      try {
+        const { assertFreshHash } = await import('./fileFreshness');
+        assertFreshHash(ctx.readHashes?.get(filePath), hashContent(disk ?? ''), filePath);
+      } catch (error) {
+        return { content: error instanceof Error ? error.message : String(error), isError: true, recoverable: true };
+      }
     }
 
     const grouped = applyGroupedEditBlocks(currentFiles, edits, { existingFiles: existedBefore });
@@ -982,8 +1139,13 @@ export class ToolExecutor {
       };
     }
 
-    const decision = this.decide('propose_edit_blocks', ctx.autonomy);
-    const applyToDisk = decision.permission === 'auto';
+    const decision = this.decide('edit_file', ctx.autonomy);
+    let applyToDisk = decision.permission === 'auto';
+    if (!applyToDisk && decision.approvalRequired && ctx.autonomy !== 'suggest_only') {
+      const parked = await this.parkApproval(call, ctx, 'edit_file', decision.reason);
+      if (parked) return parked;
+      applyToDisk = true;
+    }
 
     const applied: string[] = [];
     for (const preview of grouped.previews) {
@@ -1104,13 +1266,16 @@ export class ToolExecutor {
         hunks: patch.hunks,
       });
       await ctx.emitRuntime(existedBefore[normalized] ? 'file.updated' : 'file.created', { path: normalized });
+      await ctx.emit({ type: 'lint_errors', filePath: normalized, errors: parseLintOutput(preview.afterContent, normalized) });
     }
 
     if (!applied.length) {
       return { content: `Proposed ${grouped.previews.length} edit(s) for review (autonomy "${ctx.autonomy}" does not auto-apply source files). Not written to disk — use read_file to see pending proposed content.` };
     }
-    const diffSummary = grouped.previews.map((preview) => preview.unifiedDiff).join('\n');
-    return { content: clip(`Applied edits to: ${applied.join(', ')}\n\n${diffSummary}`) };
+    const windows = grouped.previews
+      .filter((preview) => applied.includes(normalizeContextPath(preview.path)))
+      .map((preview) => windowAroundChange(preview.path, preview.afterContent, preview.beforeContent));
+    return { content: clip(`Applied edits to: ${applied.join(', ')}\n\n${windows.join('\n\n')}`) };
   }
 
   private async createFiles(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
@@ -1168,13 +1333,16 @@ export class ToolExecutor {
     }
 
     const decision = this.decide('create_directory', ctx.autonomy);
-    if (decision.permission !== 'auto') {
-      await ctx.emitRuntime('tool.approval.required', { tool: 'create_directory', path: target, reason: decision.reason });
+    if (decision.permission === 'blocked') {
       return {
         content: formatAutonomyBlockedToolMessage('create_directory', ctx.autonomy, decision.reason),
         isError: true,
         recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
       };
+    }
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(call, ctx, 'create_directory', decision.reason);
+      if (parked) return parked;
     }
 
     const dir = path.resolve(ctx.root, target);
@@ -1202,16 +1370,33 @@ export class ToolExecutor {
     };
 
     const decision = this.decide('run_command', ctx.autonomy);
-    if (decision.permission !== 'auto') {
-      await ctx.emitRuntime('tool.approval.required', { tool: 'run_command', command: `${commandName} ${args.join(' ')}`, reason: decision.reason });
+    if (decision.permission === 'blocked') {
       return {
         content: formatAutonomyBlockedToolMessage('run_command', ctx.autonomy, decision.reason),
         isError: true,
         recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
       };
     }
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(call, ctx, 'run_command', decision.reason);
+      if (parked) return parked;
+    }
     if (ctx.autonomy !== 'full_access_local' && isRiskyTerminalCommand(command)) {
       return { content: `Command "${commandName} ${args.join(' ')}" is gated by terminal policy and requires explicit approval. It was not run.`, isError: true };
+    }
+
+    if (call.input.background === true) {
+      const job = startBackgroundJob([commandName, ...args].join(' '));
+      const notify = str(call.input.notifyOnOutput);
+      void ctx.terminal.runStreaming(command, ctx.root, (chunk) => {
+        const next = appendJobOutput(job.jobId, chunk.chunk);
+        if (next && matchNotifyPattern(next.output, notify)) {
+          void ctx.emitRuntime('job.notify', { jobId: job.jobId, command: next.command });
+        }
+      }, ctx.signal, { allowRisky: ctx.autonomy === 'full_access_local' }).then(() => {
+        completeJob(job.jobId);
+      });
+      return { content: `Started background job ${job.jobId}. Notify pattern: ${notify || '(none)'}.` };
     }
 
     const result = await ctx.terminal.run(command, ctx.root, ctx.signal, { allowRisky: ctx.autonomy === 'full_access_local' });
@@ -1220,7 +1405,7 @@ export class ToolExecutor {
     ctx.contextLedger?.addArtifact('terminal', artifact, `${result.command}: ${result.status}`);
     const preview = result.output.length > MAX_TOOL_OUTPUT ? `${result.output.slice(0, MAX_TOOL_OUTPUT)}\n…[truncated; read full output via read_artifact id=${artifact.artifactId}]` : result.output;
     return {
-      content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || '(no output)'}`,
+      content: `[${result.status}] ${result.command}\nartifactId: ${artifact.artifactId}\n\n${preview || 'Command succeeded with no output (exit 0).'}`,
       isError: result.status === 'failed',
       recoverable: result.status === 'failed' && isValidationLikeCommand(result.command, result.output),
       command: result.command,
@@ -1228,20 +1413,19 @@ export class ToolExecutor {
     };
   }
 
-  private ensureTerminalDecision(toolName: string, ctx: CodeAgentContext): ToolExecutionResult | null {
+  private async ensureTerminalDecision(toolName: string, ctx: CodeAgentContext, call?: ToolCall): Promise<ToolExecutionResult | null> {
     const decision = this.decide(toolName, ctx.autonomy);
-    if (decision.permission !== 'auto') {
-      return {
-        content: formatAutonomyBlockedToolMessage(toolName, ctx.autonomy, decision.reason),
-        isError: true,
-        recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
-      };
-    }
-    return null;
+    if (decision.permission === 'auto') return null;
+    if (call && decision.permission === 'approval_required') return this.parkApproval(call, ctx, toolName, decision.reason);
+    return {
+      content: formatAutonomyBlockedToolMessage(toolName, ctx.autonomy, decision.reason),
+      isError: true,
+      recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
+    };
   }
 
   private async terminalStart(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
-    const gated = this.ensureTerminalDecision('terminal_start', ctx);
+    const gated = await this.ensureTerminalDecision('terminal_start', ctx, call);
     if (gated) return gated;
     const cwdInput = str(call.input.cwd);
     const cwd = cwdInput ? path.resolve(ctx.root, cwdInput) : ctx.root;
@@ -1255,7 +1439,7 @@ export class ToolExecutor {
   }
 
   private async terminalWrite(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
-    const gated = this.ensureTerminalDecision('terminal_write', ctx);
+    const gated = await this.ensureTerminalDecision('terminal_write', ctx, call);
     if (gated) return gated;
     const sessionId = str(call.input.sessionId);
     const data = str(call.input.data);
@@ -1288,7 +1472,7 @@ export class ToolExecutor {
   }
 
   private async terminalSignal(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
-    const gated = this.ensureTerminalDecision('terminal_signal', ctx);
+    const gated = await this.ensureTerminalDecision('terminal_signal', ctx, call);
     if (gated) return gated;
     const sessionId = str(call.input.sessionId);
     const signal = ['SIGINT', 'SIGTERM', 'SIGKILL'].includes(str(call.input.signal)) ? (str(call.input.signal) as 'SIGINT' | 'SIGTERM' | 'SIGKILL') : 'SIGTERM';
@@ -1407,13 +1591,16 @@ export class ToolExecutor {
     const checkpoint = ctx.checkpoints.find((entry) => entry.id === ref);
     if (!checkpoint) return { content: `Unknown checkpointRef: ${ref}`, isError: true };
     const decision = this.decide('restore_checkpoint', ctx.autonomy);
-    if (decision.permission !== 'auto') {
-      await ctx.emitRuntime('tool.approval.required', { tool: 'restore_checkpoint', checkpointRef: ref, reason: decision.reason });
+    if (decision.permission === 'blocked') {
       return {
         content: formatAutonomyBlockedToolMessage('restore_checkpoint', ctx.autonomy, decision.reason),
         isError: true,
         recoverable: isAutonomyPolicyFailureRecoverable(ctx.autonomy, decision.permission),
       };
+    }
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(call, ctx, 'restore_checkpoint', decision.reason);
+      if (parked) return parked;
     }
     const loaded = await loadFileCheckpoint(checkpoint.snapshotRef);
     const files = await restoreFileCheckpoint(ctx.root, loaded);
@@ -1492,6 +1679,159 @@ export class ToolExecutor {
     return { content: 'Plan artifact recorded. Stop now — do not call any more tools.' };
   }
 
+  private async parkApproval(call: ToolCall, ctx: CodeAgentContext, name: string, reason: string): Promise<ToolExecutionResult | null> {
+    const { parkToolCall, waitForApproval } = await import('./pendingToolApproval');
+    parkToolCall({
+      toolCallId: call.id,
+      runId: ctx.runId,
+      name,
+      input: call.input as Record<string, unknown>,
+      createdAt: Date.now(),
+    });
+    await ctx.emitRuntime('tool.parked', { toolCallId: call.id, tool: name, reason });
+    await ctx.emitRuntime('tool.approval.required', { tool: name, reason, toolCallId: call.id });
+    const verdict = await waitForApproval(call.id, ctx.signal);
+    if (verdict !== 'approved') return { content: `User rejected ${name}.`, isError: true, recoverable: true };
+    return null;
+  }
+
+  private todoWrite(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
+    const todos = Array.isArray(call.input.todos) ? call.input.todos : [];
+    const written = ctx.todoBoard?.write(
+      todos
+        .filter((item): item is { text: string; id?: string; done?: boolean } => Boolean(item && typeof item === 'object' && 'text' in item))
+        .map((item) => ({ id: typeof item.id === 'string' ? item.id : undefined, text: String(item.text), done: Boolean(item.done) })),
+    ) ?? [];
+    for (const todo of written) {
+      void ctx.emit({ type: 'todo_created', todo: { id: todo.id, text: todo.text, done: todo.done } });
+    }
+    return { content: ctx.todoBoard?.format() || 'todo_write requires a live todo board.' };
+  }
+
+  private todoUpdate(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
+    const updated = ctx.todoBoard?.update(str(call.input.id), { text: str(call.input.text) || undefined, done: typeof call.input.done === 'boolean' ? call.input.done : undefined });
+    if (!updated) return { content: `Unknown todo ${str(call.input.id)}`, isError: true, recoverable: true };
+    void ctx.emit({ type: 'todo_updated', todoId: updated.id, done: updated.done });
+    return { content: ctx.todoBoard?.format() || updated.text };
+  }
+
+  private readSkill(call: ToolCall): ToolExecutionResult {
+    const body = readSkillBody(str(call.input.id));
+    return body ? { content: body } : { content: `Unknown skill ${str(call.input.id)}`, isError: true, recoverable: true };
+  }
+
+  private async proposeWorkGraph(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const packages = Array.isArray(call.input.packages) ? call.input.packages : [];
+    try {
+      for (const [index, raw] of packages.entries()) {
+        const pkg = raw as { id?: string; role?: string; task?: string; independent?: boolean; dependencies?: string[] };
+        assertPersistableWorkPackage({
+          id: pkg.id || `work:${ctx.runId}:${index + 1}`,
+          role: (pkg.role || 'explorer') as import('./subagentRunner').SubagentRole,
+          title: pkg.task || 'package',
+          task: pkg.task || '',
+          readOnly: true,
+          maxToolCalls: 20,
+          dependencies: pkg.dependencies ?? [],
+          independent: pkg.independent,
+          depth: 0,
+          reason: 'model-authored',
+        });
+      }
+      const graphPackages = packages.map((raw, index) => {
+        const pkg = raw as { id?: string; role?: string; task?: string; independent?: boolean; dependencies?: string[] };
+        return {
+          id: pkg.id || `work:${ctx.runId}:${index + 1}`,
+          role: (pkg.role || 'explorer') as import('./subagentRunner').SubagentRole,
+          title: pkg.task || 'package',
+          task: pkg.task || '',
+          readOnly: true,
+          maxToolCalls: 20,
+          dependencies: pkg.dependencies ?? [],
+          independent: pkg.independent,
+          depth: 0,
+          reason: 'model-authored',
+        };
+      });
+      const persisted = ctx.persistWorkGraph ? await ctx.persistWorkGraph(graphPackages) : `${packages.length} package(s) accepted in-memory`;
+      return { content: `Accepted ${packages.length} model-authored work package(s). ${persisted}` };
+    } catch (error) {
+      return { content: error instanceof Error ? error.message : String(error), isError: true, recoverable: true };
+    }
+  }
+
+  private consultAdvisor(call: ToolCall): ToolExecutionResult {
+    return {
+      content: buildAdvisorPacket({
+        goal: str(call.input.goal),
+        recentTools: Array.isArray(call.input.recentTools) ? call.input.recentTools.map(String) : [],
+        failingTests: Array.isArray(call.input.failingTests) ? call.input.failingTests.map(String) : [],
+      }),
+    };
+  }
+
+  private readLints(call: ToolCall, ctx: CodeAgentContext): ToolExecutionResult {
+    const files = Array.isArray(call.input.files) ? call.input.files.map(String) : [...ctx.ledger.keys()];
+    const diagnostics = parseLintOutput(str(call.input.output), files[0]);
+    void ctx.emit({ type: 'lint_errors', filePath: files[0] || 'workspace', errors: diagnostics });
+    return { content: diagnostics.length ? diagnostics.map((item) => `${item.file}:${item.line}:${item.col} ${item.severity} ${item.message}`).join('\n') : 'No lint diagnostics parsed.' };
+  }
+
+  private async gitCommit(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const message = str(call.input.message);
+    if (!message) return { content: 'git_commit requires message.', isError: true };
+    const decision = this.decide('run_command', ctx.autonomy);
+    if (decision.permission === 'blocked') return { content: formatAutonomyBlockedToolMessage('git_commit', ctx.autonomy, decision.reason), isError: true };
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(call, ctx, 'git_commit', decision.reason);
+      if (parked) return parked;
+    }
+    await this.git(['add', '-A'], ctx);
+    return this.git(['commit', '-m', message], ctx);
+  }
+
+  private async createPullRequest(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const decision = this.decide('run_command', ctx.autonomy);
+    if (decision.permission === 'blocked') return { content: formatAutonomyBlockedToolMessage('create_pull_request', ctx.autonomy, decision.reason), isError: true };
+    if (decision.permission === 'approval_required') {
+      const parked = await this.parkApproval(call, ctx, 'create_pull_request', decision.reason);
+      if (parked) return parked;
+    }
+    return this.git(['push', '-u', 'origin', 'HEAD'], ctx).then(async (push) => {
+      if (push.isError) return push;
+      const title = str(call.input.title);
+      const body = str(call.input.body);
+      return ctx.terminal.run(
+        { kind: 'shell', command: 'gh', args: ['pr', 'create', '--title', title, '--body', body || title], cwd: ctx.root, reason: 'Create pull request.', timeoutMs: 60_000 },
+        ctx.root,
+        ctx.signal,
+      ).then((result) => ({ content: result.output || 'gh pr create completed.', isError: result.status === 'failed' }));
+    });
+  }
+
+  private async searchWithRipgrep(root: string, query: string, glob: string, mode: 'files' | 'content'): Promise<string | null> {
+    const { spawnSync } = await import('node:child_process');
+    const args = mode === 'files' ? ['-l', '-i', query] : ['-n', '-i', query];
+    if (glob) args.push('-g', glob);
+    const result = spawnSync('rg', args, { cwd: root, encoding: 'utf8' });
+    if (result.error || result.status === 127) return null;
+    return result.stdout?.trim() || (result.status === 1 ? `No matches for "${query}".` : null);
+  }
+
+  private toolSearch(call: ToolCall): ToolExecutionResult {
+    const query = str(call.input.query).toLowerCase();
+    const names = CODE_MODE_TOOL_SPECS.map((spec) => spec.name).filter((name) => !query || name.includes(query));
+    return { content: names.length ? `Matching tools: ${names.join(', ')}` : `No tools matched "${query}".` };
+  }
+
+  private async invokeMcp(call: ToolCall, ctx: CodeAgentContext): Promise<ToolExecutionResult> {
+    const parsed = parseMcpToolName(call.name);
+    if (!parsed) return { content: `Invalid MCP tool name ${call.name}.`, isError: true, recoverable: true };
+    const config = await loadMcpConfig(ctx.root);
+    const content = await invokeMcpTool(config, parsed.server, str(call.input.tool) || parsed.tool, call.input.arguments);
+    return { content };
+  }
+
   private decide(registryToolName: string, autonomy: AutonomyLevel) {
     const tool = this.registry.get(registryToolName);
     if (!tool) return { permission: 'auto' as const, approvalRequired: false, reason: 'Unregistered tool defaults to auto.' };
@@ -1560,6 +1900,17 @@ async function recordPatchHistory(ctx: CodeAgentContext, patch: PatchHistoryEntr
     removed: patch.removed,
     hunks: patch.hunks,
   });
+}
+
+function windowAroundChange(filePath: string, after: string, before: string): string {
+  const afterLines = after.split('\n');
+  const beforeLines = before.split('\n');
+  let start = 0;
+  while (start < afterLines.length && start < beforeLines.length && afterLines[start] === beforeLines[start]) start += 1;
+  const from = Math.max(0, start - 8);
+  const to = Math.min(afterLines.length, start + 92);
+  const numbered = afterLines.slice(from, to).map((line, offset) => `${from + offset + 1}: ${line}`).join('\n');
+  return `${filePath} (window ${from + 1}-${to}):\n${numbered}`;
 }
 
 function writeThisMode(applyToDisk: boolean, filePath: string): PatchHistoryEntry['mode'] {
