@@ -9,7 +9,7 @@
  *   1. Validate provider
  *   2. Generate a layer catalog (3-8 layers) from prompt + answers
  *   3. Compile a deterministic overview DSL from the catalog
- *   4. Generate one focused sub-diagram per layer (parallel, p-limit 2)
+ *   4. Generate one focused sub-diagram per layer (parallel, p-limit 6)
  *   5. Emit result-multilayer
  *
  * Reuses MultiLayerOutput / LayerDiagram from the store so the
@@ -308,9 +308,9 @@ export async function runCustomMultiLayerPlan(
     );
     send({ type: 'stage', stage: 'overview', status: 'done', message: 'Overview compiled' });
 
-    // 4. Per-layer sub-diagrams (parallel, max 2 concurrent)
+    // 4. Per-layer sub-diagrams (parallel, max 6 concurrent)
     send({ type: 'stage', stage: 'sub-plans', status: 'start', message: 'Generating per-layer diagrams…' });
-    const layerLimit = pLimit(2);
+    const layerLimit = pLimit(6);
 
     const subLayers: LayerDiagram[] = await Promise.all(
       catalog.layers.map((layer) =>

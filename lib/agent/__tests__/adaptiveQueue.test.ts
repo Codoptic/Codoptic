@@ -38,5 +38,27 @@ describe('adaptiveMap', () => {
     expect(events.some((event) => event.kind === 'recover')).toBe(true);
     expect(started).toHaveLength(6);
   });
+
+  it('keeps launching workers after a 429 instead of parking the queue', async () => {
+    const startedAt: number[] = [];
+    const started = Date.now();
+
+    const result = await adaptiveMap(
+      [1, 2, 3, 4],
+      {
+        initialConcurrency: 4,
+        maxConcurrency: 8,
+        minConcurrency: 2,
+      },
+      async (item, _index, control) => {
+        startedAt.push(Date.now() - started);
+        if (item === 1) control.onRetry({ attempt: 1, delayMs: 8_000, reason: 'HTTP 429' });
+        return item;
+      },
+    );
+
+    expect(result).toEqual([1, 2, 3, 4]);
+    expect(Math.max(...startedAt)).toBeLessThan(50);
+  });
 });
 

@@ -110,7 +110,7 @@ interface ModuleReferenceBatch {
 const DOC_SPLIT_THRESHOLD = 80;
 const MODULE_REF_BATCH_FILE_LIMIT = 24;
 const MODULE_REF_BATCH_CHAR_LIMIT = 32_000;
-const MODULE_REF_CONCURRENCY = 2;
+const MODULE_REF_CONCURRENCY = 4;
 const ARCHITECTURE_ANCHOR_CHAR_LIMIT = 6_000;
 
 // =========================================================================

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { saveDraft, deleteDraft, loadDraft, writeDraftShadow } = vi.hoisted(() => ({
+const { saveDraft, deleteDraft, loadDraft, writeDraftShadow, saveProjectCatalog } = vi.hoisted(() => ({
   saveDraft: vi.fn(async () => undefined),
   deleteDraft: vi.fn(async () => undefined),
   loadDraft: vi.fn(async () => null),
   writeDraftShadow: vi.fn(() => undefined),
+  saveProjectCatalog: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../cache/draftCache', () => ({
@@ -12,6 +13,7 @@ vi.mock('../../cache/draftCache', () => ({
   loadDraft,
   saveDraft,
   writeDraftShadow,
+  saveProjectCatalog,
 }));
 
 import { flushDraftSave, useDiagramStore } from '../store';

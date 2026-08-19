@@ -24,7 +24,7 @@ export interface RetryOptions {
   isRetryable?: (err: unknown) => boolean;
   baseDelayMs?: number;
   capDelayMs?: number;
-  /** Shared key used to cool down future calls after a provider rate-limit. */
+  /** When set, 429 waits use the 1–8s Retry-After cap. Other in-flight workers are not blocked. */
   cooldownKey?: string;
   cooldownMinMs?: number;
   cooldownMaxMs?: number;
@@ -44,8 +44,6 @@ const TRANSIENT_ERROR_CODES = new Set([
 
 const TRANSIENT_MESSAGE_RE =
   /\b(?:5\d\d|server had an error|internal server error|bad gateway|service unavailable|gateway timeout|temporarily unavailable|overloaded|timeout|ETIMEDOUT|ECONNRESET|fetch failed|network|socket hang up|rate limit|too many requests)/i;
-
-const cooldowns = ((globalThis as typeof globalThis & { __agentDiagramProviderCooldowns?: Map<string, number> }).__agentDiagramProviderCooldowns ??= new Map<string, number>());
 
 function statusFromMessage(message: string | undefined): number | undefined {
   if (!message) return undefined;
@@ -100,11 +98,11 @@ function rateLimitCooldownDelay(err: RetryError, fallbackDelayMs: number, opts: 
   const message = err.message ?? '';
   const isRateLimited = status === 429 || /\b(rate limit|too many requests|quota)\b/i.test(message);
   if (!isRateLimited) return null;
-  // Root Cause vs Logic: the provider-wide cooldown floor is for shared cooldown keys, not per-call retry delays.
-  // Without this guard, tests and callers that set retryAfterMs/baseDelayMs still slept for the 15s cooldown minimum.
+  // Root Cause vs Logic: a shared 15s–10min cooldown parked every worker after one 429.
+  // Only this failing request waits, and the wait is Retry-After (or jitter) capped to 1–8s.
   if (!opts.cooldownKey) return fallbackDelayMs;
-  const min = opts.cooldownMinMs ?? 15_000;
-  const max = opts.cooldownMaxMs ?? 10 * 60_000;
+  const min = opts.cooldownMinMs ?? 1_000;
+  const max = opts.cooldownMaxMs ?? 8_000;
   return Math.min(Math.max(fallbackDelayMs, min), max);
 }
 
@@ -116,14 +114,6 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
   let attempt = 0;
   for (;;) {
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (opts.cooldownKey) {
-      const until = cooldowns.get(opts.cooldownKey) ?? 0;
-      const remaining = until - Date.now();
-      if (remaining > 0) {
-        opts.onRetry?.({ attempt, delayMs: remaining, reason: 'provider cooldown' });
-        await delay(remaining, opts.signal);
-      }
-    }
     try {
       return await fn();
     } catch (err) {
@@ -137,7 +127,6 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
       const exponential = Math.min(cap, base * 2 ** (attempt - 1));
       const jittered = fromHeader ?? Math.round(exponential * (0.5 + Math.random() * 0.5));
       const cooldownDelay = rateLimitCooldownDelay(retryError, jittered, opts);
-      if (opts.cooldownKey && cooldownDelay !== null) cooldowns.set(opts.cooldownKey, Date.now() + cooldownDelay);
       const reason = status
         ? `HTTP ${status}`
         : retryError.code

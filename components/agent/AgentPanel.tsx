@@ -1,8 +1,16 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDiagramStore } from '@/lib/state/store';
+import {
+  abortGenerationRun,
+  beginGenerationRun,
+  commitGenerationResult,
+  getGenerationRun,
+  patchGenerationRun,
+  useGenerationRun,
+} from '@/lib/state/generationRuntime';
 import { ProviderConfig } from './ProviderConfig';
 import { RepoInput } from './RepoInput';
 import type { RepoSourceConfig } from '@/lib/agent/repo/repoTypes';
@@ -28,22 +36,19 @@ export function AgentPanel() {
   const setInstructionMode = useDiagramStore((s) => s.setInstructionMode);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const setMode = useDiagramStore((s) => s.setMode);
-  const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
   const setAgentStage = useDiagramStore((s) => s.setAgentStage);
   const pushLog = useDiagramStore((s) => s.pushAgentLog);
   const startAgent = useDiagramStore((s) => s.startAgent);
   const stopAgent = useDiagramStore((s) => s.stopAgent);
   const agentRunning = useDiagramStore((s) => s.agentRunning);
+  const run = useGenerationRun();
+  const singleRun = run?.kind === 'single' ? run : null;
   const router = useRouter();
 
   const [rootPath, setRootPath] = useState<string>('');
   const [ignoredFolders, setIgnoredFolders] = useState<string[]>([]);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [repoSource, setRepoSource] = useState<RepoSourceConfig>({ sourceType: 'local', repoPath: '', authMode: 'none' });
-  const [retryNotice, setRetryNotice] = useState<{ stage: string; attempt: number; delayMs: number; reason: string } | null>(null);
-  const [counters, setCounters] = useState<Record<string, number>>({});
-  const [terminalState, setTerminalState] = useState<{ status: 'failed' | 'cancelled'; message: string } | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
   const onStart = async () => {
     if (!rootPath) {
@@ -51,16 +56,14 @@ export function AgentPanel() {
       return;
     }
     const sessionId = `s-${Date.now()}`;
+    const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
     startAgent(sessionId);
-    setCounters({});
-    setRetryNotice(null);
-    setTerminalState(null);
     setInstructionMarkdown('');
     let sawResult = false;
     let sawFailure = false;
+    let commitPromise: Promise<void> | null = null;
 
-    const ac = new AbortController();
-    abortRef.current = ac;
+    const ac = beginGenerationRun({ id: sessionId, kind: 'single', projectName });
 
     try {
       const res = await fetch('/api/agent/analyze', {
@@ -89,39 +92,49 @@ export function AgentPanel() {
       if (!res.ok || !res.body) {
         const message = await readErrorMessage(res);
         sawFailure = true;
-        setTerminalState({ status: 'failed', message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message } });
         pushLog({ stage: 'init', level: 'error', message });
         return;
       }
 
       await readAgentStream(res.body, handleEvent);
+      if (commitPromise) await commitPromise;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         sawFailure = true;
-        setTerminalState({ status: 'cancelled', message: 'Cancelled' });
+        patchGenerationRun({ status: 'cancelled', terminalState: { status: 'cancelled', message: 'Cancelled' } });
         pushLog({ stage: 'init', level: 'info', message: 'Cancelled' });
       } else {
         const message = err instanceof Error ? err.message : String(err);
         sawFailure = true;
-        setTerminalState({ status: 'failed', message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message } });
         pushLog({ stage: 'init', level: 'error', message });
       }
     } finally {
       if (!sawResult && !sawFailure && !ac.signal.aborted) {
-        setTerminalState({ status: 'failed', message: 'Analysis ended before a diagram was produced.' });
+        patchGenerationRun({
+          status: 'failed',
+          terminalState: { status: 'failed', message: 'Analysis ended before a diagram was produced.' },
+        });
       }
       stopAgent();
-      abortRef.current = null;
     }
 
     function handleEvent(ev: AgentStreamEvent) {
       if (ev.type === 'stage') {
         setAgentStage(ev.stage);
-        if (ev.counters) setCounters((c) => ({ ...c, ...ev.counters }));
+        patchGenerationRun({
+          stage: ev.stage,
+          ...(ev.counters
+            ? { counters: { ...(getGenerationRun()?.counters ?? {}), ...ev.counters } }
+            : {}),
+        });
         if (ev.message)
           pushLog({ stage: ev.stage, level: 'info', message: `${ev.status}: ${ev.message}` });
       } else if (ev.type === 'retry') {
-        setRetryNotice({ stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason });
+        patchGenerationRun({
+          retryNotice: { stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason },
+        });
         pushLog({
           stage: ev.stage,
           level: 'warn',
@@ -131,25 +144,27 @@ export function AgentPanel() {
         pushLog({ stage: ev.stage, level: ev.level, message: ev.message });
       } else if (ev.type === 'error') {
         sawFailure = true;
-        setTerminalState({ status: 'failed', message: ev.message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message: ev.message } });
         pushLog({ stage: ev.stage, level: 'error', message: ev.message });
       } else if (ev.type === 'result') {
         sawResult = true;
         const instructionMarkdown = ev.instructionMarkdown ?? '';
         setInstructionMarkdown(instructionMarkdown);
-        const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
-        addGeneratedProject(projectName, ev.dsl, undefined, instructionMarkdown);
-        setMode('editor');
-        router.push('/diagram');
+        commitPromise = (async () => {
+          await commitGenerationResult({ name: projectName, dsl: ev.dsl, instructionMarkdown });
+          setMode('editor');
+          router.push('/diagram');
+        })();
       } else if (ev.type === 'done') {
         setAgentStage(null);
+        patchGenerationRun({ stage: null });
       }
     }
   };
 
-  const onCancel = () => {
-    abortRef.current?.abort();
-  };
+  const showAnimation =
+    agentRunning ||
+    Boolean(singleRun && (singleRun.status === 'running' || singleRun.terminalState));
 
   return (
     <>
@@ -203,22 +218,22 @@ export function AgentPanel() {
             )}
           </div>
           <button
-            disabled={!scan || agentRunning}
+            disabled={!scan || agentRunning || singleRun?.status === 'running'}
             onClick={onStart}
             className="rounded-md border border-accent/50 bg-accent/20 px-4 py-2 text-sm text-accent hover:bg-accent/30 disabled:opacity-50"
           >
-            {agentRunning ? 'Analyzing…' : 'Generate diagram'}
+            {agentRunning || singleRun?.status === 'running' ? 'Analyzing…' : 'Generate diagram'}
           </button>
         </div>
       </div>
 
-      {(agentRunning || terminalState) && (
+      {showAnimation && (
         <AnalysisAnimation
-          retryNotice={retryNotice}
-          counters={counters}
-          onCancel={onCancel}
-          onDismiss={() => setTerminalState(null)}
-          terminalState={terminalState}
+          retryNotice={singleRun?.retryNotice}
+          counters={singleRun?.counters ?? {}}
+          onCancel={abortGenerationRun}
+          onDismiss={() => patchGenerationRun({ terminalState: null })}
+          terminalState={singleRun?.terminalState}
           stages={[
             { id: 'validate', label: 'Validating credentials' },
             { id: 'scan', label: 'Scanning repository' },

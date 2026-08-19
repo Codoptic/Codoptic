@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { saveDraft, deleteDraft, loadDraft, writeDraftShadow } = vi.hoisted(() => ({
+const { saveDraft, deleteDraft, loadDraft, writeDraftShadow, saveProjectCatalog, loadProjectCatalog, saveGenerationRun } = vi.hoisted(() => ({
   saveDraft: vi.fn(async () => undefined),
   deleteDraft: vi.fn(async () => undefined),
   loadDraft: vi.fn(async () => null),
   writeDraftShadow: vi.fn(() => undefined),
+  saveProjectCatalog: vi.fn(async () => undefined),
+  loadProjectCatalog: vi.fn(async () => null),
+  saveGenerationRun: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../cache/draftCache', () => ({
@@ -11,6 +14,9 @@ vi.mock('../../cache/draftCache', () => ({
   loadDraft,
   saveDraft,
   writeDraftShadow,
+  saveProjectCatalog,
+  loadProjectCatalog,
+  saveGenerationRun,
 }));
 
 import { useDiagramStore, type MultiLayerOutput } from '../store';
@@ -69,6 +75,9 @@ describe('project tab loading', () => {
     deleteDraft.mockClear();
     loadDraft.mockClear();
     writeDraftShadow.mockClear();
+    saveProjectCatalog.mockClear();
+    loadProjectCatalog.mockClear();
+    saveGenerationRun.mockClear();
     installLocalStorageMock();
     writeStoredProjects([]);
     useDiagramStore.setState({
@@ -80,6 +89,7 @@ describe('project tab loading', () => {
       overrides: { nodes: {}, groups: {}, edges: {} },
       maxMode: false,
       instructionMode: false,
+      stateUpdatedAt: 0,
     });
   });
 
@@ -119,8 +129,8 @@ describe('project tab loading', () => {
     expect(state.activeLayer).toBe('overview');
   });
 
-  it('activates and renders a newly generated project atomically', () => {
-    const projectId = useDiagramStore
+  it('activates and renders a newly generated project atomically', async () => {
+    const projectId = await useDiagramStore
       .getState()
       .addGeneratedProject('Generated Repo', 'generated overview dsl', sampleMultiLayer, 'guide');
 
@@ -226,6 +236,28 @@ describe('project tab loading', () => {
     const state = useDiagramStore.getState();
     expect(state.activeLayer).toBe('Data');
     expect(state.dslText).toBe('data dsl edited');
+  });
+
+  it('does not apply an older draft over a newer generated project', async () => {
+    const projectId = await useDiagramStore
+      .getState()
+      .addGeneratedProject('Generated Repo', 'fresh dsl', sampleMultiLayer);
+    const updatedAt = useDiagramStore.getState().stateUpdatedAt;
+
+    useDiagramStore.getState().applyDraft({
+      key: projectId,
+      dslText: 'stale dsl',
+      overrides: { nodes: {}, groups: {}, edges: {} },
+      activeProjectId: projectId,
+      generatedProjects: useDiagramStore.getState().generatedProjects,
+      multiLayer: sampleMultiLayer,
+      activeLayer: 'overview',
+      instructionMarkdown: '',
+      viewport: { x: 0, y: 0, scale: 1 },
+      updatedAt: updatedAt - 1,
+    });
+
+    expect(useDiagramStore.getState().dslText).toBe('fresh dsl');
   });
 
   it('hydrates max mode from saved ui preferences', () => {

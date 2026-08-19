@@ -83,4 +83,28 @@ describe('withRetry', () => {
     setTimeout(() => ac.abort(), 30);
     await expect(withRetry(fn, { signal: ac.signal, baseDelayMs: 50 })).rejects.toThrow();
   });
+
+  it('caps shared-key 429 waits and does not block a sibling call', async () => {
+    const ac = new AbortController();
+    const notices: Array<{ delayMs: number }> = [];
+    const failing = async () => {
+      const err: Error & { status?: number; retryAfterMs?: number } = new Error('Too Many Requests');
+      err.status = 429;
+      err.retryAfterMs = 60_000;
+      throw err;
+    };
+
+    const first = withRetry(failing, {
+      cooldownKey: 'openai:test:default',
+      signal: ac.signal,
+      onRetry: (notice) => {
+        notices.push(notice);
+        ac.abort();
+      },
+    });
+
+    await expect(withRetry(async () => 'ok', { cooldownKey: 'openai:test:default' })).resolves.toBe('ok');
+    await expect(first).rejects.toThrow();
+    expect(notices[0]?.delayMs).toBe(8_000);
+  });
 });

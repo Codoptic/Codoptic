@@ -22,6 +22,8 @@ import {
   renameStoredProject,
   readActiveProjectId,
   writeActiveProjectId,
+  writeStoredProjectsDurable,
+  getProjectsUpdatedAt,
 } from './projectStorage';
 
 // Re-export so all existing imports from this module continue to work.
@@ -48,6 +50,7 @@ type DraftSnapshot = {
   activeLayer: string;
   instructionMarkdown: string;
   viewport: Viewport;
+  updatedAt?: number;
 };
 
 let _pendingDraftSnapshot: DraftSnapshot | null = null;
@@ -191,9 +194,11 @@ interface State {
   // Instruction Mode: generate a Markdown implementation guide alongside the diagram.
   instructionMode: boolean;
 
-  // Project tabs — user-generated projects saved to localStorage
+  // Project tabs — user-generated projects saved to IndexedDB + localStorage cache
   generatedProjects: StoredProject[];
   activeProjectId: string | null;
+  /** Newest local mutation; hydration must not apply older drafts over this. */
+  stateUpdatedAt: number;
 
   // Multi-select: additional selected items beyond the primary `selection`.
   // Each entry mirrors the same { id, kind } shape so the canvas and scene
@@ -249,7 +254,7 @@ interface State {
     dsl: string,
     multiLayer?: MultiLayerOutput,
     instructionMarkdown?: string,
-  ) => string;
+  ) => Promise<string>;
   openProject: (project: {
     id: string;
     dsl: string;
@@ -293,21 +298,27 @@ export const useDiagramStore = create<State>()(
       instructionMode: false,
       generatedProjects: [],
       activeProjectId: null,
+      stateUpdatedAt: 0,
       multiSelection: [],
       applyDraft: (draft) => {
-        // Root Cause vs Logic: localStorage can lag or fail independently of
-        // IndexedDB, so a recovered draft must win during hydration instead of
-        // only filling empty fields. When the draft also carries tab/project
-        // state, we restore that too so the working set survives a refresh.
+        // Root Cause vs Logic: remount hydration used to overwrite a just-generated
+        // project with an older IndexedDB draft. Only apply when the draft is newer.
         set((state) => {
+          const draftAt = draft.updatedAt ?? 0;
+          if (state.stateUpdatedAt > 0 && draftAt > 0 && draftAt <= state.stateUpdatedAt) {
+            return {};
+          }
           const hasProjectState =
             draft.activeProjectId !== null && draft.generatedProjects.length > 0;
+
+          const nextUpdatedAt = Math.max(state.stateUpdatedAt, draftAt);
 
           if (!hasProjectState) {
             return {
               dslText: draft.dslText,
               overrides: draft.overrides,
               viewport: draft.viewport,
+              stateUpdatedAt: nextUpdatedAt,
             };
           }
 
@@ -338,6 +349,7 @@ export const useDiagramStore = create<State>()(
             multiLayer: updatedProject?.multiLayer ?? multiLayer,
             activeLayer: restoredActiveLayer,
             instructionMarkdown: draft.instructionMarkdown,
+            stateUpdatedAt: nextUpdatedAt,
           };
         });
       },
@@ -362,6 +374,7 @@ export const useDiagramStore = create<State>()(
       setDsl: (text) => {
         writeUiPreference('dslText', text);
         set((state) => {
+          const now = Date.now();
           if (state.activeProjectId) {
             let multiLayer = state.multiLayer;
             let didUpdateProject = false;
@@ -378,9 +391,10 @@ export const useDiagramStore = create<State>()(
               dslText: text,
               generatedProjects,
               multiLayer,
+              stateUpdatedAt: now,
             };
           }
-          return { dslText: text };
+          return { dslText: text, stateUpdatedAt: now };
         });
         // Root Cause vs Logic: a fast refresh can beat the final Monaco change
         // event, so we queue the post-update snapshot immediately instead of
@@ -475,6 +489,7 @@ export const useDiagramStore = create<State>()(
                 },
               }
             : {}),
+          stateUpdatedAt: Math.max(state.stateUpdatedAt, getProjectsUpdatedAt()),
         }));
       },
       startAgent: (sessionId) =>
@@ -570,12 +585,13 @@ export const useDiagramStore = create<State>()(
         writeUiPreference('instructionMode', enabled);
         set({ instructionMode: enabled });
       },
-      addGeneratedProject: (name, dsl, multiLayer?, instructionMarkdown?) => {
+      addGeneratedProject: async (name, dsl, multiLayer?, instructionMarkdown?) => {
         const project = addStoredProject(name, dsl, multiLayer, instructionMarkdown);
         writeActiveProjectId(project.id);
         writeUiPreference('dslText', dsl);
         writeUiPreference('activeLayer', 'overview');
         writeUiPreference('instructionMarkdown', instructionMarkdown ?? '');
+        const now = Date.now();
         set((state) => ({
           dslText: dsl,
           generatedProjects: [project, ...state.generatedProjects],
@@ -584,8 +600,11 @@ export const useDiagramStore = create<State>()(
           multiLayer: multiLayer ?? null,
           activeLayer: 'overview',
           overrides: { nodes: {}, groups: {}, edges: {} },
+          stateUpdatedAt: now,
         }));
         scheduleDraftSave();
+        await writeStoredProjectsDurable(get().generatedProjects);
+        await flushDraftSave();
         return project.id;
       },
       openProject: (project) => {
@@ -647,3 +666,13 @@ export const useDiagramStore = create<State>()(
     },
   ),
 );
+
+export function storeHasFreshProject(): boolean {
+  const state = useDiagramStore.getState();
+  return Boolean(
+    state.stateUpdatedAt > 0 &&
+      state.activeProjectId &&
+      state.dslText &&
+      state.generatedProjects.some((project) => project.id === state.activeProjectId),
+  );
+}

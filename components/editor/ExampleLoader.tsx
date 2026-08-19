@@ -88,7 +88,7 @@ export function ExampleLoader() {
   };
 
   const handleAddProject = () => {
-    addGeneratedProject('project1', dslText);
+    void addGeneratedProject('project1', dslText);
   };
 
   const pendingDeleteProject = generatedProjects.find((p) => p.id === pendingDeleteId);

@@ -19,6 +19,8 @@ export function MonacoPanel() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const monacoRef = useRef<any>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const mountedRef = useRef(false);
+  const ignoreEmptyMountChange = useRef(true);
 
   // Root Cause vs Logic: the IR tab was eagerly stringifying the entire compiled diagram on every DSL change, even while the DSL tab was active. Large generated diagrams could spend most of the render budget serializing JSON that the user wasn't looking at yet, which made the editor feel frozen. Only materialize the IR payload when the IR tab is actually selected.
   const irText = useMemo(
@@ -45,6 +47,7 @@ export function MonacoPanel() {
   const onMount: OnMount = (editor, monaco) => {
     monacoRef.current = monaco;
     editorRef.current = editor as Monaco.editor.IStandaloneCodeEditor;
+    mountedRef.current = true;
     registerDslLanguage(monaco);
     monaco.editor.setTheme(theme === 'light' ? 'codoptic-light' : 'codoptic-dark');
   };
@@ -123,7 +126,14 @@ export function MonacoPanel() {
             theme={theme === 'light' ? 'codoptic-light' : 'codoptic-dark'}
             language="codoptic"
             value={dsl}
-            onChange={(v) => setDsl(v ?? '')}
+            onChange={(v) => {
+              if (!mountedRef.current) return;
+              if (ignoreEmptyMountChange.current) {
+                ignoreEmptyMountChange.current = false;
+                if ((v === undefined || v === '') && useDiagramStore.getState().dslText) return;
+              }
+              setDsl(v ?? '');
+            }}
             onMount={onMount}
             options={{
               minimap: { enabled: false },

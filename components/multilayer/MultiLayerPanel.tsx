@@ -1,8 +1,16 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDiagramStore, type MultiLayerOutput } from '@/lib/state/store';
+import {
+  abortGenerationRun,
+  beginGenerationRun,
+  commitGenerationResult,
+  getGenerationRun,
+  patchGenerationRun,
+  useGenerationRun,
+} from '@/lib/state/generationRuntime';
 import { ProviderConfig } from '@/components/agent/ProviderConfig';
 import { RepoInput } from '@/components/agent/RepoInput';
 import type { RepoSourceConfig } from '@/lib/agent/repo/repoTypes';
@@ -21,7 +29,6 @@ export function MultiLayerPanel() {
   const setInstructionMode = useDiagramStore((s) => s.setInstructionMode);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const setMode = useDiagramStore((s) => s.setMode);
-  const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
   const setMultiLayer = useDiagramStore((s) => s.setMultiLayer);
   const setActiveLayer = useDiagramStore((s) => s.setActiveLayer);
   const setAgentStage = useDiagramStore((s) => s.setAgentStage);
@@ -30,16 +37,14 @@ export function MultiLayerPanel() {
   const stopAgent = useDiagramStore((s) => s.stopAgent);
   const agentRunning = useDiagramStore((s) => s.agentRunning);
   const clearOverrides = useDiagramStore((s) => s.clearOverrides);
+  const run = useGenerationRun();
+  const multiRun = run?.kind === 'multilayer' ? run : null;
   const router = useRouter();
 
   const [rootPath, setRootPath] = useState('');
   const [ignoredFolders, setIgnoredFolders] = useState<string[]>([]);
   const [scanInfo, setScanInfo] = useState<{ resolved: string; fileCount: number } | null>(null);
   const [repoSource, setRepoSource] = useState<RepoSourceConfig>({ sourceType: 'local', repoPath: '', authMode: 'none' });
-  const [retryNotice, setRetryNotice] = useState<{ stage: string; attempt: number; delayMs: number; reason: string } | null>(null);
-  const [counters, setCounters] = useState<Record<string, number>>({});
-  const [terminalState, setTerminalState] = useState<{ status: 'failed' | 'cancelled'; message: string } | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
   const onStart = async () => {
     if (!rootPath) {
@@ -47,17 +52,15 @@ export function MultiLayerPanel() {
       return;
     }
     const sessionId = `ml-${Date.now()}`;
+    const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
     startAgent(sessionId);
-    setCounters({});
-    setRetryNotice(null);
-    setTerminalState(null);
     setInstructionMarkdown('');
     setMultiLayer(null);
     let sawResult = false;
     let sawFailure = false;
+    let commitPromise: Promise<void> | null = null;
 
-    const ac = new AbortController();
-    abortRef.current = ac;
+    const ac = beginGenerationRun({ id: sessionId, kind: 'multilayer', projectName });
 
     try {
       const res = await fetch('/api/agent/multilayer', {
@@ -84,37 +87,47 @@ export function MultiLayerPanel() {
       if (!res.ok || !res.body) {
         const message = await readErrorMessage(res);
         sawFailure = true;
-        setTerminalState({ status: 'failed', message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message } });
         pushLog({ stage: 'init', level: 'error', message });
         return;
       }
       await readAgentStream(res.body, handleEvent);
+      if (commitPromise) await commitPromise;
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         sawFailure = true;
-        setTerminalState({ status: 'cancelled', message: 'Cancelled' });
+        patchGenerationRun({ status: 'cancelled', terminalState: { status: 'cancelled', message: 'Cancelled' } });
         pushLog({ stage: 'init', level: 'info', message: 'Cancelled' });
       } else {
         const message = err instanceof Error ? err.message : String(err);
         sawFailure = true;
-        setTerminalState({ status: 'failed', message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message } });
         pushLog({ stage: 'init', level: 'error', message });
       }
     } finally {
       if (!sawResult && !sawFailure && !ac.signal.aborted) {
-        setTerminalState({ status: 'failed', message: 'Analysis ended before layered diagrams were produced.' });
+        patchGenerationRun({
+          status: 'failed',
+          terminalState: { status: 'failed', message: 'Analysis ended before layered diagrams were produced.' },
+        });
       }
       stopAgent();
-      abortRef.current = null;
     }
 
     function handleEvent(ev: AgentStreamEvent) {
       if (ev.type === 'stage') {
         setAgentStage(ev.stage);
-        if (ev.counters) setCounters((c) => ({ ...c, ...ev.counters }));
+        patchGenerationRun({
+          stage: ev.stage,
+          ...(ev.counters
+            ? { counters: { ...(getGenerationRun()?.counters ?? {}), ...ev.counters } }
+            : {}),
+        });
         if (ev.message) pushLog({ stage: ev.stage, level: 'info', message: `${ev.status}: ${ev.message}` });
       } else if (ev.type === 'retry') {
-        setRetryNotice({ stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason });
+        patchGenerationRun({
+          retryNotice: { stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason },
+        });
         pushLog({
           stage: ev.stage,
           level: 'warn',
@@ -124,7 +137,7 @@ export function MultiLayerPanel() {
         pushLog({ stage: ev.stage, level: ev.level, message: ev.message });
       } else if (ev.type === 'error') {
         sawFailure = true;
-        setTerminalState({ status: 'failed', message: ev.message });
+        patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message: ev.message } });
         pushLog({ stage: ev.stage, level: 'error', message: ev.message });
       } else if (ev.type === 'result-multilayer') {
         sawResult = true;
@@ -134,17 +147,26 @@ export function MultiLayerPanel() {
         setMultiLayer(out);
         clearOverrides();
         setActiveLayer('overview');
-        const projectName = rootPath.split('/').filter(Boolean).pop() || 'diagram';
-        addGeneratedProject(projectName, out.overview.dsl, out, instructionMarkdown);
-        setMode('editor');
-        router.push('/diagram');
+        commitPromise = (async () => {
+          await commitGenerationResult({
+            name: projectName,
+            dsl: out.overview.dsl,
+            multiLayer: out,
+            instructionMarkdown,
+          });
+          setMode('editor');
+          router.push('/diagram');
+        })();
       } else if (ev.type === 'done') {
         setAgentStage(null);
+        patchGenerationRun({ stage: null });
       }
     }
   };
 
-  const onCancel = () => abortRef.current?.abort();
+  const showAnimation =
+    agentRunning ||
+    Boolean(multiRun && (multiRun.status === 'running' || multiRun.terminalState));
 
   return (
     <>
@@ -208,22 +230,22 @@ export function MultiLayerPanel() {
             )}
           </div>
           <button
-            disabled={!scanInfo || agentRunning}
+            disabled={!scanInfo || agentRunning || multiRun?.status === 'running'}
             onClick={onStart}
             className="rounded-md border border-accent/50 bg-accent/20 px-4 py-2 text-sm text-accent hover:bg-accent/30 disabled:opacity-50"
           >
-            {agentRunning ? 'Analyzing…' : 'Generate layered diagrams'}
+            {agentRunning || multiRun?.status === 'running' ? 'Analyzing…' : 'Generate layered diagrams'}
           </button>
         </div>
       </div>
 
-      {(agentRunning || terminalState) && (
+      {showAnimation && (
         <AnalysisAnimation
-          retryNotice={retryNotice}
-          counters={counters}
-          onCancel={onCancel}
-          onDismiss={() => setTerminalState(null)}
-          terminalState={terminalState}
+          retryNotice={multiRun?.retryNotice}
+          counters={multiRun?.counters ?? {}}
+          onCancel={abortGenerationRun}
+          onDismiss={() => patchGenerationRun({ terminalState: null })}
+          terminalState={multiRun?.terminalState}
           stages={[
             { id: 'validate', label: 'Validating credentials' },
             { id: 'scan', label: 'Scanning repository' },

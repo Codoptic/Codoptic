@@ -2,6 +2,7 @@
 
 const PROJECTS_KEY = 'codoptic:projects:v1';
 const ACTIVE_PROJECT_ID_KEY = 'codoptic:active-project:v1';
+const PROJECTS_UPDATED_AT_KEY = 'codoptic:projects-updated-at:v1';
 
 export interface LayerDiagram {
   name: string;
@@ -78,30 +79,100 @@ function canUseLocalStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 }
 
-export function readStoredProjects(): StoredProject[] {
+let memoryProjects: StoredProject[] | null = null;
+let memoryUpdatedAt = 0;
+
+function sanitizeProjects(value: unknown): StoredProject[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (p): p is StoredProject =>
+      typeof p === 'object' &&
+      p !== null &&
+      typeof p.id === 'string' &&
+      typeof p.name === 'string' &&
+      typeof p.dsl === 'string' &&
+      typeof p.createdAt === 'number',
+  );
+}
+
+function readLocalStorageProjects(): StoredProject[] {
   if (!canUseLocalStorage()) return [];
   try {
     const raw = window.localStorage.getItem(PROJECTS_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p): p is StoredProject =>
-        typeof p === 'object' &&
-        p !== null &&
-        typeof p.id === 'string' &&
-        typeof p.name === 'string' &&
-        typeof p.dsl === 'string' &&
-        typeof p.createdAt === 'number',
-    );
+    return sanitizeProjects(JSON.parse(raw));
   } catch {
     return [];
   }
 }
 
-export function writeStoredProjects(projects: StoredProject[]): void {
+function tryWriteLocalStorage(projects: StoredProject[], updatedAt: number): void {
   if (!canUseLocalStorage()) return;
-  window.localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+  try {
+    window.localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+    window.localStorage.setItem(PROJECTS_UPDATED_AT_KEY, String(updatedAt));
+  } catch {
+    // QuotaExceededError — IndexedDB remains the durable catalog.
+  }
+}
+
+function persistCatalog(projects: StoredProject[], updatedAt: number): void {
+  const activeProjectId = readActiveProjectId();
+  void import('../cache/draftCache')
+    .then((mod) =>
+      mod.saveProjectCatalog({
+        projects,
+        activeProjectId,
+        updatedAt,
+      }),
+    )
+    .catch(() => undefined);
+}
+
+export function getProjectsUpdatedAt(): number {
+  if (memoryUpdatedAt) return memoryUpdatedAt;
+  if (!canUseLocalStorage()) return 0;
+  const raw = window.localStorage.getItem(PROJECTS_UPDATED_AT_KEY);
+  const parsed = raw ? Number(raw) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function hydrateProjectsFromCatalog(projects: StoredProject[], updatedAt: number): void {
+  memoryProjects = projects;
+  memoryUpdatedAt = updatedAt;
+  tryWriteLocalStorage(projects, updatedAt);
+}
+
+export function readStoredProjects(): StoredProject[] {
+  if (memoryProjects) return memoryProjects;
+  const stored = readLocalStorageProjects();
+  memoryProjects = stored;
+  return stored;
+}
+
+export function writeStoredProjects(projects: StoredProject[]): void {
+  const updatedAt = Date.now();
+  memoryProjects = projects;
+  memoryUpdatedAt = updatedAt;
+  tryWriteLocalStorage(projects, updatedAt);
+  persistCatalog(projects, updatedAt);
+}
+
+export async function writeStoredProjectsDurable(projects: StoredProject[]): Promise<void> {
+  const updatedAt = Date.now();
+  memoryProjects = projects;
+  memoryUpdatedAt = updatedAt;
+  tryWriteLocalStorage(projects, updatedAt);
+  try {
+    const { saveProjectCatalog } = await import('../cache/draftCache');
+    await saveProjectCatalog({
+      projects,
+      activeProjectId: readActiveProjectId(),
+      updatedAt,
+    });
+  } catch {
+    // IndexedDB may be unavailable in tests or private mode.
+  }
 }
 
 function getNextAutoProjectName(projects: StoredProject[]): string {

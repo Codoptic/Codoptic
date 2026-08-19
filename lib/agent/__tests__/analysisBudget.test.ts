@@ -45,6 +45,14 @@ describe('analysis budget', () => {
     expect(createAnalysisBudget(2001).tier).toBe(4);
     expect(createAnalysisBudget(5000).tier).toBe(4);
     expect(createAnalysisBudget(5001).tier).toBe(5);
+    expect(createAnalysisBudget(10).initialConcurrency).toBe(8);
+    expect(createAnalysisBudget(10).maxConcurrency).toBe(12);
+    expect(createAnalysisBudget(1500).initialConcurrency).toBe(8);
+    expect(createAnalysisBudget(1500).maxConcurrency).toBe(12);
+    expect(createAnalysisBudget(3000).initialConcurrency).toBe(6);
+    expect(createAnalysisBudget(3000).maxConcurrency).toBe(10);
+    expect(createAnalysisBudget(6000).initialConcurrency).toBe(6);
+    expect(createAnalysisBudget(6000).maxConcurrency).toBe(10);
   });
 
   it('uses signature and structural profiles for a 1001+ file repo instead of deep-reading everything', () => {

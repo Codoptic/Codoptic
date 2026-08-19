@@ -17,8 +17,11 @@ import type { Overrides, Viewport } from '../state/store';
 import type { MultiLayerOutput, StoredProject } from '../state/projectStorage';
 
 const DB_NAME = 'diagram-drafts';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const DRAFTS_STORE = 'drafts';
+const PROJECTS_STORE = 'projects';
+const RUNS_STORE = 'runs';
+const CATALOG_ID = 'catalog';
 
 export interface EditorDraft {
   /** Active project ID, or 'scratch' when no project tab is open. */
@@ -38,6 +41,35 @@ export interface EditorDraft {
   /** Viewport so a refresh can restore the visible diagram region. */
   viewport: Viewport;
   /** Unix milliseconds — used to detect which source is more recent. */
+  updatedAt: number;
+}
+
+export interface ProjectCatalog {
+  id: typeof CATALOG_ID;
+  projects: StoredProject[];
+  activeProjectId: string | null;
+  updatedAt: number;
+}
+
+export type GenerationKind = 'single' | 'multilayer' | 'planner';
+export type GenerationStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface GenerationRunRecord {
+  id: string;
+  kind: GenerationKind;
+  status: GenerationStatus;
+  projectName: string;
+  stage: string | null;
+  counters: Record<string, number>;
+  logs: Array<{ ts: number; stage: string; message: string; level: 'info' | 'warn' | 'error' }>;
+  retryNotice: { stage: string; attempt: number; delayMs: number; reason: string } | null;
+  terminalState: { status: 'failed' | 'cancelled'; message: string } | null;
+  result?: {
+    dsl: string;
+    multiLayer?: MultiLayerOutput;
+    instructionMarkdown?: string;
+  };
+  committedProjectId?: string;
   updatedAt: number;
 }
 
@@ -115,7 +147,11 @@ function openDB(): Promise<IDBDatabase> {
   if (!canUseIndexedDB()) {
     return Promise.reject(new Error('[DraftCache] IndexedDB not available'));
   }
-  if (_dbConn) return Promise.resolve(_dbConn);
+  if (_dbConn) {
+    if (_dbConn.version >= DB_VERSION) return Promise.resolve(_dbConn);
+    _dbConn.close();
+    _dbConn = null;
+  }
   if (_dbOpenPromise) return _dbOpenPromise;
 
   _dbOpenPromise = new Promise<IDBDatabase>((resolve, reject) => {
@@ -125,6 +161,12 @@ function openDB(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(DRAFTS_STORE)) {
         db.createObjectStore(DRAFTS_STORE, { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains(PROJECTS_STORE)) {
+        db.createObjectStore(PROJECTS_STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(RUNS_STORE)) {
+        db.createObjectStore(RUNS_STORE, { keyPath: 'id' });
       }
     };
 
@@ -219,5 +261,91 @@ export async function deleteDraft(key: string): Promise<void> {
     });
   } catch (err) {
     console.warn('[DraftCache] Failed to delete draft:', err);
+  }
+}
+
+function putRecord(storeName: string, value: unknown): Promise<void> {
+  return openDB().then(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.objectStore(storeName).put(value);
+      }),
+  );
+}
+
+function getRecord<T>(storeName: string, key: IDBValidKey): Promise<T | null> {
+  return openDB().then(
+    (db) =>
+      new Promise<T | null>((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readonly');
+        const req = tx.objectStore(storeName).get(key);
+        req.onsuccess = () => resolve((req.result as T | undefined) ?? null);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
+function getAllRecords<T>(storeName: string): Promise<T[]> {
+  return openDB().then(
+    (db) =>
+      new Promise<T[]>((resolve, reject) => {
+        const tx = db.transaction([storeName], 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve((req.result as T[]) ?? []);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+
+export async function saveProjectCatalog(catalog: Omit<ProjectCatalog, 'id'>): Promise<void> {
+  try {
+    await putRecord(PROJECTS_STORE, { id: CATALOG_ID, ...catalog });
+  } catch (err) {
+    console.warn('[DraftCache] Failed to save project catalog:', err);
+  }
+}
+
+export async function loadProjectCatalog(): Promise<ProjectCatalog | null> {
+  try {
+    return await getRecord<ProjectCatalog>(PROJECTS_STORE, CATALOG_ID);
+  } catch (err) {
+    console.warn('[DraftCache] Failed to load project catalog:', err);
+    return null;
+  }
+}
+
+export async function saveGenerationRun(run: GenerationRunRecord): Promise<void> {
+  try {
+    await putRecord(RUNS_STORE, run);
+  } catch (err) {
+    console.warn('[DraftCache] Failed to save generation run:', err);
+  }
+}
+
+export async function loadLatestGenerationRun(): Promise<GenerationRunRecord | null> {
+  try {
+    const runs = await getAllRecords<GenerationRunRecord>(RUNS_STORE);
+    if (!runs.length) return null;
+    return runs.reduce((latest, run) => (run.updatedAt > latest.updatedAt ? run : latest));
+  } catch (err) {
+    console.warn('[DraftCache] Failed to list generation runs:', err);
+    return null;
+  }
+}
+
+export async function loadUncommittedCompletedRun(): Promise<GenerationRunRecord | null> {
+  try {
+    const runs = await getAllRecords<GenerationRunRecord>(RUNS_STORE);
+    const pending = runs.filter(
+      (run) => run.status === 'completed' && !run.committedProjectId && Boolean(run.result?.dsl),
+    );
+    if (!pending.length) return null;
+    return pending.reduce((latest, run) => (run.updatedAt > latest.updatedAt ? run : latest));
+  } catch (err) {
+    console.warn('[DraftCache] Failed to load uncommitted generation run:', err);
+    return null;
   }
 }

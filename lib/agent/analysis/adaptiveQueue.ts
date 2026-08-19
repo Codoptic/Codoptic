@@ -22,23 +22,8 @@ export interface AdaptiveQueueOptions {
   onEvent?: (event: AdaptiveQueueEvent) => void;
 }
 
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new DOMException('Aborted', 'AbortError'));
-      },
-      { once: true },
-    );
-  });
-}
+const RECOVER_AFTER_SUCCESSES = 2;
+const RATE_LIMIT_SPACING_CAP_MS = 2_000;
 
 function isRateLimitNotice(notice: RetryNotice): boolean {
   return /\b(?:429|rate limit|too many requests)\b/i.test(notice.reason);
@@ -52,7 +37,6 @@ export async function adaptiveMap<T, R>(
   const minConcurrency = opts.minConcurrency ?? 1;
   const maxConcurrency = Math.max(minConcurrency, opts.maxConcurrency ?? opts.initialConcurrency);
   let currentConcurrency = Math.min(Math.max(opts.initialConcurrency, minConcurrency), maxConcurrency);
-  let cooldownUntil = 0;
   let nextIndex = 0;
   let active = 0;
   let completed = 0;
@@ -60,8 +44,8 @@ export async function adaptiveMap<T, R>(
   let settled = false;
   const results: R[] = new Array(items.length);
 
-  // Motivation vs Logic: provider retry handles the failing request, but large repo summarization
-  // needs a shared pressure valve so other workers stop launching while the provider cools down.
+  // Motivation vs Logic: drop width on 429 but keep launching at the reduced cap.
+  // A full-queue sleep stacked on the provider retry made large-repo analysis look idle.
   return new Promise<R[]>((resolve, reject) => {
     const fail = (err: unknown): void => {
       if (settled) return;
@@ -71,7 +55,7 @@ export async function adaptiveMap<T, R>(
 
     const maybeRecover = (): void => {
       if (currentConcurrency >= maxConcurrency) return;
-      if (successesSinceLimit < Math.max(2, currentConcurrency * 2)) return;
+      if (successesSinceLimit < RECOVER_AFTER_SUCCESSES) return;
       currentConcurrency++;
       successesSinceLimit = 0;
       opts.onEvent?.({ kind: 'recover', concurrency: currentConcurrency });
@@ -89,12 +73,6 @@ export async function adaptiveMap<T, R>(
         return;
       }
 
-      const waitMs = Math.max(0, cooldownUntil - Date.now());
-      if (waitMs > 0 && active < currentConcurrency && nextIndex < items.length) {
-        delay(waitMs, opts.signal).then(pump, fail);
-        return;
-      }
-
       while (active < currentConcurrency && nextIndex < items.length) {
         const index = nextIndex++;
         const item = items[index]!;
@@ -104,16 +82,13 @@ export async function adaptiveMap<T, R>(
           onRetry: (notice) => {
             opts.onRetry?.(notice);
             if (!isRateLimitNotice(notice)) return;
-            const nextConcurrency = Math.max(minConcurrency, Math.floor(currentConcurrency / 2));
-            currentConcurrency = Math.min(currentConcurrency - 1, nextConcurrency);
-            if (currentConcurrency < minConcurrency) currentConcurrency = minConcurrency;
-            const cooldownMs = Math.max(1000, Math.min(90_000, notice.delayMs + 1000));
-            cooldownUntil = Math.max(cooldownUntil, Date.now() + cooldownMs);
+            currentConcurrency = Math.max(minConcurrency, currentConcurrency - 1);
             successesSinceLimit = 0;
+            const spacingMs = Math.max(0, Math.min(RATE_LIMIT_SPACING_CAP_MS, notice.delayMs));
             opts.onEvent?.({
               kind: 'rate-limit',
               concurrency: currentConcurrency,
-              delayMs: cooldownMs,
+              delayMs: spacingMs,
               reason: notice.reason,
             });
           },

@@ -15,6 +15,7 @@ export interface AnalysisBudget {
   signatureLimit: number;
   plannerSummaryLimit: number;
   initialConcurrency: number;
+  maxConcurrency: number;
   chunkTokens: number;
   modeNote: string;
 }
@@ -83,7 +84,8 @@ export function createAnalysisBudget(relevantFileCount: number): AnalysisBudget 
         deepLimit: relevantFileCount,
         signatureLimit: 0,
         plannerSummaryLimit: 500,
-        initialConcurrency: 4,
+        initialConcurrency: 8,
+        maxConcurrency: 12,
         chunkTokens: 2200,
         modeNote: 'Deep read all selected files.',
       };
@@ -95,7 +97,8 @@ export function createAnalysisBudget(relevantFileCount: number): AnalysisBudget 
         deepLimit: relevantFileCount,
         signatureLimit: 0,
         plannerSummaryLimit: 420,
-        initialConcurrency: 4,
+        initialConcurrency: 8,
+        maxConcurrency: 12,
         chunkTokens: 2000,
         modeNote: 'Deep read selected files while compressing boilerplate and CRUD.',
       };
@@ -107,7 +110,8 @@ export function createAnalysisBudget(relevantFileCount: number): AnalysisBudget 
         deepLimit: 320,
         signatureLimit: 900,
         plannerSummaryLimit: 160,
-        initialConcurrency: 3,
+        initialConcurrency: 8,
+        maxConcurrency: 12,
         chunkTokens: 1800,
         modeNote: 'Deep read core logic, routes, state, schemas, and central files; profile helpers by signature.',
       };
@@ -119,7 +123,8 @@ export function createAnalysisBudget(relevantFileCount: number): AnalysisBudget 
         deepLimit: 120,
         signatureLimit: 1200,
         plannerSummaryLimit: 90,
-        initialConcurrency: 2,
+        initialConcurrency: 6,
+        maxConcurrency: 10,
         chunkTokens: 1600,
         modeNote: 'Rely on signatures, interfaces, import graph, and module rollups; deep read only critical files.',
       };
@@ -131,7 +136,8 @@ export function createAnalysisBudget(relevantFileCount: number): AnalysisBudget 
         deepLimit: 0,
         signatureLimit: 700,
         plannerSummaryLimit: 40,
-        initialConcurrency: 2,
+        initialConcurrency: 6,
+        maxConcurrency: 10,
         chunkTokens: 1400,
         modeNote: 'Map boundaries, entrypoints, models, and module rollups; bypass granular implementation details.',
       };

@@ -4,6 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { BookOpenText, Layers3, Sparkles, SquareIcon } from 'lucide-react';
 import { useDiagramStore, type MultiLayerOutput } from '@/lib/state/store';
+import {
+  abortGenerationRun,
+  beginGenerationRun,
+  commitGenerationResult,
+  getGenerationRun,
+  patchGenerationRun,
+  useGenerationRun,
+} from '@/lib/state/generationRuntime';
 import { ProviderConfig } from './ProviderConfig';
 import { AnalysisAnimation } from './AnalysisAnimation';
 import { readAgentStream, readErrorMessage, type AgentStreamEvent } from './streamEvents';
@@ -83,7 +91,8 @@ export function CustomPromptPanel() {
   const setActiveLayer = useDiagramStore((s) => s.setActiveLayer);
   const setInstructionMarkdown = useDiagramStore((s) => s.setInstructionMarkdown);
   const clearOverrides = useDiagramStore((s) => s.clearOverrides);
-  const addGeneratedProject = useDiagramStore((s) => s.addGeneratedProject);
+  const run = useGenerationRun();
+  const plannerRun = run?.kind === 'planner' ? run : null;
   const renameGeneratedProject = useDiagramStore((s) => s.renameGeneratedProject);
   const setAgentStage = useDiagramStore((s) => s.setAgentStage);
   const pushLog = useDiagramStore((s) => s.pushAgentLog);
@@ -127,6 +136,10 @@ export function CustomPromptPanel() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (plannerRun?.status === 'running') setStep('generating');
+  }, [plannerRun?.status]);
 
   // Persist state whenever prompt/step/clarify/answers change
   useEffect(() => {
@@ -291,8 +304,7 @@ export function CustomPromptPanel() {
 
     let sawResult = false;
     let sawFailure = false;
-    const ac = new AbortController();
-    abortRef.current = ac;
+    let commitPromise: Promise<string | null> | null = null;
 
     const apiEndpoint = isMulti ? '/api/agent/custom-multilayer' : '/api/agent/custom';
 
@@ -318,6 +330,8 @@ export function CustomPromptPanel() {
       provider.provider === 'local' ? (provider.localContextLength ?? 4096) : undefined;
 
     const projectName = extractFallbackName(prompt, 2);
+    const ac = beginGenerationRun({ id: sessionId, kind: 'planner', projectName });
+    abortRef.current = ac;
 
     try {
       const res = await fetch(apiEndpoint, {
@@ -351,23 +365,36 @@ export function CustomPromptPanel() {
         if (ev.type === 'stage') {
           setAgentStage(ev.stage);
           if (ev.counters) setCounters((c) => ({ ...c, ...ev.counters }));
+          patchGenerationRun({
+            stage: ev.stage,
+            ...(ev.counters
+              ? { counters: { ...(getGenerationRun()?.counters ?? {}), ...ev.counters } }
+              : {}),
+          });
           if (ev.message) pushLog({ stage: ev.stage, level: 'info', message: `${ev.status}: ${ev.message}` });
         } else if (ev.type === 'retry') {
           setRetryNotice({ stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason });
+          patchGenerationRun({
+            retryNotice: { stage: ev.stage, attempt: ev.attempt, delayMs: ev.delayMs, reason: ev.reason },
+          });
           pushLog({ stage: ev.stage, level: 'warn', message: `retry #${ev.attempt} in ${Math.round(ev.delayMs / 1000)}s — ${ev.reason}` });
         } else if (ev.type === 'log') {
           pushLog({ stage: ev.stage, level: ev.level, message: ev.message });
         } else if (ev.type === 'error') {
           sawFailure = true;
           setTerminalState({ status: 'failed', message: ev.message });
+          patchGenerationRun({ status: 'failed', terminalState: { status: 'failed', message: ev.message } });
           pushLog({ stage: ev.stage, level: 'error', message: ev.message });
         } else if (ev.type === 'result') {
           sawResult = true;
           const instructionMarkdown = ev.instructionMarkdown ?? '';
           setInstructionMarkdown(instructionMarkdown);
-          createdProjectId = addGeneratedProject(projectName, ev.dsl, undefined, instructionMarkdown);
-          setMode('editor');
-          router.push('/diagram');
+          commitPromise = (async () => {
+            const id = await commitGenerationResult({ name: projectName, dsl: ev.dsl, instructionMarkdown });
+            setMode('editor');
+            router.push('/diagram');
+            return id;
+          })();
         } else if (ev.type === 'result-multilayer') {
           sawResult = true;
           const instructionMarkdown = ev.instructionMarkdown ?? '';
@@ -376,13 +403,24 @@ export function CustomPromptPanel() {
           setMultiLayer(out);
           clearOverrides();
           setActiveLayer('overview');
-          createdProjectId = addGeneratedProject(projectName, out.overview.dsl, out, instructionMarkdown);
-          setMode('editor');
-          router.push('/diagram');
+          commitPromise = (async () => {
+            const id = await commitGenerationResult({
+              name: projectName,
+              dsl: out.overview.dsl,
+              multiLayer: out,
+              instructionMarkdown,
+            });
+            setMode('editor');
+            router.push('/diagram');
+            return id;
+          })();
         } else if (ev.type === 'done') {
           setAgentStage(null);
+          patchGenerationRun({ stage: null });
         }
       });
+
+      if (commitPromise) createdProjectId = await commitPromise;
 
       // The project is saved as soon as the diagram arrives. Naming is a best-effort follow-up
       // so an optional title call cannot block rendering or tab creation.
@@ -431,7 +469,10 @@ export function CustomPromptPanel() {
     }
   };
 
-  const onCancel = () => abortRef.current?.abort();
+  const onCancel = () => {
+    abortRef.current?.abort();
+    abortGenerationRun();
+  };
 
   // -------------------------------------------------------------------------
   // Answer helpers
@@ -703,7 +744,7 @@ export function CustomPromptPanel() {
         </div>
       </div>
 
-      {(agentRunning || terminalState) && (
+      {(agentRunning || terminalState || plannerRun?.status === 'running' || plannerRun?.terminalState) && (
         <AnalysisAnimation
           retryNotice={retryNotice}
           counters={counters}

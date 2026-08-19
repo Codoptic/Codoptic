@@ -11,7 +11,7 @@
  *
  * Reuses the same scan / docs / import-graph / summarize stages as the
  * single-pipeline mode, then calls `identifyLayers` once and `generatePlan`
- * once per layer (concurrently with p-limit(2)).
+ * once per layer (concurrently with p-limit(6)).
  */
 
 import pLimit from 'p-limit';
@@ -294,7 +294,7 @@ export async function runMultiLayerPipeline(
 
     // 8. Per-layer plans (parallel)
     send({ type: 'stage', stage: 'sub-plans', status: 'start', message: 'Generating per-layer diagrams…' });
-    const layerLimit = pLimit(2);
+    const layerLimit = pLimit(6);
     const subLayers: LayerDiagram[] = await Promise.all(
       catalog.layers.map((layer) =>
         layerLimit(async () => {

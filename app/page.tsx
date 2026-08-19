@@ -16,7 +16,9 @@ import { MultiLayerPanel } from '@/components/multilayer/MultiLayerPanel';
 import { LayerNavigator } from '@/components/multilayer/LayerNavigator';
 import { CodeSpaceWorkspace } from '@/components/code-space/CodeSpaceWorkspace';
 import { CodeSpaceWorkspaceEnhancements } from '@/components/code-space/CodeSpaceWorkspaceEnhancements';
-import { flushDraftSave, useDiagramStore, type Mode } from '@/lib/state/store';
+import { flushDraftSave, storeHasFreshProject, useDiagramStore, type Mode } from '@/lib/state/store';
+import { recoverCompletedGeneration } from '@/lib/state/generationRuntime';
+import { hydrateProjectsFromCatalog } from '@/lib/state/projectStorage';
 import { readUiPreferences, writeUiPreference } from '@/lib/state/uiPreferences';
 import { downloadPng } from '@/lib/export/png';
 import { downloadSvg } from '@/lib/export/svg';
@@ -112,7 +114,9 @@ export function CodopticWorkbench({ routeMode }: { routeMode?: Mode }) {
   const [compactFocus, setCompactFocus] = useState<'editor' | 'workspace'>('editor');
 
   useEffect(() => {
-    hydrateUiPreferences();
+    // Root Cause vs Logic: /diagram remount used to re-read localStorage over a
+    // just-committed project. Skip that clobber when the store already holds it.
+    if (!storeHasFreshProject()) hydrateUiPreferences();
     if (routeMode) setMode(routeMode);
     const preferences = readUiPreferences();
     if (typeof preferences.isEditorVisible === 'boolean') setIsEditorVisible(preferences.isEditorVisible);
@@ -197,19 +201,37 @@ export function CodopticWorkbench({ routeMode }: { routeMode?: Mode }) {
   useEffect(() => {
     async function hydrateDraft() {
       try {
-        const { loadDraft } = await import('@/lib/cache/draftCache');
-        // Read the project key that was just resolved by hydrateUiPreferences().
+        const { loadDraft, loadProjectCatalog } = await import('@/lib/cache/draftCache');
+        await recoverCompletedGeneration();
+
+        const catalog = await loadProjectCatalog();
+        const stateAfterRecover = useDiagramStore.getState();
+        if (
+          catalog &&
+          catalog.updatedAt > stateAfterRecover.stateUpdatedAt &&
+          !storeHasFreshProject()
+        ) {
+          hydrateProjectsFromCatalog(catalog.projects, catalog.updatedAt);
+          if (catalog.activeProjectId) {
+            const active = catalog.projects.find((project) => project.id === catalog.activeProjectId);
+            if (active) {
+              useDiagramStore.getState().openProject({
+                id: active.id,
+                dsl: active.dsl,
+                multiLayer: active.multiLayer,
+                instructionMarkdown: active.instructionMarkdown,
+              });
+            }
+          }
+        }
+
         const state = useDiagramStore.getState();
         const key = state.activeProjectId ?? 'scratch';
         const draft = await loadDraft(key);
         if (!draft) return;
 
-        // Guard: ensure the user hasn't navigated away while we awaited.
         const currentState = useDiagramStore.getState();
         if ((currentState.activeProjectId ?? 'scratch') !== key) return;
-        // Root Cause vs Logic: localStorage can be stale or quota-limited even
-        // when IndexedDB has the latest draft, so the recovered draft must win
-        // during hydration rather than acting like an optional overlay.
         applyDraft(draft);
       } catch {
         // Draft hydration is best-effort — never block the editor.

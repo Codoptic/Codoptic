@@ -112,8 +112,8 @@ export async function analyzeRelevantFiles(input: AnalyzeRelevantFilesInput): Pr
       planned,
       {
         initialConcurrency: budget.initialConcurrency,
-        maxConcurrency: budget.initialConcurrency,
-        minConcurrency: 1,
+        maxConcurrency: budget.maxConcurrency,
+        minConcurrency: 2,
         signal: input.signal,
         onEvent: (event) => {
           if (event.kind === 'rate-limit') {
